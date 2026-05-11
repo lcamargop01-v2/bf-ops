@@ -21,12 +21,20 @@ function invHeaders() {
 
 // ==================== INIT ====================
 window._inventoryInit = function() {
+  console.log('[Inventory] init called');
   var savedUser = localStorage.getItem('bf_ops_user') || localStorage.getItem('bf_user');
   if (savedUser) {
     try { invUser = JSON.parse(savedUser); } catch(e) { invUser = null; }
   }
   invPage = 'dashboard';
-  invLoadLocations().then(function() { invRender(); });
+  invLoadLocations().then(function() {
+    console.log('[Inventory] locations loaded:', invLocations.length, '— rendering');
+    invRender();
+  }).catch(function(e) {
+    console.error('[Inventory] init failed:', e);
+    var root = document.getElementById('inventory-app');
+    if (root) root.innerHTML = '<div style="padding:24px;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> Inventory failed to load. Please refresh the page.</div>';
+  });
 };
 
 window._inventoryCleanup = function() {
@@ -48,10 +56,16 @@ async function invLoadDashboard() {
   try {
     var url = '/api/inventory/dashboard';
     if (invSelectedLocation) url += '?location_id=' + invSelectedLocation;
+    console.log('[Inventory] loading dashboard from:', url);
     var resp = await invAPI.get(url, { headers: invHeaders() });
     invStockData = resp.data.stock || [];
     invSummary = resp.data.summary || {};
-  } catch(e) { console.error('Dashboard load failed:', e); }
+    console.log('[Inventory] dashboard loaded:', invStockData.length, 'stock items');
+  } catch(e) {
+    console.error('[Inventory] Dashboard load failed:', e);
+    invStockData = [];
+    invSummary = {};
+  }
 }
 
 async function invLoadStock() {
@@ -87,12 +101,15 @@ function invNav(page) {
 // ==================== MAIN RENDER ====================
 async function invRender() {
   var root = document.getElementById('inventory-app');
-  if (!root) return;
+  if (!root) { console.warn('[Inventory] #inventory-app not found, aborting render'); return; }
 
   root.innerHTML = '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+  console.log('[Inventory] rendering page:', invPage);
 
+  try {
   if (invPage === 'dashboard') {
     await invLoadDashboard();
+    root = document.getElementById('inventory-app'); if (!root) return;
     root.innerHTML = invRenderNav() + invRenderDashboard();
   } else if (invPage === 'stock') {
     await invLoadStock();
@@ -124,6 +141,11 @@ async function invRender() {
     root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
     var html = await invRenderAuditLog();
     root.innerHTML = invRenderNav() + html;
+  }
+  } catch(err) {
+    console.error('[Inventory] render error:', err);
+    var r = document.getElementById('inventory-app');
+    if (r) r.innerHTML = '<div style="padding:24px;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> Error rendering inventory: ' + (err.message || err) + '. Please refresh.</div>';
   }
 }
 
@@ -270,8 +292,9 @@ function invRenderStockList() {
   html += '<div class="inv-toolbar">';
   html += '<div class="inv-search-box"><i class="fas fa-search"></i><input id="invSearchInput" type="text" placeholder="Search products..." oninput="invDebounceSearch()"></div>';
   html += '<select id="invCategoryFilter" onchange="invRender()" class="inv-select"><option value="">All Categories</option>';
-  ['horse','cattle','poultry','swine','goat','supplement','other'].forEach(function(c) {
-    html += '<option value="' + c + '">' + c.charAt(0).toUpperCase() + c.slice(1) + '</option>';
+  ['horse','cattle','poultry','swine','goat','supplement','hay','shavings','fly_spray','fly_control','electrolyte','gut_health','psyllium','oil','grooming','shampoo','liniment','clippers','leather','barn','treats','other'].forEach(function(c) {
+    var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+    html += '<option value="' + c + '">' + label + '</option>';
   });
   html += '</select>';
   html += '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invExportStock()"><i class="fas fa-download"></i> Export</button>';
