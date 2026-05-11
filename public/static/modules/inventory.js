@@ -51,10 +51,6 @@ async function invLoadDashboard() {
     var resp = await invAPI.get(url, { headers: invHeaders() });
     invStockData = resp.data.stock || [];
     invSummary = resp.data.summary || {};
-    // Load thumbnails for top items
-    var pids = invStockData.slice(0, 50).map(function(s) { return s.product_id; });
-    var unique = pids.filter(function(v, i, a) { return a.indexOf(v) === i; });
-    if (unique.length > 0) await invLoadThumbnails(unique);
   } catch(e) { console.error('Dashboard load failed:', e); }
 }
 
@@ -68,10 +64,6 @@ async function invLoadStock() {
     if (cat && cat.value) url += 'category=' + cat.value + '&';
     var resp = await invAPI.get(url, { headers: invHeaders() });
     invStockData = resp.data.stock || [];
-    // Load thumbnails
-    var pids = invStockData.map(function(s) { return s.product_id; });
-    var unique = pids.filter(function(v, i, a) { return a.indexOf(v) === i; });
-    if (unique.length > 0) await invLoadThumbnails(unique);
   } catch(e) { console.error('Stock load failed:', e); }
 }
 
@@ -239,11 +231,10 @@ function invRenderDashboard() {
     html += '<div class="inv-section">';
     html += '<h3 class="inv-section-title"><i class="fas fa-ranking-star"></i> Top Stock Items</h3>';
     html += '<div class="inv-table-wrap"><table class="inv-table">';
-    html += '<thead><tr><th style="width:48px"></th><th>Product</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Available</th><th class="text-right">Value</th></tr></thead><tbody>';
+    html += '<thead><tr><th>Product</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Available</th><th class="text-right">Value</th></tr></thead><tbody>';
     sorted.slice(0, 15).forEach(function(s) {
       var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
       html += '<tr onclick="invShowProductDetail(' + s.product_id + ')" class="inv-clickable">' +
-        '<td>' + invThumbHTML(s.product_id, 36) + '</td>' +
         '<td><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + ' · ' + escH(s.category || '') + '</span></td>' +
         '<td><span class="inv-loc-badge">' + escH(s.location_code) + '</span></td>' +
         '<td class="text-right">' + (s.qty_on_hand || 0).toLocaleString() + ' <span class="inv-muted">' + escH(s.unit_type || '') + '</span></td>' +
@@ -290,13 +281,12 @@ function invRenderStockList() {
 
   // Stock table (desktop) / cards (mobile)
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
-  html += '<thead><tr><th style="width:48px"></th><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Reserved</th><th class="text-right">Available</th><th class="text-right">Value</th><th></th></tr></thead><tbody>';
+  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Reserved</th><th class="text-right">Available</th><th class="text-right">Value</th><th></th></tr></thead><tbody>';
 
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
     var lowStock = s.reorder_point > 0 && s.qty_on_hand <= s.reorder_point;
     html += '<tr class="' + (lowStock ? 'inv-row-warning' : '') + '">' +
-      '<td>' + invThumbHTML(s.product_id, 36) + '</td>' +
       '<td class="inv-clickable" onclick="invShowProductDetail(' + s.product_id + ')"><strong>' + escH(s.product_name) + '</strong></td>' +
       '<td class="inv-muted">' + escH(s.sku || '—') + '</td>' +
       '<td><span class="inv-cat-badge inv-cat-' + (s.category || 'other') + '">' + escH(s.category || 'other') + '</span></td>' +
@@ -318,8 +308,7 @@ function invRenderStockList() {
     var lowStock = s.reorder_point > 0 && s.qty_on_hand <= s.reorder_point;
     html += '<div class="inv-stock-card' + (lowStock ? ' inv-card-warning' : '') + '" onclick="invShowProductDetail(' + s.product_id + ')">' +
       '<div class="inv-stock-card-top">' +
-      '<div class="inv-stock-card-top-left">' + invThumbHTML(s.product_id, 44) +
-      '<div><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + '</span></div></div>' +
+      '<div><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + '</span></div>' +
       '<span class="inv-loc-badge">' + escH(s.location_code) + '</span>' +
       '</div>' +
       '<div class="inv-stock-card-nums">' +
@@ -329,7 +318,6 @@ function invRenderStockList() {
       '<div><span class="inv-muted">Available</span><strong class="' + (avail <= 0 ? 'inv-danger' : '') + '">' + avail + '</strong></div>' +
       '</div>' +
       '<div class="inv-stock-card-actions">' +
-      '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowCaptureImage(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-camera"></i></button>' +
       '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i> Adjust</button>' +
       '</div>' +
       '</div>';
@@ -525,11 +513,17 @@ async function invRenderBatches() {
   if (batches.length === 0) {
     html += '<div class="inv-empty"><p>No batches created yet.</p></div>';
   } else {
-    html += '<div class="inv-table-wrap"><table class="inv-table inv-table-hover">';
-    html += '<thead><tr><th>Batch #</th><th>Product</th><th>Location</th><th>Qty</th><th>Condition</th><th>Notes</th><th>Date</th><th></th></tr></thead><tbody>';
+    // Load batch thumbnails
+    var batchIds = batches.map(function(b) { return b.id; });
+    await invLoadBatchThumbnails(batchIds);
+
+    // Desktop table
+    html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
+    html += '<thead><tr><th style="width:48px"></th><th>Batch #</th><th>Product</th><th>Location</th><th>Qty</th><th>Condition</th><th>Notes</th><th>Date</th><th></th></tr></thead><tbody>';
     batches.forEach(function(b) {
       var condClass = b.condition === 'good' ? 'inv-cond-good' : b.condition === 'fair' ? 'inv-cond-fair' : 'inv-cond-bad';
       html += '<tr>' +
+        '<td>' + invBatchThumbHTML(b.id, 40) + '</td>' +
         '<td><strong>' + escH(b.batch_number) + '</strong></td>' +
         '<td>' + escH(b.product_name) + '<br><span class="inv-muted">' + escH(b.sku || '') + '</span></td>' +
         '<td><span class="inv-loc-badge">' + escH(b.location_code) + '</span></td>' +
@@ -537,10 +531,37 @@ async function invRenderBatches() {
         '<td><span class="inv-cond-badge ' + condClass + '">' + escH(b.condition) + '</span></td>' +
         '<td class="inv-muted">' + escH(b.notes || '—') + '</td>' +
         '<td>' + invFormatDate(b.created_at) + '</td>' +
-        '<td><button class="inv-btn inv-btn-xs" onclick="invShowSplitBatch(' + b.id + ',' + b.qty + ',\'' + escH(b.batch_number) + '\',\'' + escH(b.product_name) + '\')"><i class="fas fa-scissors"></i> Split</button></td>' +
-        '</tr>';
+        '<td>' +
+        '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invShowCaptureBatchImage(' + b.id + ')" title="Add photo"><i class="fas fa-camera"></i></button> ' +
+        '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invShowBatchImages(' + b.id + ')" title="View photos"><i class="fas fa-images"></i></button> ' +
+        '<button class="inv-btn inv-btn-xs" onclick="invShowSplitBatch(' + b.id + ',' + b.qty + ',\'' + escH(b.batch_number) + '\',\'' + escH(b.product_name) + '\')"><i class="fas fa-scissors"></i> Split</button>' +
+        '</td></tr>';
     });
     html += '</tbody></table></div>';
+
+    // Mobile cards
+    html += '<div class="inv-mobile-only inv-stock-cards">';
+    batches.forEach(function(b) {
+      var condClass = b.condition === 'good' ? 'inv-cond-good' : b.condition === 'fair' ? 'inv-cond-fair' : 'inv-cond-bad';
+      html += '<div class="inv-stock-card">' +
+        '<div class="inv-stock-card-top">' +
+        '<div class="inv-stock-card-top-left">' + invBatchThumbHTML(b.id, 44) +
+        '<div><strong>' + escH(b.batch_number) + '</strong><br><span class="inv-muted">' + escH(b.product_name) + '</span></div></div>' +
+        '<span class="inv-loc-badge">' + escH(b.location_code) + '</span>' +
+        '</div>' +
+        '<div class="inv-stock-card-nums">' +
+        '<div><span class="inv-muted">Qty</span><strong>' + b.qty + '</strong></div>' +
+        '<div><span class="inv-muted">Condition</span><span class="inv-cond-badge ' + condClass + '">' + escH(b.condition) + '</span></div>' +
+        '<div><span class="inv-muted">Date</span><span>' + invFormatDate(b.created_at) + '</span></div>' +
+        '</div>' +
+        (b.notes ? '<div class="inv-muted" style="padding:0 12px 8px;font-size:13px">' + escH(b.notes) + '</div>' : '') +
+        '<div class="inv-stock-card-actions">' +
+        '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invShowCaptureBatchImage(' + b.id + ')"><i class="fas fa-camera"></i> Photo</button>' +
+        '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invShowBatchImages(' + b.id + ')"><i class="fas fa-images"></i> View</button>' +
+        '<button class="inv-btn inv-btn-xs" onclick="invShowSplitBatch(' + b.id + ',' + b.qty + ',\'' + escH(b.batch_number) + '\',\'' + escH(b.product_name) + '\')"><i class="fas fa-scissors"></i> Split</button>' +
+        '</div></div>';
+    });
+    html += '</div>';
   }
   html += '</div>';
   return html;
@@ -994,10 +1015,16 @@ async function invDoCreateBatch() {
   if (!productId || !locationId || !qty) { invToast('Fill in all required fields', 'warning'); return; }
 
   try {
-    await invAPI.post('/api/inventory/batches', { product_id: productId, location_id: locationId, qty: qty, condition: condition, source: source, notes: notes }, { headers: invHeaders() });
+    var resp = await invAPI.post('/api/inventory/batches', { product_id: productId, location_id: locationId, qty: qty, condition: condition, source: source, notes: notes }, { headers: invHeaders() });
     invToast('Batch created');
     invCloseModal();
-    invRender();
+    // Prompt to add a photo to the new batch
+    var newBatchId = resp.data.batch_id || resp.data.id;
+    if (newBatchId && confirm('Batch created! Want to add a photo?')) {
+      invShowCaptureBatchImage(newBatchId);
+    } else {
+      invRender();
+    }
   } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
@@ -1099,28 +1126,28 @@ async function invDoCreateReservation() {
   } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
-// ==================== PRODUCT IMAGES ====================
+// ==================== BATCH IMAGES ====================
 
-// Thumbnail cache — loaded once per render cycle
-var invThumbnails = {};
-var invThumbnailsLoaded = false;
+// Batch thumbnail cache — keyed by batch_id
+var invBatchThumbs = {};
 
-async function invLoadThumbnails(productIds) {
-  if (!productIds || productIds.length === 0) return;
+async function invLoadBatchThumbnails(batchIds) {
+  if (!batchIds || batchIds.length === 0) return;
   try {
-    var resp = await invAPI.post('/api/inventory/images/thumbnails', { product_ids: productIds }, { headers: invHeaders() });
-    invThumbnails = resp.data.thumbnails || {};
-    invThumbnailsLoaded = true;
-  } catch(e) { console.error('Thumbnail load failed:', e); }
+    var resp = await invAPI.post('/api/inventory/batch-images/thumbnails', { batch_ids: batchIds }, { headers: invHeaders() });
+    var thumbs = resp.data.thumbnails || {};
+    // Merge into cache
+    Object.keys(thumbs).forEach(function(k) { invBatchThumbs[k] = thumbs[k]; });
+  } catch(e) { console.error('Batch thumbnail load failed:', e); }
 }
 
-function invThumbHTML(productId, size) {
+function invBatchThumbHTML(batchId, size) {
   size = size || 40;
-  var thumb = invThumbnails[productId];
+  var thumb = invBatchThumbs[batchId];
   if (thumb) {
-    return '<img src="' + thumb.image_data + '" class="inv-thumb" style="width:' + size + 'px;height:' + size + 'px;" alt="' + escH(thumb.caption || '') + '" onclick="event.stopPropagation();invShowProductImages(' + productId + ')">';
+    return '<img src="' + thumb.image_data + '" class="inv-thumb" style="width:' + size + 'px;height:' + size + 'px;" alt="' + escH(thumb.caption || '') + '" onclick="event.stopPropagation();invShowBatchImages(' + batchId + ')">';
   }
-  return '<div class="inv-thumb-empty" style="width:' + size + 'px;height:' + size + 'px;" onclick="event.stopPropagation();invShowCaptureImage(' + productId + ')" title="Add photo"><i class="fas fa-camera"></i></div>';
+  return '<div class="inv-thumb-empty" style="width:' + size + 'px;height:' + size + 'px;" onclick="event.stopPropagation();invShowCaptureBatchImage(' + batchId + ')" title="Add batch photo"><i class="fas fa-camera"></i></div>';
 }
 
 // Compress image client-side before upload
@@ -1151,36 +1178,29 @@ function invCompressImage(file, maxWidth, quality) {
   });
 }
 
-// Camera / file capture modal
-function invShowCaptureImage(productId, locationId, batchId) {
-  var locOpts = '<option value="">— No location —</option>';
-  invLocations.forEach(function(l) {
-    locOpts += '<option value="' + l.id + '"' + (locationId == l.id || invSelectedLocation == l.id ? ' selected' : '') + '>' + l.code + ' — ' + l.name + '</option>';
-  });
-
+// Camera / file capture modal — scoped to a batch
+function invShowCaptureBatchImage(batchId) {
   var body = '<div class="inv-img-capture">' +
     '<div class="inv-img-capture-zone" id="invCaptureZone">' +
     '<div class="inv-img-capture-placeholder" id="invCapturePlaceholder">' +
     '<i class="fas fa-camera"></i>' +
     '<p>Tap to take photo or choose file</p>' +
     '<div class="inv-img-capture-btns">' +
-    '<label class="inv-btn inv-btn-primary inv-btn-sm"><i class="fas fa-camera"></i> Camera<input type="file" accept="image/*" capture="environment" id="invCameraInput" style="display:none" onchange="invPreviewCapture(this)"></label>' +
-    '<label class="inv-btn inv-btn-outline inv-btn-sm"><i class="fas fa-images"></i> Gallery<input type="file" accept="image/*" id="invFileInput" style="display:none" onchange="invPreviewCapture(this)"></label>' +
+    '<label class="inv-btn inv-btn-primary inv-btn-sm"><i class="fas fa-camera"></i> Camera<input type="file" accept="image/*" capture="environment" id="invCameraInput" style="display:none" onchange="invPreviewBatchCapture(this)"></label>' +
+    '<label class="inv-btn inv-btn-outline inv-btn-sm"><i class="fas fa-images"></i> Gallery<input type="file" accept="image/*" id="invFileInput" style="display:none" onchange="invPreviewBatchCapture(this)"></label>' +
     '</div>' +
     '</div>' +
     '<img id="invCapturePreview" class="inv-img-capture-preview" style="display:none">' +
     '</div>' +
-    '<div class="inv-form-group"><label>Location</label><select id="invImgLocation" class="inv-select">' + locOpts + '</select></div>' +
     '<div class="inv-form-group"><label>Caption (optional)</label><input id="invImgCaption" type="text" class="inv-input" placeholder="e.g. Front of pallet, Damage close-up..."></div>' +
-    '<input type="hidden" id="invImgProductId" value="' + productId + '">' +
-    '<input type="hidden" id="invImgBatchId" value="' + (batchId || '') + '">' +
+    '<input type="hidden" id="invImgBatchId" value="' + batchId + '">' +
     '</div>';
 
-  var footer = '<button class="inv-btn inv-btn-primary" onclick="invDoUploadImage()" id="invUploadBtn" disabled><i class="fas fa-cloud-arrow-up"></i> Upload Photo</button>';
-  invShowModal('<i class="fas fa-camera"></i> Add Product Photo', body, footer);
+  var footer = '<button class="inv-btn inv-btn-primary" onclick="invDoUploadBatchImage()" id="invUploadBtn" disabled><i class="fas fa-cloud-arrow-up"></i> Upload Photo</button>';
+  invShowModal('<i class="fas fa-camera"></i> Add Batch Photo', body, footer);
 }
 
-function invPreviewCapture(input) {
+function invPreviewBatchCapture(input) {
   if (!input.files || !input.files[0]) return;
   var file = input.files[0];
   var preview = document.getElementById('invCapturePreview');
@@ -1192,9 +1212,7 @@ function invPreviewCapture(input) {
     preview.style.display = 'block';
     placeholder.style.display = 'none';
     uploadBtn.disabled = false;
-    // Store for upload
     preview.dataset.imageData = dataUrl;
-    // Show file size info
     var sizeKB = Math.round(dataUrl.length * 3 / 4 / 1024);
     invToast('Photo ready (' + sizeKB + ' KB)', 'success');
   }).catch(function() {
@@ -1202,33 +1220,28 @@ function invPreviewCapture(input) {
   });
 }
 
-async function invDoUploadImage() {
+async function invDoUploadBatchImage() {
   var preview = document.getElementById('invCapturePreview');
   var imageData = preview.dataset.imageData;
-  var productId = parseInt(document.getElementById('invImgProductId').value);
-  var locationId = parseInt(document.getElementById('invImgLocation').value) || null;
-  var batchId = parseInt(document.getElementById('invImgBatchId').value) || null;
+  var batchId = parseInt(document.getElementById('invImgBatchId').value);
   var caption = document.getElementById('invImgCaption').value;
 
-  if (!imageData || !productId) { invToast('No image to upload', 'warning'); return; }
+  if (!imageData || !batchId) { invToast('No image to upload', 'warning'); return; }
 
   var btn = document.getElementById('invUploadBtn');
   btn.disabled = true;
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
 
   try {
-    await invAPI.post('/api/inventory/images', {
-      product_id: productId,
-      location_id: locationId,
-      batch_id: batchId,
+    await invAPI.post('/api/inventory/batches/' + batchId + '/images', {
       image_data: imageData,
       caption: caption
     }, { headers: invHeaders() });
 
-    invToast('Photo uploaded');
+    invToast('Batch photo uploaded');
     invCloseModal();
-    // Refresh thumbnails
-    invThumbnailsLoaded = false;
+    // Clear cache for this batch so it reloads
+    delete invBatchThumbs[batchId];
     invRender();
   } catch(e) {
     btn.disabled = false;
@@ -1237,18 +1250,17 @@ async function invDoUploadImage() {
   }
 }
 
-// Show all images for a product (gallery view)
-async function invShowProductImages(productId) {
+// Show all images for a batch (gallery view)
+async function invShowBatchImages(batchId) {
   try {
-    var resp = await invAPI.get('/api/inventory/images/' + productId, { headers: invHeaders() });
+    var resp = await invAPI.get('/api/inventory/batches/' + batchId + '/images', { headers: invHeaders() });
     var images = resp.data.images || [];
 
     if (images.length === 0) {
-      invShowCaptureImage(productId);
+      invShowCaptureBatchImage(batchId);
       return;
     }
 
-    // Load full images
     var body = '<div class="inv-img-gallery">';
     for (var i = 0; i < images.length; i++) {
       var img = images[i];
@@ -1257,17 +1269,17 @@ async function invShowProductImages(productId) {
         '<div class="inv-img-gallery-meta">' +
         '<span class="inv-muted">' + escH(img.caption || 'No caption') + '</span>' +
         '<span class="inv-muted">' + invFormatDateTime(img.created_at) + (img.taken_by_name ? ' by ' + escH(img.taken_by_name) : '') + '</span>' +
-        '<button class="inv-btn inv-btn-xs inv-btn-danger" onclick="invDeleteImage(' + img.id + ',' + productId + ')"><i class="fas fa-trash"></i></button>' +
+        '<button class="inv-btn inv-btn-xs inv-btn-danger" onclick="invDeleteBatchImage(' + img.id + ',' + batchId + ')"><i class="fas fa-trash"></i></button>' +
         '</div></div>';
     }
     body += '</div>';
 
-    var footer = '<button class="inv-btn inv-btn-primary" onclick="invCloseModal();invShowCaptureImage(' + productId + ')"><i class="fas fa-plus"></i> Add Another Photo</button>';
-    invShowModal('<i class="fas fa-images"></i> Product Photos (' + images.length + ')', body, footer);
+    var footer = '<button class="inv-btn inv-btn-primary" onclick="invCloseModal();invShowCaptureBatchImage(' + batchId + ')"><i class="fas fa-plus"></i> Add Another Photo</button>';
+    invShowModal('<i class="fas fa-images"></i> Batch Photos (' + images.length + ')', body, footer);
 
-    // Lazy-load full image data
+    // Lazy-load full image data for each gallery item
     images.forEach(function(img) {
-      invAPI.get('/api/inventory/images/' + productId + '/' + img.id, { headers: invHeaders() }).then(function(r) {
+      invAPI.get('/api/inventory/batch-images/' + img.id, { headers: invHeaders() }).then(function(r) {
         var item = document.getElementById('invGalleryItem_' + img.id);
         if (item && r.data.image) {
           var imgEl = document.createElement('img');
@@ -1280,7 +1292,7 @@ async function invShowProductImages(productId) {
       });
     });
 
-  } catch(e) { invToast('Failed to load images', 'error'); }
+  } catch(e) { invToast('Failed to load batch images', 'error'); }
 }
 
 function invShowFullImage(dataUrl) {
@@ -1293,19 +1305,18 @@ function invShowFullImage(dataUrl) {
   setTimeout(function() { overlay.classList.add('inv-fullimg-show'); }, 10);
 }
 
-async function invDeleteImage(imageId, productId) {
+async function invDeleteBatchImage(imageId, batchId) {
   if (!confirm('Delete this photo?')) return;
   try {
-    await invAPI.delete('/api/inventory/images/' + imageId, { headers: invHeaders() });
+    await invAPI.delete('/api/inventory/batch-images/' + imageId, { headers: invHeaders() });
     invToast('Photo deleted');
-    invThumbnailsLoaded = false;
-    // Re-open gallery
+    delete invBatchThumbs[batchId];
     invCloseModal();
-    invShowProductImages(productId);
+    invShowBatchImages(batchId);
   } catch(e) { invToast('Delete failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
-// Product detail modal
+// Product detail modal (no images — images are on batches)
 async function invShowProductDetail(productId) {
   try {
     var resp = await invAPI.get('/api/inventory/stock/' + productId, { headers: invHeaders() });
@@ -1313,33 +1324,12 @@ async function invShowProductDetail(productId) {
     var batches = resp.data.batches || [];
     var holds = resp.data.holds || [];
     var reservations = resp.data.reservations || [];
-    var imgResp = await invAPI.get('/api/inventory/images/' + productId, { headers: invHeaders() });
-    var images = imgResp.data.images || [];
 
-    // Get product name from stock data
     var pResp = await invAPI.get('/api/inventory/products?search=', { headers: invHeaders() });
     var product = (pResp.data.products || []).find(function(p) { return p.id === productId; });
     var pName = product ? product.name : 'Product #' + productId;
 
-    // Product photos section at top
-    var body = '';
-    if (images.length > 0) {
-      body += '<div class="inv-detail-images">';
-      body += '<div class="inv-detail-images-header"><h4><i class="fas fa-images"></i> Photos (' + images.length + ')</h4>';
-      body += '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invCloseModal();invShowCaptureImage(' + productId + ')"><i class="fas fa-plus"></i> Add</button></div>';
-      body += '<div class="inv-detail-images-strip" id="invDetailImgStrip">';
-      images.forEach(function(img) {
-        body += '<div class="inv-detail-img-thumb" id="invDetailThumb_' + img.id + '" data-product="' + productId + '" data-imgid="' + img.id + '">' +
-          '<div class="inv-img-gallery-loading"><i class="fas fa-spinner fa-spin"></i></div>' +
-          '</div>';
-      });
-      body += '</div></div>';
-    } else {
-      body += '<div class="inv-detail-add-photo" onclick="invCloseModal();invShowCaptureImage(' + productId + ')">' +
-        '<i class="fas fa-camera"></i> <span>Add product photos for quick reference</span></div>';
-    }
-
-    body += '<h4>Stock by Location</h4>';
+    var body = '<h4>Stock by Location</h4>';
     if (stock.length === 0) {
       body += '<p class="inv-muted">No stock records for this product.</p>';
     } else {
@@ -1354,9 +1344,15 @@ async function invShowProductDetail(productId) {
     }
 
     if (batches.length > 0) {
-      body += '<h4 style="margin-top:16px">Batches</h4><table class="inv-table inv-table-compact"><thead><tr><th>Batch</th><th>Loc</th><th>Qty</th><th>Condition</th><th>Notes</th></tr></thead><tbody>';
+      // Load batch thumbnails
+      var batchIds = batches.map(function(b) { return b.id; });
+      await invLoadBatchThumbnails(batchIds);
+
+      body += '<h4 style="margin-top:16px">Batches</h4><table class="inv-table inv-table-compact"><thead><tr><th style="width:48px"></th><th>Batch</th><th>Loc</th><th>Qty</th><th>Condition</th><th>Notes</th></tr></thead><tbody>';
       batches.forEach(function(b) {
-        body += '<tr><td>' + escH(b.batch_number) + '</td><td>' + escH(b.location_code) + '</td><td>' + b.qty + '</td><td><span class="inv-cond-badge inv-cond-' + (b.condition === 'good' ? 'good' : b.condition === 'fair' ? 'fair' : 'bad') + '">' + b.condition + '</span></td><td class="inv-muted">' + escH(b.notes || '') + '</td></tr>';
+        body += '<tr>' +
+          '<td>' + invBatchThumbHTML(b.id, 36) + '</td>' +
+          '<td>' + escH(b.batch_number) + '</td><td>' + escH(b.location_code) + '</td><td>' + b.qty + '</td><td><span class="inv-cond-badge inv-cond-' + (b.condition === 'good' ? 'good' : b.condition === 'fair' ? 'fair' : 'bad') + '">' + b.condition + '</span></td><td class="inv-muted">' + escH(b.notes || '') + '</td></tr>';
       });
       body += '</tbody></table>';
     }
@@ -1376,20 +1372,6 @@ async function invShowProductDetail(productId) {
     }
 
     invShowModal('<i class="fas fa-box"></i> ' + escH(pName), body, '');
-
-    // Lazy load thumbnail strip images
-    if (images.length > 0) {
-      images.forEach(function(img) {
-        invAPI.get('/api/inventory/images/' + productId + '/' + img.id, { headers: invHeaders() }).then(function(r) {
-          var thumb = document.getElementById('invDetailThumb_' + img.id);
-          if (thumb && r.data.image) {
-            thumb.innerHTML = '<img src="' + r.data.image.image_data + '" onclick="invShowFullImage(\'' + r.data.image.image_data.substring(0, 50) + '\')">';
-            // Store full data for click
-            thumb.onclick = function() { invShowFullImage(r.data.image.image_data); };
-          }
-        });
-      });
-    }
 
   } catch(e) { invToast('Failed to load product detail', 'error'); }
 }
