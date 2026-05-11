@@ -1,0 +1,201 @@
+/* BF Operations — Parent Shell Styles */
+:root {
+  --shell-bg: #0F172A;
+  --shell-surface: #1E293B;
+  --shell-border: #334155;
+  --shell-text: #F8FAFC;
+  --shell-text-muted: #94A3B8;
+  --shell-accent: #3B82F6;
+  --shell-accent-hover: #2563EB;
+  --shell-success: #10B981;
+  --shell-warning: #F59E0B;
+  --shell-danger: #EF4444;
+  --module-radius: 12px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #F1F5F9; color: #1E293B; overflow: hidden; height: 100vh; }
+
+/* ==================== LOGIN ==================== */
+.shell-login-page {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #0F172A 0%, #1E3A5F 50%, #0F172A 100%);
+  position: relative; overflow: hidden;
+}
+.shell-login-page::before {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(circle at 30% 40%, rgba(59,130,246,0.15) 0%, transparent 60%),
+              radial-gradient(circle at 70% 60%, rgba(16,185,129,0.1) 0%, transparent 50%);
+}
+.shell-login-card {
+  background: rgba(30,41,59,0.95); backdrop-filter: blur(20px);
+  border: 1px solid rgba(71,85,105,0.5); border-radius: 20px;
+  padding: 48px 40px; width: 420px; max-width: 90vw; position: relative; z-index: 1;
+  box-shadow: 0 25px 60px rgba(0,0,0,0.4);
+}
+.shell-login-logo { text-align: center; margin-bottom: 32px; }
+.shell-login-logo i { font-size: 48px; color: var(--shell-accent); margin-bottom: 12px; display: block; }
+.shell-login-logo h1 { font-size: 28px; font-weight: 800; color: var(--shell-text); letter-spacing: -0.5px; }
+.shell-login-logo p { font-size: 14px; color: var(--shell-text-muted); margin-top: 4px; }
+.shell-login-card .form-group { margin-bottom: 20px; }
+.shell-login-card .form-label { display: block; font-size: 13px; font-weight: 600; color: var(--shell-text-muted); margin-bottom: 6px; }
+.shell-login-card .form-input {
+  width: 100%; padding: 12px 14px; background: var(--shell-bg); border: 1px solid var(--shell-border);
+  border-radius: 10px; color: var(--shell-text); font-size: 14px; outline: none; transition: border-color 0.2s;
+}
+.shell-login-card .form-input:focus { border-color: var(--shell-accent); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+.shell-login-card .form-input::placeholder { color: #475569; }
+.shell-btn-login {
+  width: 100%; padding: 14px; background: linear-gradient(135deg, var(--shell-accent), var(--shell-accent-hover));
+  color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 700;
+  cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.shell-btn-login:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(59,130,246,0.3); }
+.shell-quick-logins { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--shell-border); }
+.shell-quick-logins p { font-size: 12px; color: var(--shell-text-muted); text-align: center; margin-bottom: 12px; }
+.shell-quick-logins .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.shell-quick-btn {
+  padding: 8px 12px; background: var(--shell-bg); border: 1px solid var(--shell-border);
+  border-radius: 8px; color: var(--shell-text-muted); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.shell-quick-btn:hover { border-color: var(--shell-accent); color: var(--shell-text); background: rgba(59,130,246,0.1); }
+
+/* ==================== MODULE PICKER (HOME) ==================== */
+.shell-home {
+  min-height: 100vh; background: linear-gradient(180deg, #0F172A 0%, #1E293B 100%);
+  display: flex; flex-direction: column;
+}
+.shell-home-header {
+  padding: 40px 40px 0; display: flex; justify-content: space-between; align-items: flex-start;
+}
+.shell-home-brand { display: flex; align-items: center; gap: 14px; }
+.shell-home-brand i { font-size: 36px; color: var(--shell-accent); }
+.shell-home-brand h1 { font-size: 26px; font-weight: 800; color: var(--shell-text); letter-spacing: -0.5px; }
+.shell-home-brand p { font-size: 13px; color: var(--shell-text-muted); }
+.shell-home-user { display: flex; align-items: center; gap: 12px; }
+.shell-home-user-info { text-align: right; }
+.shell-home-user-info .name { font-size: 14px; font-weight: 600; color: var(--shell-text); }
+.shell-home-user-info .role { font-size: 11px; color: var(--shell-text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.shell-user-avatar {
+  width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(135deg, var(--shell-accent), #7C3AED);
+  display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 16px;
+}
+.shell-logout-btn {
+  background: none; border: 1px solid var(--shell-border); border-radius: 8px; padding: 8px 12px;
+  color: var(--shell-text-muted); font-size: 12px; cursor: pointer; transition: all 0.15s;
+}
+.shell-logout-btn:hover { border-color: var(--shell-danger); color: var(--shell-danger); }
+
+.shell-home-grid {
+  flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px; padding: 40px; align-content: start; max-width: 1200px; margin: 0 auto; width: 100%;
+}
+.shell-module-card {
+  background: var(--shell-surface); border: 1px solid var(--shell-border); border-radius: 16px;
+  padding: 32px 28px; cursor: pointer; transition: all 0.25s; position: relative; overflow: hidden;
+}
+.shell-module-card:hover {
+  transform: translateY(-4px); border-color: rgba(59,130,246,0.4);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+}
+.shell-module-card.coming-soon { opacity: 0.5; cursor: default; }
+.shell-module-card.coming-soon:hover { transform: none; box-shadow: none; border-color: var(--shell-border); }
+.shell-module-icon {
+  width: 56px; height: 56px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+  font-size: 24px; color: white; margin-bottom: 20px;
+}
+.shell-module-card h3 { font-size: 20px; font-weight: 700; color: var(--shell-text); margin-bottom: 6px; }
+.shell-module-card p { font-size: 13px; color: var(--shell-text-muted); line-height: 1.5; }
+.shell-module-badge {
+  position: absolute; top: 16px; right: 16px; font-size: 10px; font-weight: 700;
+  padding: 3px 10px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.shell-module-badge.soon { background: rgba(245,158,11,0.15); color: #F59E0B; }
+.shell-module-badge.live { background: rgba(16,185,129,0.15); color: #10B981; }
+
+/* ==================== ACTIVE MODULE LAYOUT ==================== */
+.shell-app-layout { display: flex; flex-direction: column; height: 100vh; }
+.shell-topbar {
+  height: 52px; background: var(--shell-bg); border-bottom: 1px solid var(--shell-border);
+  display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0; z-index: 1000;
+}
+.shell-back-btn {
+  background: none; border: 1px solid var(--shell-border); border-radius: 8px; padding: 6px 12px;
+  color: var(--shell-text-muted); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+  display: flex; align-items: center; gap: 6px;
+}
+.shell-back-btn:hover { border-color: var(--shell-accent); color: var(--shell-text); }
+.shell-module-tabs {
+  display: flex; gap: 2px; flex: 1; margin-left: 8px;
+}
+.shell-module-tab {
+  padding: 6px 16px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  color: var(--shell-text-muted); cursor: pointer; transition: all 0.15s; border: none; background: none;
+  display: flex; align-items: center; gap: 6px;
+}
+.shell-module-tab:hover { color: var(--shell-text); background: rgba(255,255,255,0.05); }
+.shell-module-tab.active { color: white; background: var(--shell-accent); }
+.shell-module-tab.coming-soon { opacity: 0.4; cursor: default; }
+.shell-module-tab.coming-soon:hover { color: var(--shell-text-muted); background: none; }
+.shell-topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.shell-topbar-user {
+  display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 8px;
+  cursor: pointer; transition: background 0.15s;
+}
+.shell-topbar-user:hover { background: rgba(255,255,255,0.05); }
+.shell-topbar-user .name { font-size: 12px; font-weight: 600; color: var(--shell-text); }
+.shell-topbar-user .role { font-size: 10px; color: var(--shell-text-muted); }
+.shell-topbar-avatar {
+  width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--shell-accent), #7C3AED);
+  display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 12px;
+}
+.shell-module-container {
+  flex: 1; overflow: hidden; position: relative;
+}
+.shell-module-frame {
+  width: 100%; height: 100%; overflow: auto; background: #F1F5F9;
+}
+
+/* ==================== ADMIN PANEL ==================== */
+.shell-admin-panel { padding: 24px; overflow: auto; height: 100%; background: #F1F5F9; }
+.shell-admin-card { background: white; border-radius: 12px; border: 1px solid #E2E8F0; overflow: hidden; }
+.shell-admin-card-header { padding: 16px 20px; border-bottom: 1px solid #E2E8F0; display: flex; align-items: center; justify-content: space-between; }
+.shell-admin-card-header h3 { font-size: 16px; font-weight: 700; color: #1E293B; }
+.shell-admin-table { width: 100%; border-collapse: collapse; }
+.shell-admin-table th { padding: 10px 16px; text-align: left; font-size: 11px; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; background: #F8FAFC; }
+.shell-admin-table td { padding: 12px 16px; font-size: 13px; border-top: 1px solid #F1F5F9; }
+.shell-admin-table tr:hover { background: #F8FAFC; }
+.shell-module-toggle {
+  width: 18px; height: 18px; border-radius: 4px; border: 2px solid #CBD5E1; cursor: pointer;
+  appearance: none; -webkit-appearance: none; transition: all 0.15s; position: relative;
+}
+.shell-module-toggle:checked { background: var(--shell-accent); border-color: var(--shell-accent); }
+.shell-module-toggle:checked::after {
+  content: '\f00c'; font-family: 'Font Awesome 6 Free'; font-weight: 900; font-size: 10px;
+  color: white; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+}
+.shell-save-btn {
+  padding: 6px 14px; background: var(--shell-accent); color: white; border: none; border-radius: 6px;
+  font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+}
+.shell-save-btn:hover { background: var(--shell-accent-hover); }
+
+/* ==================== TOAST ==================== */
+.shell-toast {
+  position: fixed; top: 16px; right: 16px; z-index: 99999;
+  padding: 12px 20px; border-radius: 10px; font-size: 13px; font-weight: 600;
+  color: white; box-shadow: 0 8px 24px rgba(0,0,0,0.2); transition: all 0.3s;
+  display: flex; align-items: center; gap: 8px;
+}
+.shell-toast.success { background: #059669; }
+.shell-toast.error { background: #DC2626; }
+
+/* ==================== RESPONSIVE ==================== */
+@media (max-width: 768px) {
+  .shell-home-header { padding: 24px 20px 0; flex-direction: column; gap: 16px; }
+  .shell-home-grid { padding: 20px; grid-template-columns: 1fr; }
+  .shell-module-tabs { display: none; }
+  .shell-topbar { gap: 8px; }
+  .shell-login-card { padding: 32px 24px; }
+}

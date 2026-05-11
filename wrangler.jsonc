@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bf-ops",
+  "compatibility_date": "2026-02-19",
+  "pages_build_output_dir": "./dist",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bf-deliver-production",
+      "database_id": "1a605a55-f12c-4073-a901-a6b0b9edbc3e"
+    }
+  ]
+}
