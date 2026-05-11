@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import type { BFBindings, BFVariables } from './lib/types'
 import { logisticsApp } from './modules/logistics'
+import { inventoryApp } from './modules/inventory'
 
 const app = new Hono<{ Bindings: BFBindings; Variables: BFVariables }>()
 
@@ -130,11 +131,11 @@ app.put('/api/locations/:id', async (c) => {
   return c.json({ success: true })
 })
 
-// ==================== MOUNT LOGISTICS MODULE ====================
-// All logistics API routes (/api/*) are mounted here.
-// The logistics module handles: orders, customers, products, routes,
-// trucks, drivers, zones, returns, recurring, learning, verizon, sync, maps, etc.
-// We mount it on the root so paths like /api/orders, /api/routes etc. work as-is.
+// ==================== MOUNT MODULES ====================
+// Inventory module: /api/inventory/*
+app.route('/', inventoryApp)
+
+// Logistics module: /api/orders, /api/routes, /api/customers, etc.
 app.route('/', logisticsApp)
 
 // ==================== SERVE PARENT SHELL ====================
