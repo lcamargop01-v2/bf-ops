@@ -1,8 +1,5 @@
 // BF Deliver - Logistics Module (loaded by BF Ops parent shell)
-// Wrapped to avoid global pollution — exposes window._logisticsInit()
-
-(function() {
-"use strict";
+// Functions stay global so inline onclick handlers work.
 
 const API = axios.create({ baseURL: '/api' });
 let currentUser = null;
@@ -14134,4 +14131,4 @@ window._logisticsCleanup = function() {
   sidebarOpen = false;
 };
 
-})(); // end logistics module IIFE wrapper
+// end logistics module
