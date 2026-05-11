@@ -13,7 +13,7 @@ VALUES
 -- Two business locations
 INSERT OR IGNORE INTO locations (id, name, code, type, street, city, state, zip, phone, notes)
 VALUES
-  (1, 'Loxahatchee Retail', 'LOX', 'retail', '16215 Southern Blvd', 'Loxahatchee', 'FL', '33470', NULL, 'Main retail location — British Feed & Supplies storefront'),
+  (1, 'Loxahatchee Retail', 'LOX', 'retail', '14589 Southern Blvd', 'Loxahatchee', 'FL', '33470', NULL, 'Main retail location — British Feed & Supplies storefront'),
   (2, 'Aldi Warehouse', 'ALDI', 'distribution', '100 Aldi Way Ste 400', 'West Palm Beach', 'FL', '33411', NULL, 'Distribution warehouse for bulk storage and delivery staging');
 
 -- Grant all modules to admin users
