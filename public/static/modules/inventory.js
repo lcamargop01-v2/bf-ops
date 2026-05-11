@@ -2,7 +2,7 @@
 // Functions stay global so inline onclick handlers work.
 // NOTE: API is already declared by shell.js — reassign, don't redeclare.
 
-var invAPI = axios.create({ baseURL: '/api' });
+var invAPI = axios.create({ baseURL: '' });
 var invUser = null;
 var invPage = 'dashboard';
 var invLocations = [];
