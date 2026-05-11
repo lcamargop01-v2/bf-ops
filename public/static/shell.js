@@ -244,13 +244,13 @@ function cleanupActiveModule() {
 // ==================== LOGISTICS MODULE LOADER ====================
 
 function loadLogisticsModule() {
-  const frame = document.getElementById('moduleFrame');
+  var frame = document.getElementById('moduleFrame');
   window._logisticsActive = true;
 
   // The logistics module needs its own #app div and its CSS
   // Load logistics CSS
   if (!document.querySelector('link[data-module="logistics-css"]')) {
-    const link = document.createElement('link');
+    var link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = '/static/modules/logistics.css?v=' + Date.now();
     link.dataset.module = 'logistics-css';
@@ -260,41 +260,64 @@ function loadLogisticsModule() {
   // Create the app container logistics expects
   frame.innerHTML = '<div id="app"></div>';
 
-  // Load Google Maps if not already loaded
-  if (!window.__gmapsLoaded && !document.querySelector('script[data-gmaps]')) {
-    (async function() {
-      try {
-        const resp = await fetch('/api/maps/config');
-        const cfg = await resp.json();
-        if (cfg.apiKey) {
-          window.__GMAPS_KEY = cfg.apiKey;
-          window.__DEPOT = cfg.depot;
-          const s = document.createElement('script');
-          s.src = 'https://maps.googleapis.com/maps/api/js?key=' + cfg.apiKey + '&libraries=geometry,places&callback=__gmapsReady';
-          s.async = true; s.defer = true;
-          s.dataset.gmaps = '1';
-          document.head.appendChild(s);
-        }
-      } catch(e) { console.warn('Google Maps config not available:', e); }
-    })();
-    window.__gmapsLoaded = false;
-    window.__gmapsReady = function() { window.__gmapsLoaded = true; };
+  // Helper: load Google Maps API (returns a promise that resolves when ready)
+  function ensureGoogleMaps() {
+    // Already loaded from a previous visit to this module
+    if (window.__gmapsLoaded) return Promise.resolve();
+
+    // Already loading (script tag injected but callback hasn't fired yet)
+    if (document.querySelector('script[data-gmaps]')) {
+      return new Promise(function(resolve) {
+        var prev = window.__gmapsReady;
+        window.__gmapsReady = function() { window.__gmapsLoaded = true; if (prev) prev(); resolve(); };
+        // If it loaded between our check and now, resolve immediately
+        if (window.__gmapsLoaded) resolve();
+      });
+    }
+
+    // First time — fetch config, inject script, wait for callback
+    return new Promise(function(resolve) {
+      window.__gmapsLoaded = false;
+      window.__gmapsReady = function() { window.__gmapsLoaded = true; resolve(); };
+
+      fetch('/api/maps/config')
+        .then(function(r) { return r.json(); })
+        .then(function(cfg) {
+          if (cfg.apiKey) {
+            window.__GMAPS_KEY = cfg.apiKey;
+            window.__DEPOT = cfg.depot;
+            var s = document.createElement('script');
+            s.src = 'https://maps.googleapis.com/maps/api/js?key=' + cfg.apiKey + '&libraries=geometry,places&callback=__gmapsReady';
+            s.async = true; s.defer = true;
+            s.dataset.gmaps = '1';
+            s.onerror = function() { console.warn('Google Maps script failed to load'); resolve(); };
+            document.head.appendChild(s);
+          } else {
+            console.warn('Google Maps API key not configured');
+            resolve(); // Continue without maps rather than hanging
+          }
+        })
+        .catch(function(e) { console.warn('Google Maps config fetch failed:', e); resolve(); });
+    });
   }
 
-  // Load the logistics JS module
-  if (!loadedModuleScripts.logistics) {
-    const script = document.createElement('script');
-    script.src = '/static/modules/logistics.js?v=' + Date.now();
-    script.dataset.module = 'logistics';
-    script.onload = () => {
-      loadedModuleScripts.logistics = true;
-      initLogisticsInShell();
-    };
-    document.body.appendChild(script);
-  } else {
-    // Already loaded, just re-init
-    initLogisticsInShell();
+  // Helper: load the logistics JS module (returns a promise)
+  function ensureLogisticsScript() {
+    if (loadedModuleScripts.logistics) return Promise.resolve();
+    return new Promise(function(resolve) {
+      var script = document.createElement('script');
+      script.src = '/static/modules/logistics.js?v=' + Date.now();
+      script.dataset.module = 'logistics';
+      script.onload = function() { loadedModuleScripts.logistics = true; resolve(); };
+      script.onerror = function() { console.error('Failed to load logistics.js'); resolve(); };
+      document.body.appendChild(script);
+    });
   }
+
+  // Load Google Maps and logistics.js in parallel, init only after BOTH are ready
+  Promise.all([ensureGoogleMaps(), ensureLogisticsScript()]).then(function() {
+    initLogisticsInShell();
+  });
 }
 
 function initLogisticsInShell() {
