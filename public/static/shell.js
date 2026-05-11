@@ -1,12 +1,12 @@
 // BF Operations — Parent Shell
 // Manages auth, module switching, and the top-level navigation
 
-const API = axios.create({ baseURL: '/api' });
-let currentUser = null;
-let activeModule = null; // 'logistics', 'inventory', 'ordering', 'pos', 'tasks', 'admin'
-let loadedModuleScripts = {}; // track loaded JS modules
+var API = axios.create({ baseURL: '/api' });
+var currentUser = null;
+var activeModule = null; // 'logistics', 'inventory', 'ordering', 'pos', 'tasks', 'admin'
+var loadedModuleScripts = {}; // track loaded JS modules
 
-const MODULES = [
+var MODULES = [
   { id: 'logistics', name: 'Logistics', icon: 'fa-truck-fast', desc: 'Delivery routes, orders, fleet management', color: '#1E3A8A' },
   { id: 'inventory', name: 'Inventory', icon: 'fa-warehouse', desc: 'Stock levels, movements, multi-location tracking', color: '#059669' },
   { id: 'ordering', name: 'Ordering', icon: 'fa-cart-shopping', desc: 'Purchase orders, vendors, receiving', color: '#D97706', soon: true },

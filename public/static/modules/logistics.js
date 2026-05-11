@@ -1,15 +1,16 @@
 // BF Deliver - Logistics Module (loaded by BF Ops parent shell)
 // Functions stay global so inline onclick handlers work.
+// NOTE: API and currentUser are already declared by shell.js — reassign, don't redeclare.
 
-const API = axios.create({ baseURL: '/api' });
-let currentUser = null;
-let currentPage = 'dashboard';
-let sidebarOpen = false;
+var API = axios.create({ baseURL: '/api' });
+var currentUser = null;
+var currentPage = 'dashboard';
+var sidebarOpen = false;
 
 // ==================== I18N - INTERNATIONALIZATION ====================
-let currentLang = localStorage.getItem('bf_lang') || 'en';
+var currentLang = localStorage.getItem('bf_lang') || 'en';
 
-const translations = {
+var translations = {
   en: {
     // Login
     login_title: 'BF Deliver',
@@ -1415,7 +1416,7 @@ function langSelectorHTML(style = '') {
 
 // Translate dynamic text (admin instructions, driver notes) for driver view
 // Uses a cache to avoid re-translating the same text
-const _translationCache = {};
+var _translationCache = {};
 async function translateText(text, targetLang) {
   if (!text || targetLang === 'en') return text;
   const cacheKey = `${targetLang}:${text}`;
@@ -1505,7 +1506,7 @@ function geoSortOrders(orders, depotLat = 26.7045593, depotLng = -80.2047917) {
   return [...sorted, ...noCoords];
 }
 
-const GEO_CLUSTER_COLORS = ['#059669','#2563EB','#D97706','#DC2626','#7C3AED','#0891B2','#BE185D','#4338CA','#65A30D','#EA580C'];
+var GEO_CLUSTER_COLORS = ['#059669','#2563EB','#D97706','#DC2626','#7C3AED','#0891B2','#BE185D','#4338CA','#65A30D','#EA580C'];
 function geoClusterBadge(clusterIdx) {
   if (clusterIdx == null || clusterIdx < 0) return '<span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;padding:2px 7px;border-radius:6px;background:#F3F4F6;color:#6B7280;white-space:nowrap"><i class="fas fa-question" style="font-size:8px"></i> No GPS</span>';
   const color = GEO_CLUSTER_COLORS[clusterIdx % GEO_CLUSTER_COLORS.length];
@@ -1665,7 +1666,7 @@ async function doArchive(entity, id, isArchived, callbackFn) {
 }
 
 // Track archive toggle state per page
-const _archiveToggles = {};
+var _archiveToggles = {};
 
 // ==================== ROUTING ====================
 function navigate(page, params = {}) {
@@ -2153,8 +2154,8 @@ function filterOrdersMap(dateFilter) {
 }
 
 // Route color palette for distinct route colors on map
-const ROUTE_COLORS = ['#2563EB','#059669','#D97706','#DC2626','#7C3AED','#0891B2','#BE185D','#4338CA','#65A30D','#EA580C','#0D9488','#9333EA','#CA8A04','#E11D48','#4F46E5'];
-const UNROUTED_COLOR = '#1E3A5F';
+var ROUTE_COLORS = ['#2563EB','#059669','#D97706','#DC2626','#7C3AED','#0891B2','#BE185D','#4338CA','#65A30D','#EA580C','#0D9488','#9333EA','#CA8A04','#E11D48','#4F46E5'];
+var UNROUTED_COLOR = '#1E3A5F';
 
 function getRouteColorMap(orders) {
   const routeIds = [...new Set(orders.filter(o => o.route_id).map(o => o.route_id))];
@@ -3636,8 +3637,8 @@ async function submitNewOrder() {
 // Old showEditOrderModal/submitEditOrder moved to ENHANCED ORDER EDITING section near bottom
 
 // ==================== SCHEDULE PAGE ====================
-const DAY_COLORS = ['#2563EB','#059669','#F97316','#DC2626','#7C3AED','#CA8A04'];
-const DEPOT = { lat: 26.7045593, lng: -80.2047917, address: '100 Aldi Way, Ste 400, West Palm Beach, FL 33411' };
+var DAY_COLORS = ['#2563EB','#059669','#F97316','#DC2626','#7C3AED','#CA8A04'];
+var DEPOT = { lat: 26.7045593, lng: -80.2047917, address: '100 Aldi Way, Ste 400, West Palm Beach, FL 33411' };
 
 async function renderSchedule() {
   const pc = document.getElementById('pageContent');
@@ -8514,12 +8515,12 @@ async function submitEditTruck(id) {
 }
 
 // ==================== BULK ORDER UPLOAD ====================
-const BULK_CSV_TEMPLATE = `customer,product,quantity,priority,date,notes
+var BULK_CSV_TEMPLATE = `customer,product,quantity,priority,date,notes
 Green Meadows Farm,Tribute Essential K,40,normal,,
 Triple S Ranch,SafeChoice Original,80,high,2026-04-10,Gate code: 1234
 Palm Beach Equestrian,Purina Strategy GX,60,normal,,Leave by barn`;
 
-const BULK_JSON_TEMPLATE = `[
+var BULK_JSON_TEMPLATE = `[
   {
     "customer": "Green Meadows Farm",
     "items": [
@@ -11100,7 +11101,7 @@ async function submitUploadRecord() {
 }
 
 // ==================== RECURRING ORDERS PAGE ====================
-const DAYS_OF_WEEK = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+var DAYS_OF_WEEK = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
 function frequencyLabel(freq, interval) {
   switch(freq) {
@@ -13395,7 +13396,7 @@ async function showCustomerLearningProfile(customerId, customerName) {
 }
 
 // ==================== FLEET SYNC (Verizon ↔ App Two-Way Sync) ====================
-let _syncData = null;
+var _syncData = null;
 
 async function renderFleetSync() {
   const pc = document.getElementById('pageContent');
@@ -13671,12 +13672,12 @@ async function importVerizonDriver(vData) {
 }
 
 // ==================== FLEET TRACKING (Verizon Connect Reveal) ====================
-let fleetTrackingData = { vehicles: [], drivers: [], locations: [], configured: false };
-let fleetTrackingMap = null;
-let fleetTrackingMarkers = [];
-let fleetTrackingInterval = null;
-let fleetSelectedVehicle = null;
-let fleetSegmentsDate = null;
+var fleetTrackingData = { vehicles: [], drivers: [], locations: [], configured: false };
+var fleetTrackingMap = null;
+var fleetTrackingMarkers = [];
+var fleetTrackingInterval = null;
+var fleetSelectedVehicle = null;
+var fleetSegmentsDate = null;
 
 async function renderFleetTracking() {
   const pc = document.getElementById('pageContent');
@@ -14093,7 +14094,7 @@ function fleetCloseDetail() {
 }
 
 // Clean up when navigating away
-const _origNavigate = window.navigate;
+var _origNavigate = window.navigate;
 if (typeof _origNavigate === 'function') {
   window.navigate = function(page, params) {
     if (currentPage === 'fleet_tracking' && page !== 'fleet_tracking') {
