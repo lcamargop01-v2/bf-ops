@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import type { BFBindings, BFVariables } from './lib/types'
 import { logisticsApp } from './modules/logistics'
 import { inventoryApp } from './modules/inventory'
+import { purchasingApp } from './modules/purchasing'
 
 const app = new Hono<{ Bindings: BFBindings; Variables: BFVariables }>()
 
@@ -134,6 +135,9 @@ app.put('/api/locations/:id', async (c) => {
 // ==================== MOUNT MODULES ====================
 // Inventory module: /api/inventory/*
 app.route('/', inventoryApp)
+
+// Purchasing module: /api/purchasing/*
+app.route('/', purchasingApp)
 
 // Logistics module: /api/orders, /api/routes, /api/customers, etc.
 app.route('/', logisticsApp)

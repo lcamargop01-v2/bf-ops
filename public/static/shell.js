@@ -9,7 +9,7 @@ var loadedModuleScripts = {}; // track loaded JS modules
 var MODULES = [
   { id: 'logistics', name: 'Logistics', icon: 'fa-truck-fast', desc: 'Delivery routes, orders, fleet management', color: '#1E3A8A' },
   { id: 'inventory', name: 'Inventory', icon: 'fa-warehouse', desc: 'Stock levels, movements, multi-location tracking', color: '#059669' },
-  { id: 'ordering', name: 'Ordering', icon: 'fa-cart-shopping', desc: 'Purchase orders, vendors, receiving', color: '#D97706', soon: true },
+  { id: 'ordering', name: 'Purchasing', icon: 'fa-cart-shopping', desc: 'Purchase orders, vendors, receiving', color: '#D97706' },
   { id: 'pos', name: 'Point of Sale', icon: 'fa-cash-register', desc: 'Register, payments, receipts', color: '#7C3AED', soon: true },
   { id: 'tasks', name: 'Tasks', icon: 'fa-list-check', desc: 'Team tasks, checklists, operations', color: '#DC2626', soon: true },
 ];
@@ -219,6 +219,8 @@ function launchModule(moduleId) {
     loadLogisticsModule();
   } else if (moduleId === 'inventory') {
     loadInventoryModule();
+  } else if (moduleId === 'ordering') {
+    loadPurchasingModule();
   } else {
     document.getElementById('moduleFrame').innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px">
@@ -370,7 +372,37 @@ function loadInventoryModule() {
   }
 }
 
-// ==================== ADMIN PANEL ====================
+// ==================== PURCHASING MODULE LOADER ====================
+
+function loadPurchasingModule() {
+  const frame = document.getElementById('moduleFrame');
+
+  // Load purchasing CSS if needed
+  if (!document.querySelector('link[data-module="purchasing-css"]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/static/modules/purchasing.css?v=' + Date.now();
+    link.dataset.module = 'purchasing-css';
+    document.head.appendChild(link);
+  }
+
+  frame.innerHTML = '<div id="purchasing-app"></div>';
+
+  if (!loadedModuleScripts.purchasing) {
+    const script = document.createElement('script');
+    script.src = '/static/modules/purchasing.js?v=' + Date.now();
+    script.dataset.module = 'purchasing';
+    script.onload = () => {
+      loadedModuleScripts.purchasing = true;
+      if (typeof window._purchasingInit === 'function') window._purchasingInit();
+    };
+    document.body.appendChild(script);
+  } else {
+    if (typeof window._purchasingInit === 'function') window._purchasingInit();
+  }
+}
+
+// ==================== ADMIN PANEL ==
 
 async function renderAdminPanel() {
   const frame = document.getElementById('moduleFrame');
