@@ -51,6 +51,10 @@ async function invLoadDashboard() {
     var resp = await invAPI.get(url, { headers: invHeaders() });
     invStockData = resp.data.stock || [];
     invSummary = resp.data.summary || {};
+    // Load thumbnails for top items
+    var pids = invStockData.slice(0, 50).map(function(s) { return s.product_id; });
+    var unique = pids.filter(function(v, i, a) { return a.indexOf(v) === i; });
+    if (unique.length > 0) await invLoadThumbnails(unique);
   } catch(e) { console.error('Dashboard load failed:', e); }
 }
 
@@ -64,6 +68,10 @@ async function invLoadStock() {
     if (cat && cat.value) url += 'category=' + cat.value + '&';
     var resp = await invAPI.get(url, { headers: invHeaders() });
     invStockData = resp.data.stock || [];
+    // Load thumbnails
+    var pids = invStockData.map(function(s) { return s.product_id; });
+    var unique = pids.filter(function(v, i, a) { return a.indexOf(v) === i; });
+    if (unique.length > 0) await invLoadThumbnails(unique);
   } catch(e) { console.error('Stock load failed:', e); }
 }
 
@@ -231,10 +239,11 @@ function invRenderDashboard() {
     html += '<div class="inv-section">';
     html += '<h3 class="inv-section-title"><i class="fas fa-ranking-star"></i> Top Stock Items</h3>';
     html += '<div class="inv-table-wrap"><table class="inv-table">';
-    html += '<thead><tr><th>Product</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Available</th><th class="text-right">Value</th></tr></thead><tbody>';
+    html += '<thead><tr><th style="width:48px"></th><th>Product</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Available</th><th class="text-right">Value</th></tr></thead><tbody>';
     sorted.slice(0, 15).forEach(function(s) {
       var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
       html += '<tr onclick="invShowProductDetail(' + s.product_id + ')" class="inv-clickable">' +
+        '<td>' + invThumbHTML(s.product_id, 36) + '</td>' +
         '<td><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + ' · ' + escH(s.category || '') + '</span></td>' +
         '<td><span class="inv-loc-badge">' + escH(s.location_code) + '</span></td>' +
         '<td class="text-right">' + (s.qty_on_hand || 0).toLocaleString() + ' <span class="inv-muted">' + escH(s.unit_type || '') + '</span></td>' +
@@ -281,12 +290,13 @@ function invRenderStockList() {
 
   // Stock table (desktop) / cards (mobile)
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
-  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Reserved</th><th class="text-right">Available</th><th class="text-right">Value</th><th></th></tr></thead><tbody>';
+  html += '<thead><tr><th style="width:48px"></th><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Reserved</th><th class="text-right">Available</th><th class="text-right">Value</th><th></th></tr></thead><tbody>';
 
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
     var lowStock = s.reorder_point > 0 && s.qty_on_hand <= s.reorder_point;
     html += '<tr class="' + (lowStock ? 'inv-row-warning' : '') + '">' +
+      '<td>' + invThumbHTML(s.product_id, 36) + '</td>' +
       '<td class="inv-clickable" onclick="invShowProductDetail(' + s.product_id + ')"><strong>' + escH(s.product_name) + '</strong></td>' +
       '<td class="inv-muted">' + escH(s.sku || '—') + '</td>' +
       '<td><span class="inv-cat-badge inv-cat-' + (s.category || 'other') + '">' + escH(s.category || 'other') + '</span></td>' +
@@ -308,7 +318,8 @@ function invRenderStockList() {
     var lowStock = s.reorder_point > 0 && s.qty_on_hand <= s.reorder_point;
     html += '<div class="inv-stock-card' + (lowStock ? ' inv-card-warning' : '') + '" onclick="invShowProductDetail(' + s.product_id + ')">' +
       '<div class="inv-stock-card-top">' +
-      '<div><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + '</span></div>' +
+      '<div class="inv-stock-card-top-left">' + invThumbHTML(s.product_id, 44) +
+      '<div><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + '</span></div></div>' +
       '<span class="inv-loc-badge">' + escH(s.location_code) + '</span>' +
       '</div>' +
       '<div class="inv-stock-card-nums">' +
@@ -318,6 +329,7 @@ function invRenderStockList() {
       '<div><span class="inv-muted">Available</span><strong class="' + (avail <= 0 ? 'inv-danger' : '') + '">' + avail + '</strong></div>' +
       '</div>' +
       '<div class="inv-stock-card-actions">' +
+      '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowCaptureImage(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-camera"></i></button>' +
       '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i> Adjust</button>' +
       '</div>' +
       '</div>';
@@ -1087,6 +1099,212 @@ async function invDoCreateReservation() {
   } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
+// ==================== PRODUCT IMAGES ====================
+
+// Thumbnail cache — loaded once per render cycle
+var invThumbnails = {};
+var invThumbnailsLoaded = false;
+
+async function invLoadThumbnails(productIds) {
+  if (!productIds || productIds.length === 0) return;
+  try {
+    var resp = await invAPI.post('/api/inventory/images/thumbnails', { product_ids: productIds }, { headers: invHeaders() });
+    invThumbnails = resp.data.thumbnails || {};
+    invThumbnailsLoaded = true;
+  } catch(e) { console.error('Thumbnail load failed:', e); }
+}
+
+function invThumbHTML(productId, size) {
+  size = size || 40;
+  var thumb = invThumbnails[productId];
+  if (thumb) {
+    return '<img src="' + thumb.image_data + '" class="inv-thumb" style="width:' + size + 'px;height:' + size + 'px;" alt="' + escH(thumb.caption || '') + '" onclick="event.stopPropagation();invShowProductImages(' + productId + ')">';
+  }
+  return '<div class="inv-thumb-empty" style="width:' + size + 'px;height:' + size + 'px;" onclick="event.stopPropagation();invShowCaptureImage(' + productId + ')" title="Add photo"><i class="fas fa-camera"></i></div>';
+}
+
+// Compress image client-side before upload
+function invCompressImage(file, maxWidth, quality) {
+  maxWidth = maxWidth || 800;
+  quality = quality || 0.7;
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        var canvas = document.createElement('canvas');
+        var w = img.width;
+        var h = img.height;
+        if (w > maxWidth) { h = Math.round(h * maxWidth / w); w = maxWidth; }
+        canvas.width = w;
+        canvas.height = h;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        var dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Camera / file capture modal
+function invShowCaptureImage(productId, locationId, batchId) {
+  var locOpts = '<option value="">— No location —</option>';
+  invLocations.forEach(function(l) {
+    locOpts += '<option value="' + l.id + '"' + (locationId == l.id || invSelectedLocation == l.id ? ' selected' : '') + '>' + l.code + ' — ' + l.name + '</option>';
+  });
+
+  var body = '<div class="inv-img-capture">' +
+    '<div class="inv-img-capture-zone" id="invCaptureZone">' +
+    '<div class="inv-img-capture-placeholder" id="invCapturePlaceholder">' +
+    '<i class="fas fa-camera"></i>' +
+    '<p>Tap to take photo or choose file</p>' +
+    '<div class="inv-img-capture-btns">' +
+    '<label class="inv-btn inv-btn-primary inv-btn-sm"><i class="fas fa-camera"></i> Camera<input type="file" accept="image/*" capture="environment" id="invCameraInput" style="display:none" onchange="invPreviewCapture(this)"></label>' +
+    '<label class="inv-btn inv-btn-outline inv-btn-sm"><i class="fas fa-images"></i> Gallery<input type="file" accept="image/*" id="invFileInput" style="display:none" onchange="invPreviewCapture(this)"></label>' +
+    '</div>' +
+    '</div>' +
+    '<img id="invCapturePreview" class="inv-img-capture-preview" style="display:none">' +
+    '</div>' +
+    '<div class="inv-form-group"><label>Location</label><select id="invImgLocation" class="inv-select">' + locOpts + '</select></div>' +
+    '<div class="inv-form-group"><label>Caption (optional)</label><input id="invImgCaption" type="text" class="inv-input" placeholder="e.g. Front of pallet, Damage close-up..."></div>' +
+    '<input type="hidden" id="invImgProductId" value="' + productId + '">' +
+    '<input type="hidden" id="invImgBatchId" value="' + (batchId || '') + '">' +
+    '</div>';
+
+  var footer = '<button class="inv-btn inv-btn-primary" onclick="invDoUploadImage()" id="invUploadBtn" disabled><i class="fas fa-cloud-arrow-up"></i> Upload Photo</button>';
+  invShowModal('<i class="fas fa-camera"></i> Add Product Photo', body, footer);
+}
+
+function invPreviewCapture(input) {
+  if (!input.files || !input.files[0]) return;
+  var file = input.files[0];
+  var preview = document.getElementById('invCapturePreview');
+  var placeholder = document.getElementById('invCapturePlaceholder');
+  var uploadBtn = document.getElementById('invUploadBtn');
+
+  invCompressImage(file, 800, 0.7).then(function(dataUrl) {
+    preview.src = dataUrl;
+    preview.style.display = 'block';
+    placeholder.style.display = 'none';
+    uploadBtn.disabled = false;
+    // Store for upload
+    preview.dataset.imageData = dataUrl;
+    // Show file size info
+    var sizeKB = Math.round(dataUrl.length * 3 / 4 / 1024);
+    invToast('Photo ready (' + sizeKB + ' KB)', 'success');
+  }).catch(function() {
+    invToast('Failed to process image', 'error');
+  });
+}
+
+async function invDoUploadImage() {
+  var preview = document.getElementById('invCapturePreview');
+  var imageData = preview.dataset.imageData;
+  var productId = parseInt(document.getElementById('invImgProductId').value);
+  var locationId = parseInt(document.getElementById('invImgLocation').value) || null;
+  var batchId = parseInt(document.getElementById('invImgBatchId').value) || null;
+  var caption = document.getElementById('invImgCaption').value;
+
+  if (!imageData || !productId) { invToast('No image to upload', 'warning'); return; }
+
+  var btn = document.getElementById('invUploadBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+
+  try {
+    await invAPI.post('/api/inventory/images', {
+      product_id: productId,
+      location_id: locationId,
+      batch_id: batchId,
+      image_data: imageData,
+      caption: caption
+    }, { headers: invHeaders() });
+
+    invToast('Photo uploaded');
+    invCloseModal();
+    // Refresh thumbnails
+    invThumbnailsLoaded = false;
+    invRender();
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-cloud-arrow-up"></i> Upload Photo';
+    invToast('Upload failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+
+// Show all images for a product (gallery view)
+async function invShowProductImages(productId) {
+  try {
+    var resp = await invAPI.get('/api/inventory/images/' + productId, { headers: invHeaders() });
+    var images = resp.data.images || [];
+
+    if (images.length === 0) {
+      invShowCaptureImage(productId);
+      return;
+    }
+
+    // Load full images
+    var body = '<div class="inv-img-gallery">';
+    for (var i = 0; i < images.length; i++) {
+      var img = images[i];
+      body += '<div class="inv-img-gallery-item" id="invGalleryItem_' + img.id + '">' +
+        '<div class="inv-img-gallery-loading"><i class="fas fa-spinner fa-spin"></i></div>' +
+        '<div class="inv-img-gallery-meta">' +
+        '<span class="inv-muted">' + escH(img.caption || 'No caption') + '</span>' +
+        '<span class="inv-muted">' + invFormatDateTime(img.created_at) + (img.taken_by_name ? ' by ' + escH(img.taken_by_name) : '') + '</span>' +
+        '<button class="inv-btn inv-btn-xs inv-btn-danger" onclick="invDeleteImage(' + img.id + ',' + productId + ')"><i class="fas fa-trash"></i></button>' +
+        '</div></div>';
+    }
+    body += '</div>';
+
+    var footer = '<button class="inv-btn inv-btn-primary" onclick="invCloseModal();invShowCaptureImage(' + productId + ')"><i class="fas fa-plus"></i> Add Another Photo</button>';
+    invShowModal('<i class="fas fa-images"></i> Product Photos (' + images.length + ')', body, footer);
+
+    // Lazy-load full image data
+    images.forEach(function(img) {
+      invAPI.get('/api/inventory/images/' + productId + '/' + img.id, { headers: invHeaders() }).then(function(r) {
+        var item = document.getElementById('invGalleryItem_' + img.id);
+        if (item && r.data.image) {
+          var imgEl = document.createElement('img');
+          imgEl.src = r.data.image.image_data;
+          imgEl.className = 'inv-img-gallery-photo';
+          imgEl.onclick = function() { invShowFullImage(r.data.image.image_data); };
+          var loading = item.querySelector('.inv-img-gallery-loading');
+          if (loading) loading.replaceWith(imgEl);
+        }
+      });
+    });
+
+  } catch(e) { invToast('Failed to load images', 'error'); }
+}
+
+function invShowFullImage(dataUrl) {
+  var overlay = document.createElement('div');
+  overlay.className = 'inv-fullimg-overlay';
+  overlay.onclick = function() { overlay.remove(); };
+  overlay.innerHTML = '<img src="' + dataUrl + '" class="inv-fullimg">' +
+    '<button class="inv-fullimg-close"><i class="fas fa-times"></i></button>';
+  document.body.appendChild(overlay);
+  setTimeout(function() { overlay.classList.add('inv-fullimg-show'); }, 10);
+}
+
+async function invDeleteImage(imageId, productId) {
+  if (!confirm('Delete this photo?')) return;
+  try {
+    await invAPI.delete('/api/inventory/images/' + imageId, { headers: invHeaders() });
+    invToast('Photo deleted');
+    invThumbnailsLoaded = false;
+    // Re-open gallery
+    invCloseModal();
+    invShowProductImages(productId);
+  } catch(e) { invToast('Delete failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
 // Product detail modal
 async function invShowProductDetail(productId) {
   try {
@@ -1095,13 +1313,33 @@ async function invShowProductDetail(productId) {
     var batches = resp.data.batches || [];
     var holds = resp.data.holds || [];
     var reservations = resp.data.reservations || [];
+    var imgResp = await invAPI.get('/api/inventory/images/' + productId, { headers: invHeaders() });
+    var images = imgResp.data.images || [];
 
     // Get product name from stock data
     var pResp = await invAPI.get('/api/inventory/products?search=', { headers: invHeaders() });
     var product = (pResp.data.products || []).find(function(p) { return p.id === productId; });
     var pName = product ? product.name : 'Product #' + productId;
 
-    var body = '<h4>Stock by Location</h4>';
+    // Product photos section at top
+    var body = '';
+    if (images.length > 0) {
+      body += '<div class="inv-detail-images">';
+      body += '<div class="inv-detail-images-header"><h4><i class="fas fa-images"></i> Photos (' + images.length + ')</h4>';
+      body += '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invCloseModal();invShowCaptureImage(' + productId + ')"><i class="fas fa-plus"></i> Add</button></div>';
+      body += '<div class="inv-detail-images-strip" id="invDetailImgStrip">';
+      images.forEach(function(img) {
+        body += '<div class="inv-detail-img-thumb" id="invDetailThumb_' + img.id + '" data-product="' + productId + '" data-imgid="' + img.id + '">' +
+          '<div class="inv-img-gallery-loading"><i class="fas fa-spinner fa-spin"></i></div>' +
+          '</div>';
+      });
+      body += '</div></div>';
+    } else {
+      body += '<div class="inv-detail-add-photo" onclick="invCloseModal();invShowCaptureImage(' + productId + ')">' +
+        '<i class="fas fa-camera"></i> <span>Add product photos for quick reference</span></div>';
+    }
+
+    body += '<h4>Stock by Location</h4>';
     if (stock.length === 0) {
       body += '<p class="inv-muted">No stock records for this product.</p>';
     } else {
@@ -1138,6 +1376,21 @@ async function invShowProductDetail(productId) {
     }
 
     invShowModal('<i class="fas fa-box"></i> ' + escH(pName), body, '');
+
+    // Lazy load thumbnail strip images
+    if (images.length > 0) {
+      images.forEach(function(img) {
+        invAPI.get('/api/inventory/images/' + productId + '/' + img.id, { headers: invHeaders() }).then(function(r) {
+          var thumb = document.getElementById('invDetailThumb_' + img.id);
+          if (thumb && r.data.image) {
+            thumb.innerHTML = '<img src="' + r.data.image.image_data + '" onclick="invShowFullImage(\'' + r.data.image.image_data.substring(0, 50) + '\')">';
+            // Store full data for click
+            thumb.onclick = function() { invShowFullImage(r.data.image.image_data); };
+          }
+        });
+      });
+    }
+
   } catch(e) { invToast('Failed to load product detail', 'error'); }
 }
 

@@ -993,6 +993,110 @@ app.post('/api/inventory/init-stock', async (c) => {
   return c.json({ success: true, products_initialized: created })
 })
 
+// ==================== PRODUCT IMAGES ====================
+
+// Get images for a product (optionally filtered by location/batch)
+app.get('/api/inventory/images/:productId', async (c) => {
+  const db = c.env.DB
+  const productId = parseInt(c.req.param('productId'))
+  const locationId = c.req.query('location_id')
+  const batchId = c.req.query('batch_id')
+
+  let query = `SELECT id, product_id, location_id, batch_id, caption, taken_by_name, created_at
+    FROM product_images WHERE product_id = ?`
+  const binds: any[] = [productId]
+
+  if (locationId) { query += ' AND location_id = ?'; binds.push(parseInt(locationId)) }
+  if (batchId) { query += ' AND batch_id = ?'; binds.push(parseInt(batchId)) }
+
+  query += ' ORDER BY created_at DESC'
+  const images = await db.prepare(query).bind(...binds).all()
+  return c.json({ images: images.results || [] })
+})
+
+// Get a single image (with full data)
+app.get('/api/inventory/images/:productId/:imageId', async (c) => {
+  const db = c.env.DB
+  const imageId = parseInt(c.req.param('imageId'))
+  const image = await db.prepare('SELECT * FROM product_images WHERE id = ?').bind(imageId).first()
+  if (!image) return c.json({ error: 'Image not found' }, 404)
+  return c.json({ image })
+})
+
+// Get thumbnail map — returns latest image per product for a list of product IDs
+app.post('/api/inventory/images/thumbnails', async (c) => {
+  const db = c.env.DB
+  const { product_ids } = await c.req.json() as { product_ids: number[] }
+  if (!product_ids?.length) return c.json({ thumbnails: {} })
+
+  // Get latest image per product (only metadata + data for thumbnail)
+  const placeholders = product_ids.map(() => '?').join(',')
+  const results = await db.prepare(
+    `SELECT pi.product_id, pi.id, pi.image_data, pi.caption FROM product_images pi
+     INNER JOIN (SELECT product_id, MAX(id) as max_id FROM product_images WHERE product_id IN (${placeholders}) GROUP BY product_id) latest
+     ON pi.id = latest.max_id`
+  ).bind(...product_ids).all()
+
+  const thumbnails: Record<number, { id: number; image_data: string; caption: string | null }> = {}
+  for (const r of (results.results || []) as any[]) {
+    thumbnails[r.product_id] = { id: r.id, image_data: r.image_data, caption: r.caption }
+  }
+  return c.json({ thumbnails })
+})
+
+// Upload an image (base64 data URL from camera/file)
+app.post('/api/inventory/images', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const { product_id, location_id, batch_id, image_data, caption } = await c.req.json()
+
+  if (!product_id || !image_data) return c.json({ error: 'product_id and image_data required' }, 400)
+
+  // Validate it's a data URL and not absurdly large (max ~2MB base64 ≈ ~1.5MB image)
+  if (!image_data.startsWith('data:image/')) return c.json({ error: 'Invalid image format — must be data:image/* URL' }, 400)
+  if (image_data.length > 2_800_000) return c.json({ error: 'Image too large — max ~2MB. Try compressing or reducing resolution.' }, 400)
+
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+
+  const result = await db.prepare(
+    `INSERT INTO product_images (product_id, location_id, batch_id, image_data, caption, taken_by, taken_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(product_id, location_id || null, batch_id || null, image_data, caption || null, user.id, userInfo?.name || user.email).run()
+
+  await auditLog(db, {
+    product_id, location_id: location_id || 0, action: 'image_added', qty_change: 0,
+    reason: caption ? `Photo added: ${caption}` : 'Product photo added',
+    notes: `Image ID: ${result.meta.last_row_id}`,
+    user_id: user.id, user_name: userInfo?.name || user.email
+  })
+
+  return c.json({ success: true, id: result.meta.last_row_id })
+})
+
+// Delete an image
+app.delete('/api/inventory/images/:imageId', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const imageId = parseInt(c.req.param('imageId'))
+
+  const image = await db.prepare('SELECT product_id, location_id, caption FROM product_images WHERE id = ?').bind(imageId).first() as any
+  if (!image) return c.json({ error: 'Image not found' }, 404)
+
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+
+  await db.prepare('DELETE FROM product_images WHERE id = ?').bind(imageId).run()
+
+  await auditLog(db, {
+    product_id: image.product_id, location_id: image.location_id || 0, action: 'image_deleted', qty_change: 0,
+    reason: image.caption ? `Photo deleted: ${image.caption}` : 'Product photo deleted',
+    user_id: user.id, user_name: userInfo?.name || user.email
+  })
+
+  return c.json({ success: true })
+})
+
 // ==================== PRODUCTS LIST (for dropdowns) ====================
 
 app.get('/api/inventory/products', async (c) => {
