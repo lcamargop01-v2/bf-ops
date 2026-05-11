@@ -524,4 +524,217 @@ app.get('/api/purchasing/products', async (c) => {
   return c.json({ products: result.results || [] })
 })
 
+// ==================== ORDER REQUESTS ====================
+
+function generateRequestNumber(): string {
+  const d = new Date()
+  const ymd = d.getFullYear().toString().slice(2) + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0')
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
+  return `REQ-${ymd}-${rand}`
+}
+
+// List order requests
+app.get('/api/purchasing/requests', async (c) => {
+  const db = c.env.DB
+  const status = c.req.query('status')
+  const locationId = c.req.query('location_id')
+  const urgency = c.req.query('urgency')
+
+  let q = `SELECT r.*, l.name as location_name, l.code as location_code,
+    (SELECT COUNT(*) FROM order_request_items WHERE request_id = r.id) as item_count
+    FROM order_requests r
+    JOIN locations l ON r.location_id = l.id
+    WHERE 1=1`
+  const binds: any[] = []
+  if (status && status !== 'all') { q += ' AND r.status = ?'; binds.push(status) }
+  if (locationId) { q += ' AND r.location_id = ?'; binds.push(parseInt(locationId)) }
+  if (urgency) { q += ' AND r.urgency = ?'; binds.push(urgency) }
+  q += ' ORDER BY CASE r.urgency WHEN \'critical\' THEN 0 WHEN \'high\' THEN 1 WHEN \'normal\' THEN 2 ELSE 3 END, r.created_at DESC'
+
+  const result = await db.prepare(q).bind(...binds).all()
+  return c.json({ requests: result.results || [] })
+})
+
+// Dashboard request summary (for purchasing dashboard) — MUST be before :id route
+app.get('/api/purchasing/requests/summary', async (c) => {
+  const db = c.env.DB
+  const counts = await db.prepare(
+    `SELECT status, urgency, COUNT(*) as cnt FROM order_requests GROUP BY status, urgency`
+  ).all()
+
+  const pending = await db.prepare(
+    `SELECT r.*, l.code as location_code,
+      (SELECT COUNT(*) FROM order_request_items WHERE request_id = r.id) as item_count
+     FROM order_requests r
+     JOIN locations l ON r.location_id = l.id
+     WHERE r.status = 'pending'
+     ORDER BY CASE r.urgency WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, r.created_at DESC
+     LIMIT 20`
+  ).all()
+
+  return c.json({ counts: counts.results || [], pending_requests: pending.results || [] })
+})
+
+// Get single request with items
+app.get('/api/purchasing/requests/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+
+  const request = await db.prepare(
+    `SELECT r.*, l.name as location_name, l.code as location_code
+     FROM order_requests r
+     JOIN locations l ON r.location_id = l.id
+     WHERE r.id = ?`
+  ).bind(id).first()
+  if (!request) return c.json({ error: 'Request not found' }, 404)
+
+  const items = await db.prepare(
+    `SELECT ri.*, p.name as product_name, p.sku, p.category, p.unit_type as product_unit_type
+     FROM order_request_items ri
+     LEFT JOIN products p ON ri.product_id = p.id
+     WHERE ri.request_id = ? ORDER BY ri.id`
+  ).bind(id).all()
+
+  return c.json({ request, items: items.results || [] })
+})
+
+// Create order request (from warehouse / sales rep / inventory)
+app.post('/api/purchasing/requests', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  const body = await c.req.json()
+  const { location_id, order_type, urgency, reason, notes, items } = body
+
+  if (!location_id) return c.json({ error: 'Location required' }, 400)
+  if (!items || !Array.isArray(items) || items.length === 0) return c.json({ error: 'At least one item required' }, 400)
+
+  const request_number = generateRequestNumber()
+  const result = await db.prepare(
+    `INSERT INTO order_requests (request_number, status, urgency, order_type, location_id, requested_by, requested_by_name, requested_by_role, reason, notes)
+     VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    request_number,
+    urgency || 'normal',
+    order_type || null,
+    location_id,
+    user?.id || null,
+    user?.email || 'unknown',
+    user?.role || 'staff',
+    reason || null,
+    notes || null
+  ).run()
+
+  const requestId = result.meta.last_row_id
+
+  // Insert request items — optionally capture current stock level
+  for (const item of items) {
+    let currentStock = null
+    if (item.product_id && location_id) {
+      const stock = await db.prepare('SELECT qty_on_hand FROM inventory_stock WHERE product_id = ? AND location_id = ?')
+        .bind(item.product_id, location_id).first() as any
+      currentStock = stock?.qty_on_hand ?? null
+    }
+    await db.prepare(
+      `INSERT INTO order_request_items (request_id, product_id, description, qty_requested, unit, current_stock, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      requestId,
+      item.product_id || null,
+      item.description || '',
+      item.qty_requested || 1,
+      item.unit || 'each',
+      currentStock,
+      item.notes || null
+    ).run()
+  }
+
+  return c.json({ id: requestId, request_number, success: true })
+})
+
+// Review (approve/reject) a request
+app.post('/api/purchasing/requests/:id/review', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const user = getUserFromHeader(c)
+  const { action, review_notes } = await c.req.json()
+
+  if (!['approved', 'rejected'].includes(action)) return c.json({ error: 'Invalid action' }, 400)
+
+  const request = await db.prepare('SELECT * FROM order_requests WHERE id = ?').bind(id).first() as any
+  if (!request) return c.json({ error: 'Request not found' }, 404)
+  if (request.status !== 'pending') return c.json({ error: 'Request already reviewed' }, 400)
+
+  await db.prepare(
+    `UPDATE order_requests SET status = ?, reviewed_by = ?, reviewed_by_name = ?, reviewed_at = CURRENT_TIMESTAMP, review_notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).bind(action, user?.id || null, user?.email || 'admin', review_notes || null, id).run()
+
+  return c.json({ success: true, new_status: action })
+})
+
+// Convert approved request to PO
+app.post('/api/purchasing/requests/:id/convert', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  const { supplier_id, expected_date } = body
+
+  const request = await db.prepare('SELECT * FROM order_requests WHERE id = ?').bind(id).first() as any
+  if (!request) return c.json({ error: 'Request not found' }, 404)
+  if (request.status !== 'approved') return c.json({ error: 'Request must be approved first' }, 400)
+
+  // Get request items
+  const reqItems = await db.prepare('SELECT * FROM order_request_items WHERE request_id = ?').bind(id).all()
+
+  // Create a PO from this request
+  const poType = request.order_type || 'shelf_goods'
+  const po_number = generatePONumber(poType)
+  const poResult = await db.prepare(
+    `INSERT INTO purchase_orders (po_number, supplier_id, order_type, status, location_id, order_date, expected_date, notes, internal_notes, created_by, created_by_name)
+     VALUES (?, ?, ?, 'ordered', ?, date('now'), ?, ?, ?, ?, ?)`
+  ).bind(
+    po_number,
+    supplier_id || null,
+    poType,
+    request.location_id,
+    expected_date || null,
+    request.notes || null,
+    'Converted from request ' + request.request_number + (request.reason ? '. Reason: ' + request.reason : ''),
+    user?.id || null,
+    user?.email || 'system'
+  ).run()
+
+  const poId = poResult.meta.last_row_id
+
+  // Insert PO line items from request items
+  let totalAmount = 0
+  for (const item of (reqItems.results || []) as any[]) {
+    await db.prepare(
+      `INSERT INTO po_items (po_id, product_id, description, qty_ordered, unit, unit_cost, notes)
+       VALUES (?, ?, ?, ?, ?, 0, ?)`
+    ).bind(poId, item.product_id || null, item.description || '', item.qty_requested || 1, item.unit || 'each', item.notes || null).run()
+  }
+
+  // Mark request as converted
+  await db.prepare(
+    'UPDATE order_requests SET status = ?, converted_po_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+  ).bind('converted', poId, id).run()
+
+  return c.json({ success: true, po_id: poId, po_number })
+})
+
+// Cancel a request
+app.post('/api/purchasing/requests/:id/cancel', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+
+  const request = await db.prepare('SELECT * FROM order_requests WHERE id = ?').bind(id).first() as any
+  if (!request) return c.json({ error: 'Request not found' }, 404)
+  if (!['pending', 'approved'].includes(request.status)) return c.json({ error: 'Cannot cancel this request' }, 400)
+
+  await db.prepare('UPDATE order_requests SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .bind('cancelled', id).run()
+  return c.json({ success: true })
+})
+
 export { app as purchasingApp }

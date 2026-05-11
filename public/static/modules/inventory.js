@@ -219,6 +219,7 @@ function invRenderDashboard() {
   html += '<button class="inv-action-btn inv-action-transfer" onclick="invShowNewTransfer()"><i class="fas fa-truck-ramp-box"></i> New Transfer</button>';
   html += '<button class="inv-action-btn inv-action-loss" onclick="invShowReportLoss()"><i class="fas fa-triangle-exclamation"></i> Report Loss</button>';
   html += '<button class="inv-action-btn inv-action-adjust" onclick="invShowQuickAdjust()"><i class="fas fa-sliders"></i> Adjust Stock</button>';
+  html += '<button class="inv-action-btn inv-action-request" onclick="invShowRequestOrder()"><i class="fas fa-hand"></i> Request Order</button>';
   html += '</div>';
   html += '</div>';
 
@@ -319,7 +320,8 @@ function invRenderStockList() {
       '<td class="text-right">' + (s.qty_reserved || 0 ? '<span class="inv-res-badge">' + s.qty_reserved + '</span>' : '—') + '</td>' +
       '<td class="text-right' + (avail <= 0 ? ' inv-danger' : lowStock ? ' inv-warning' : '') + '"><strong>' + avail.toLocaleString() + '</strong></td>' +
       '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' +
-      '<td><button class="inv-btn inv-btn-xs" onclick="invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i></button></td>' +
+      '<td><button class="inv-btn inv-btn-xs" onclick="invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i></button>' +
+      '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + escH(s.product_name).replace(/'/g, "\\'") + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i></button></td>' +
       '</tr>';
   });
   html += '</tbody></table></div>';
@@ -342,6 +344,7 @@ function invRenderStockList() {
       '</div>' +
       '<div class="inv-stock-card-actions">' +
       '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i> Adjust</button>' +
+      '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="event.stopPropagation();invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + escH(s.product_name).replace(/'/g, "\\'") + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i> Request</button>' +
       '</div>' +
       '</div>';
   });
@@ -888,6 +891,84 @@ async function invDoAdjust() {
     invCloseModal();
     invRender();
   } catch(e) { invToast('Adjust failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// Request Order modal (sends to purchasing module)
+function invShowRequestOrder(productId, locationId, productName, unitType) {
+  var locOpts = '';
+  invLocations.forEach(function(l) {
+    locOpts += '<option value="' + l.id + '"' + ((locationId && l.id == locationId) || (!locationId && invSelectedLocation == l.id) ? ' selected' : '') + '>' + l.code + ' — ' + l.name + '</option>';
+  });
+
+  var body = '<div class="inv-form-group"><label>Location *</label><select id="invReqLocation" class="inv-select">' + locOpts + '</select></div>';
+
+  if (!productId) {
+    // Generic request — show product picker
+    body += invProductPickerHTML('invReqProduct');
+  } else {
+    body += '<div class="inv-form-group"><label>Product</label><div style="padding:8px;background:#F1F5F9;border-radius:6px;font-weight:600">' + escH(productName || 'Product #' + productId) + '</div>' +
+      '<input type="hidden" id="invReqProductId" value="' + productId + '"><input type="hidden" id="invReqProductName" value="' + escH(productName || '') + '"></div>';
+  }
+
+  body += '<div class="inv-form-row" style="display:flex;gap:8px">' +
+    '<div class="inv-form-group" style="flex:0 0 90px"><label>Qty Needed</label><input id="invReqQty" type="number" class="inv-input" value="1" min="1" inputmode="numeric"></div>' +
+    '<div class="inv-form-group" style="flex:0 0 90px"><label>Unit</label><select id="invReqUnit" class="inv-select">' +
+    ['each','bag','bale','pallet','case','box','roll','ton','lb'].map(function(u) {
+      return '<option value="' + u + '"' + (u === (unitType || 'each') ? ' selected' : '') + '>' + u + '</option>';
+    }).join('') + '</select></div>' +
+    '<div class="inv-form-group"><label>Urgency</label><select id="invReqUrgency" class="inv-select">' +
+    '<option value="normal">Normal</option><option value="low">Low</option><option value="high">High</option><option value="critical">Critical</option>' +
+    '</select></div></div>' +
+    '<div class="inv-form-group"><label>Reason</label><input id="invReqReason" type="text" class="inv-input" placeholder="Why is this needed? e.g. Running low, customer request..."></div>' +
+    '<div class="inv-form-group"><label>Notes</label><textarea id="invReqNotes" class="inv-input" rows="2" placeholder="Additional details..."></textarea></div>';
+
+  var footer = '<button class="inv-btn inv-btn-primary" onclick="invDoSubmitRequest(' + (productId || 0) + ')"><i class="fas fa-paper-plane"></i> Submit Request</button>';
+  invShowModal('<i class="fas fa-hand" style="color:#D97706"></i> Request Order', body, footer);
+}
+
+async function invDoSubmitRequest(preProductId) {
+  var locationId = document.getElementById('invReqLocation').value;
+  if (!locationId) { invToast('Location is required', 'warning'); return; }
+
+  var productId = preProductId || null;
+  var description = '';
+
+  if (!preProductId) {
+    // From product picker
+    var prodSel = document.getElementById('invReqProduct');
+    if (prodSel && prodSel.value) {
+      productId = parseInt(prodSel.value);
+      description = prodSel.options[prodSel.selectedIndex].textContent;
+    }
+  } else {
+    var nameField = document.getElementById('invReqProductName');
+    description = nameField ? nameField.value : '';
+  }
+
+  if (!productId && !description) { invToast('Select a product', 'warning'); return; }
+
+  var qty = parseInt(document.getElementById('invReqQty').value) || 1;
+  var unit = document.getElementById('invReqUnit').value || 'each';
+  var urgency = document.getElementById('invReqUrgency').value || 'normal';
+  var reason = document.getElementById('invReqReason').value || '';
+  var notes = document.getElementById('invReqNotes').value || '';
+
+  try {
+    var resp = await invAPI.post('/api/purchasing/requests', {
+      location_id: parseInt(locationId),
+      urgency: urgency,
+      reason: reason || null,
+      notes: notes || null,
+      items: [{
+        product_id: productId,
+        description: description,
+        qty_requested: qty,
+        unit: unit
+      }]
+    }, { headers: invHeaders() });
+    invToast('Order request ' + resp.data.request_number + ' submitted!');
+    invCloseModal();
+  } catch(e) { invToast('Request failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
 // New Transfer modal

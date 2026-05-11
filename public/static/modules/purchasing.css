@@ -1093,3 +1093,90 @@
   .po-progress-stats { gap: 12px; font-size: 12px; }
   .po-progress-stats strong { font-size: 15px; }
 }
+
+/* ==================== ORDER REQUEST STYLES ==================== */
+
+/* Urgency badges */
+.po-urgency-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.po-urgency-low { background: #F1F5F9; color: #64748B; }
+.po-urgency-normal { background: #DBEAFE; color: #1D4ED8; }
+.po-urgency-high { background: #FEF3C7; color: #B45309; }
+.po-urgency-critical {
+  background: #FEE2E2; color: #DC2626;
+  animation: po-pulse-critical 2s ease-in-out infinite;
+}
+@keyframes po-pulse-critical {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.3); }
+  50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0); }
+}
+
+/* Request status badges */
+.po-req-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.po-req-status-pending { background: #FEF3C7; color: #B45309; }
+.po-req-status-approved { background: #D1FAE5; color: #047857; }
+.po-req-status-rejected { background: #FEE2E2; color: #DC2626; }
+.po-req-status-converted { background: #DBEAFE; color: #1D4ED8; }
+.po-req-status-cancelled { background: #F1F5F9; color: #64748B; }
+
+/* Action buttons for request detail */
+.po-btn-success {
+  background: #059669;
+  color: #fff;
+  border: none;
+}
+.po-btn-success:hover { background: #047857; }
+.po-btn-danger {
+  background: #DC2626;
+  color: #fff;
+  border: none;
+}
+.po-btn-danger:hover { background: #B91C1C; }
+.po-btn-xs {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
+/* Request items in modal */
+.po-req-items-section {
+  border-top: 1px solid #E2E8F0;
+  padding-top: 12px;
+  margin-top: 8px;
+}
+.po-req-item {
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.po-req-item .po-form-row {
+  margin-bottom: 0;
+}
+
+/* Link style for converted PO */
+.po-link {
+  color: #D97706;
+  text-decoration: none;
+  font-weight: 600;
+}
+.po-link:hover { color: #B45309; text-decoration: underline; }
+
+/* Danger text color */
+.po-danger { color: #DC2626; font-weight: 600; }

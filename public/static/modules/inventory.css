@@ -157,6 +157,19 @@
 .inv-action-transfer:hover { border-color: #4F46E5; color: #4F46E5; background: #EEF2FF; }
 .inv-action-loss:hover { border-color: #DC2626; color: #DC2626; background: #FEF2F2; }
 .inv-action-adjust:hover { border-color: #7C3AED; color: #7C3AED; background: #F5F3FF; }
+.inv-action-request:hover { border-color: #D97706; color: #D97706; background: #FFFBEB; }
+
+/* Request button in stock table */
+.inv-btn-request {
+  background: #FFFBEB;
+  color: #D97706;
+  border: 1px solid #FDE68A;
+  margin-left: 4px;
+}
+.inv-btn-request:hover { background: #FEF3C7; border-color: #D97706; }
+
+/* Form row helper */
+.inv-form-row { display: flex; gap: 8px; }
 
 /* ==================== LOCATION CARDS ==================== */
 .inv-loc-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }

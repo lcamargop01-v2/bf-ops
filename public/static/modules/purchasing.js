@@ -11,6 +11,8 @@ var poDashboard = {};
 var poOrders = [];
 var poCurrentOrder = null;
 var poBills = [];
+var poRequests = [];
+var poRequestSummary = {};
 
 // ==================== AUTH BRIDGE ====================
 function poGetToken() {
@@ -87,8 +89,12 @@ async function poRender() {
 
   try {
     if (poPage === 'dashboard') {
-      var resp = await poAPI.get('/api/purchasing/dashboard', { headers: poHeaders() });
-      poDashboard = resp.data;
+      var results = await Promise.all([
+        poAPI.get('/api/purchasing/dashboard', { headers: poHeaders() }),
+        poAPI.get('/api/purchasing/requests/summary', { headers: poHeaders() })
+      ]);
+      poDashboard = results[0].data;
+      poRequestSummary = results[1].data;
       root = document.getElementById('purchasing-app'); if (!root) return;
       root.innerHTML = poRenderNav() + poRenderDashboard();
     } else if (poPage === 'orders') {
@@ -120,6 +126,14 @@ async function poRender() {
       await poLoadSuppliers();
       root = document.getElementById('purchasing-app'); if (!root) return;
       root.innerHTML = poRenderNav() + poRenderSuppliers();
+    } else if (poPage === 'requests') {
+      await poLoadRequests();
+      root = document.getElementById('purchasing-app'); if (!root) return;
+      root.innerHTML = poRenderNav() + poRenderRequests();
+    } else if (poPage === 'request_detail') {
+      var resp = await poAPI.get('/api/purchasing/requests/' + poCurrentOrder, { headers: poHeaders() });
+      root = document.getElementById('purchasing-app'); if (!root) return;
+      root.innerHTML = poRenderNav() + poRenderRequestDetail(resp.data);
     }
   } catch(err) {
     console.error('[Purchasing] render error:', err);
@@ -144,6 +158,7 @@ function poRenderNav() {
   var pages = [
     { id: 'dashboard', icon: 'fa-chart-line', label: 'Dashboard' },
     { id: 'orders', icon: 'fa-file-invoice', label: 'Orders' },
+    { id: 'requests', icon: 'fa-hand', label: 'Requests' },
     { id: 'arriving', icon: 'fa-truck-moving', label: 'Arriving' },
     { id: 'bills', icon: 'fa-file-invoice-dollar', label: 'Bills' },
     { id: 'suppliers', icon: 'fa-building', label: 'Suppliers' }
@@ -189,6 +204,7 @@ function poRenderDashboard() {
     { icon: 'fa-exclamation-triangle', label: 'Overdue', value: d.overdue_count || 0, color: d.overdue_count > 0 ? '#DC2626' : '#6B7280' },
     { icon: 'fa-check-double', label: 'Received', value: totals.received || 0, color: '#059669' },
     { icon: 'fa-triangle-exclamation', label: 'Delayed', value: totals.delayed || 0, color: totals.delayed > 0 ? '#DC2626' : '#6B7280' },
+    { icon: 'fa-hand', label: 'Pending Requests', value: poRequestSummary.pending_requests ? poRequestSummary.pending_requests.length : 0, color: (poRequestSummary.pending_requests && poRequestSummary.pending_requests.length > 0) ? '#E11D48' : '#6B7280', click: "poNav('requests')" },
     { icon: 'fa-file-invoice-dollar', label: 'Pending Bills', value: d.pending_bills ? d.pending_bills.count : 0, color: '#7C3AED', click: "poNav('bills')" },
     { icon: 'fa-dollar-sign', label: 'Bills Total', value: '$' + ((d.pending_bills ? d.pending_bills.total : 0) || 0).toLocaleString(undefined, {minimumFractionDigits:2}), color: '#7C3AED' }
   ];
@@ -238,6 +254,27 @@ function poRenderDashboard() {
         '</div>';
     });
     html += '</div></div>';
+  }
+
+  // Pending Requests section
+  var pendingReqs = poRequestSummary.pending_requests || [];
+  if (pendingReqs.length > 0) {
+    html += '<div class="po-section">';
+    html += '<div class="po-section-header"><h3><i class="fas fa-hand" style="color:#E11D48"></i> Pending Order Requests</h3>';
+    html += '<button class="po-btn po-btn-sm po-btn-outline" onclick="poNav(\'requests\')">View All <i class="fas fa-arrow-right"></i></button></div>';
+    html += '<div class="po-table-wrap"><table class="po-table"><thead><tr><th>Request #</th><th>Urgency</th><th>Type</th><th>Location</th><th>Items</th><th>Requested By</th><th>Date</th></tr></thead><tbody>';
+    pendingReqs.forEach(function(r) {
+      html += '<tr class="po-clickable" onclick="poNav(\'request_detail\',' + r.id + ')">' +
+        '<td><strong>' + poEsc(r.request_number) + '</strong></td>' +
+        '<td><span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span></td>' +
+        '<td>' + (r.order_type ? '<span class="po-type-badge po-type-' + r.order_type + '">' + poTypeLabel(r.order_type) + '</span>' : '<span class="po-muted">—</span>') + '</td>' +
+        '<td><span class="po-loc-badge">' + poEsc(r.location_code) + '</span></td>' +
+        '<td>' + (r.item_count || 0) + '</td>' +
+        '<td>' + poEsc(r.requested_by_name || '—') + '</td>' +
+        '<td>' + poFormatDateTime(r.created_at) + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table></div></div>';
   }
 
   // Active POs table
@@ -1242,6 +1279,351 @@ function poCompressImage(file, maxWidth, quality) {
   });
 }
 
+// ==================== ORDER REQUESTS ====================
+var poRequestItems = [{ product_id: '', description: '', qty_requested: 1, unit: 'each', notes: '' }];
+
+async function poLoadRequests() {
+  var url = '/api/purchasing/requests?';
+  var statusFilter = document.getElementById('poReqStatusFilter');
+  var urgencyFilter = document.getElementById('poReqUrgencyFilter');
+  if (statusFilter && statusFilter.value) url += 'status=' + statusFilter.value + '&';
+  if (urgencyFilter && urgencyFilter.value) url += 'urgency=' + urgencyFilter.value + '&';
+  if (poSelectedLocation) url += 'location_id=' + poSelectedLocation + '&';
+  var resp = await poAPI.get(url, { headers: poHeaders() });
+  poRequests = resp.data.requests || [];
+}
+
+async function poLoadAndRenderRequests() {
+  await poLoadRequests();
+  var root = document.getElementById('purchasing-app');
+  if (root) root.innerHTML = poRenderNav() + poRenderRequests();
+}
+
+function poRenderRequests() {
+  var html = '<div class="po-orders-page">';
+
+  // Toolbar
+  html += '<div class="po-toolbar">';
+  html += '<select id="poReqStatusFilter" onchange="poLoadAndRenderRequests()" class="po-select">' +
+    '<option value="">All Statuses</option>' +
+    ['pending','approved','rejected','converted','cancelled'].map(function(s) {
+      return '<option value="' + s + '">' + poReqStatusLabel(s) + '</option>';
+    }).join('') + '</select>';
+  html += '<select id="poReqUrgencyFilter" onchange="poLoadAndRenderRequests()" class="po-select">' +
+    '<option value="">All Urgency</option>' +
+    '<option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option>' +
+    '</select>';
+  html += '<button class="po-btn po-btn-primary" onclick="poShowNewRequest()"><i class="fas fa-plus"></i> New Request</button>';
+  html += '</div>';
+
+  html += '<div class="po-stock-count">' + poRequests.length + ' request' + (poRequests.length !== 1 ? 's' : '') + '</div>';
+
+  if (poRequests.length === 0) {
+    html += '<div class="po-empty"><i class="fas fa-hand" style="font-size:48px;color:#CBD5E1"></i>';
+    html += '<h3>No Requests Found</h3><p>Order requests from warehouse or inventory will appear here.</p></div>';
+  } else {
+    // Desktop table
+    html += '<div class="po-table-wrap po-desktop-only"><table class="po-table po-table-hover">';
+    html += '<thead><tr><th>Request #</th><th>Urgency</th><th>Type</th><th>Location</th><th>Items</th><th>Requested By</th><th>Status</th><th>Date</th></tr></thead><tbody>';
+    poRequests.forEach(function(r) {
+      html += '<tr class="po-clickable" onclick="poNav(\'request_detail\',' + r.id + ')">' +
+        '<td><strong>' + poEsc(r.request_number) + '</strong></td>' +
+        '<td><span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span></td>' +
+        '<td>' + (r.order_type ? '<span class="po-type-badge po-type-' + r.order_type + '">' + poTypeLabel(r.order_type) + '</span>' : '—') + '</td>' +
+        '<td><span class="po-loc-badge">' + poEsc(r.location_code) + '</span></td>' +
+        '<td>' + (r.item_count || 0) + '</td>' +
+        '<td>' + poEsc(r.requested_by_name || '—') + '</td>' +
+        '<td><span class="po-req-status-badge po-req-status-' + r.status + '">' + poReqStatusLabel(r.status) + '</span></td>' +
+        '<td>' + poFormatDateTime(r.created_at) + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table></div>';
+
+    // Mobile cards
+    html += '<div class="po-mobile-only po-order-cards">';
+    poRequests.forEach(function(r) {
+      html += '<div class="po-order-card" onclick="poNav(\'request_detail\',' + r.id + ')">' +
+        '<div class="po-order-card-top">' +
+        '<div><strong>' + poEsc(r.request_number) + '</strong><br><span class="po-muted">' + poEsc(r.requested_by_name || 'Unknown') + '</span></div>' +
+        '<span class="po-req-status-badge po-req-status-' + r.status + '">' + poReqStatusLabel(r.status) + '</span>' +
+        '</div>' +
+        '<div class="po-order-card-meta">' +
+        '<span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span>' +
+        (r.order_type ? '<span class="po-type-badge po-type-' + r.order_type + '">' + poTypeLabel(r.order_type) + '</span>' : '') +
+        '<span class="po-loc-badge">' + poEsc(r.location_code) + '</span>' +
+        '</div>' +
+        '<div class="po-order-card-nums">' +
+        '<div><span class="po-muted">Items</span><strong>' + (r.item_count || 0) + '</strong></div>' +
+        '<div><span class="po-muted">Requested</span><strong>' + poFormatDateTime(r.created_at) + '</strong></div>' +
+        '</div>' +
+        (r.reason ? '<div class="po-muted" style="padding:4px 12px 8px;font-size:13px"><i class="fas fa-comment"></i> ' + poEsc(r.reason) + '</div>' : '') +
+        '</div>';
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function poRenderRequestDetail(data) {
+  var r = data.request;
+  var items = data.items || [];
+
+  var html = '<div class="po-detail-page">';
+  html += '<div class="po-section-header"><h2><i class="fas fa-hand"></i> ' + poEsc(r.request_number) + '</h2>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button class="po-btn po-btn-outline" onclick="poNav(\'requests\')"><i class="fas fa-arrow-left"></i> Back</button>';
+  if (r.status === 'pending') {
+    html += '<button class="po-btn po-btn-success" onclick="poReviewRequest(' + r.id + ',\'approved\')"><i class="fas fa-check"></i> Approve</button>';
+    html += '<button class="po-btn po-btn-danger" onclick="poReviewRequest(' + r.id + ',\'rejected\')"><i class="fas fa-times"></i> Reject</button>';
+  }
+  if (r.status === 'approved') {
+    html += '<button class="po-btn po-btn-primary" onclick="poShowConvertRequest(' + r.id + ')"><i class="fas fa-file-invoice"></i> Convert to PO</button>';
+  }
+  if (r.status === 'pending' || r.status === 'approved') {
+    html += '<button class="po-btn po-btn-outline" onclick="poCancelRequest(' + r.id + ')"><i class="fas fa-ban"></i> Cancel</button>';
+  }
+  html += '</div></div>';
+
+  // Info grid
+  html += '<div class="po-detail-grid">';
+  html += '<div class="po-detail-card">';
+  html += '<h4>Request Info</h4>';
+  html += '<div class="po-detail-row"><span>Status</span><span class="po-req-status-badge po-req-status-' + r.status + '">' + poReqStatusLabel(r.status) + '</span></div>';
+  html += '<div class="po-detail-row"><span>Urgency</span><span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span></div>';
+  html += '<div class="po-detail-row"><span>Type</span><span>' + (r.order_type ? poTypeLabel(r.order_type) : '—') + '</span></div>';
+  html += '<div class="po-detail-row"><span>Location</span><span><span class="po-loc-badge">' + poEsc(r.location_code) + '</span> ' + poEsc(r.location_name) + '</span></div>';
+  html += '<div class="po-detail-row"><span>Requested By</span><span>' + poEsc(r.requested_by_name || '—') + '</span></div>';
+  html += '<div class="po-detail-row"><span>Date</span><span>' + poFormatDateTime(r.created_at) + '</span></div>';
+  if (r.reason) html += '<div class="po-detail-row"><span>Reason</span><span>' + poEsc(r.reason) + '</span></div>';
+  if (r.notes) html += '<div class="po-detail-row"><span>Notes</span><span>' + poEsc(r.notes) + '</span></div>';
+  html += '</div>';
+
+  // Review info
+  if (r.reviewed_by_name) {
+    html += '<div class="po-detail-card">';
+    html += '<h4>Review</h4>';
+    html += '<div class="po-detail-row"><span>Reviewed By</span><span>' + poEsc(r.reviewed_by_name) + '</span></div>';
+    html += '<div class="po-detail-row"><span>Reviewed At</span><span>' + poFormatDateTime(r.reviewed_at) + '</span></div>';
+    if (r.review_notes) html += '<div class="po-detail-row"><span>Review Notes</span><span>' + poEsc(r.review_notes) + '</span></div>';
+    if (r.converted_po_id) html += '<div class="po-detail-row"><span>Converted PO</span><span><a href="javascript:void(0)" onclick="poNav(\'detail\',' + r.converted_po_id + ')" class="po-link">View PO →</a></span></div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Items table
+  html += '<div class="po-section">';
+  html += '<h3 class="po-section-title"><i class="fas fa-list"></i> Requested Items (' + items.length + ')</h3>';
+  html += '<div class="po-table-wrap"><table class="po-table">';
+  html += '<thead><tr><th>Product</th><th>Description</th><th class="text-right">Qty Requested</th><th>Unit</th><th class="text-right">Current Stock</th><th>Notes</th></tr></thead><tbody>';
+  items.forEach(function(item) {
+    html += '<tr>' +
+      '<td>' + (item.product_name ? '<strong>' + poEsc(item.product_name) + '</strong>' + (item.sku ? '<br><span class="po-muted">' + poEsc(item.sku) + '</span>' : '') : '<span class="po-muted">—</span>') + '</td>' +
+      '<td>' + poEsc(item.description || '—') + '</td>' +
+      '<td class="text-right"><strong>' + (item.qty_requested || 0) + '</strong></td>' +
+      '<td>' + poEsc(item.unit || 'each') + '</td>' +
+      '<td class="text-right">' + (item.current_stock !== null ? '<span class="' + (item.current_stock <= 0 ? 'po-danger' : '') + '">' + item.current_stock + '</span>' : '—') + '</td>' +
+      '<td>' + poEsc(item.notes || '—') + '</td>' +
+      '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  html += '</div>';
+  return html;
+}
+
+// Approve/reject a request
+async function poReviewRequest(requestId, action) {
+  var actionLabel = action === 'approved' ? 'Approve' : 'Reject';
+  var notes = prompt(actionLabel + ' this request? Enter optional notes:');
+  if (notes === null) return; // cancelled
+
+  try {
+    await poAPI.post('/api/purchasing/requests/' + requestId + '/review', {
+      action: action,
+      review_notes: notes || null
+    }, { headers: poHeaders() });
+    poToast('Request ' + (action === 'approved' ? 'approved' : 'rejected'));
+    poNav('request_detail', requestId);
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// Cancel a request
+async function poCancelRequest(requestId) {
+  if (!confirm('Cancel this request?')) return;
+  try {
+    await poAPI.post('/api/purchasing/requests/' + requestId + '/cancel', {}, { headers: poHeaders() });
+    poToast('Request cancelled');
+    poNav('requests');
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// Convert request to PO modal
+function poShowConvertRequest(requestId) {
+  var supplierOpts = '<option value="">— No Supplier —</option>';
+  poSuppliers.forEach(function(s) {
+    supplierOpts += '<option value="' + s.id + '">' + poEsc(s.name) + (s.code ? ' (' + poEsc(s.code) + ')' : '') + '</option>';
+  });
+
+  var body = '<p style="margin-bottom:12px;color:#64748B">This will create a new Purchase Order from this request and mark it as converted.</p>' +
+    '<div class="po-form-group"><label>Supplier</label><select id="poConvertSupplier" class="po-select">' + supplierOpts + '</select></div>' +
+    '<div class="po-form-group"><label>Expected Arrival</label><input id="poConvertExpected" type="date" class="po-input"></div>';
+
+  var footer = '<button class="po-btn po-btn-primary" onclick="poDoConvertRequest(' + requestId + ')"><i class="fas fa-file-invoice"></i> Create Purchase Order</button>';
+  poShowModal('<i class="fas fa-file-invoice"></i> Convert to Purchase Order', body, footer);
+}
+
+async function poDoConvertRequest(requestId) {
+  var supplierId = document.getElementById('poConvertSupplier').value || null;
+  var expectedDate = document.getElementById('poConvertExpected').value || null;
+
+  try {
+    var resp = await poAPI.post('/api/purchasing/requests/' + requestId + '/convert', {
+      supplier_id: supplierId ? parseInt(supplierId) : null,
+      expected_date: expectedDate
+    }, { headers: poHeaders() });
+    poToast('PO ' + resp.data.po_number + ' created from request');
+    poCloseModal();
+    poNav('detail', resp.data.po_id);
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// New Request modal (also callable from purchasing module itself)
+function poShowNewRequest(preselectedProduct) {
+  poRequestItems = [{ product_id: '', description: '', qty_requested: 1, unit: 'each', notes: '' }];
+  if (preselectedProduct) {
+    poRequestItems[0] = {
+      product_id: preselectedProduct.id || '',
+      description: preselectedProduct.name || '',
+      qty_requested: preselectedProduct.qty || 1,
+      unit: preselectedProduct.unit || 'each',
+      notes: ''
+    };
+  }
+
+  var locOpts = '';
+  poLocations.forEach(function(l) {
+    locOpts += '<option value="' + l.id + '"' + (poSelectedLocation == l.id ? ' selected' : '') + '>' + poEsc(l.code) + ' — ' + poEsc(l.name) + '</option>';
+  });
+
+  var body = '<div class="po-form-group"><label>Location *</label><select id="poReqLocation" class="po-select">' + locOpts + '</select></div>' +
+    '<div class="po-form-row">' +
+    '<div class="po-form-group"><label>Order Type</label><select id="poReqType" class="po-select">' +
+    '<option value="">— Auto —</option><option value="hay_shavings">Hay & Shavings</option><option value="feed">Feed</option><option value="shelf_goods">Shelf Goods</option>' +
+    '</select></div>' +
+    '<div class="po-form-group"><label>Urgency</label><select id="poReqUrgency" class="po-select">' +
+    '<option value="normal">Normal</option><option value="low">Low</option><option value="high">High</option><option value="critical">Critical</option>' +
+    '</select></div>' +
+    '</div>' +
+    '<div class="po-form-group"><label>Reason</label><input id="poReqReason" type="text" class="po-input" placeholder="Why is this needed? e.g. Running low, customer order..."></div>' +
+    '<div class="po-form-group"><label>Notes</label><textarea id="poReqNotes" class="po-input" rows="2" placeholder="Additional details..."></textarea></div>' +
+    '<div class="po-req-items-section">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><label style="font-weight:600">Items *</label>' +
+    '<button class="po-btn po-btn-xs po-btn-outline" onclick="poAddReqItem()"><i class="fas fa-plus"></i> Add Item</button></div>' +
+    '<div id="poReqItemsList">' + poRenderReqItems() + '</div>' +
+    '</div>';
+
+  var footer = '<button class="po-btn po-btn-primary" onclick="poDoSubmitRequest()"><i class="fas fa-paper-plane"></i> Submit Request</button>';
+  poShowModal('<i class="fas fa-hand"></i> New Order Request', body, footer);
+}
+
+function poRenderReqItems() {
+  var html = '';
+  poRequestItems.forEach(function(item, idx) {
+    html += '<div class="po-req-item" data-idx="' + idx + '">' +
+      '<div class="po-form-row" style="gap:6px;align-items:flex-end">' +
+      '<div class="po-form-group" style="flex:2"><label>Product / Description</label>' +
+      '<input type="text" class="po-input" placeholder="Search or type..." value="' + poEsc(item.description) + '" oninput="poReqSearchProduct(this.value,' + idx + ')" id="poReqDesc_' + idx + '">' +
+      '<select class="po-select" id="poReqProd_' + idx + '" onchange="poReqSelectProduct(' + idx + ')" style="margin-top:4px"><option value="">— pick from catalog —</option></select></div>' +
+      '<div class="po-form-group" style="flex:0 0 70px"><label>Qty</label><input type="number" class="po-input" value="' + (item.qty_requested || 1) + '" min="1" id="poReqQty_' + idx + '" inputmode="numeric"></div>' +
+      '<div class="po-form-group" style="flex:0 0 80px"><label>Unit</label><select class="po-select" id="poReqUnit_' + idx + '">' +
+      ['each','bag','bale','pallet','case','box','roll','ton','lb'].map(function(u) {
+        return '<option value="' + u + '"' + (item.unit === u ? ' selected' : '') + '>' + u + '</option>';
+      }).join('') + '</select></div>' +
+      (poRequestItems.length > 1 ? '<button class="po-btn po-btn-xs po-btn-danger" style="margin-bottom:4px" onclick="poRemoveReqItem(' + idx + ')"><i class="fas fa-trash"></i></button>' : '') +
+      '</div></div>';
+  });
+  return html;
+}
+
+function poAddReqItem() {
+  poRequestItems.push({ product_id: '', description: '', qty_requested: 1, unit: 'each', notes: '' });
+  var list = document.getElementById('poReqItemsList');
+  if (list) list.innerHTML = poRenderReqItems();
+}
+
+function poRemoveReqItem(idx) {
+  poRequestItems.splice(idx, 1);
+  var list = document.getElementById('poReqItemsList');
+  if (list) list.innerHTML = poRenderReqItems();
+}
+
+async function poReqSearchProduct(term, idx) {
+  if (term.length < 2) return;
+  try {
+    var resp = await poAPI.get('/api/purchasing/products?search=' + encodeURIComponent(term), { headers: poHeaders() });
+    var sel = document.getElementById('poReqProd_' + idx);
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— pick from catalog —</option>';
+    (resp.data.products || []).forEach(function(p) {
+      sel.innerHTML += '<option value="' + p.id + '" data-name="' + poEsc(p.name) + '" data-unit="' + (p.unit_type || 'each') + '">' + poEsc(p.name) + ' (' + poEsc(p.sku || 'no SKU') + ')</option>';
+    });
+  } catch(e) {}
+}
+
+function poReqSelectProduct(idx) {
+  var sel = document.getElementById('poReqProd_' + idx);
+  var desc = document.getElementById('poReqDesc_' + idx);
+  var unitSel = document.getElementById('poReqUnit_' + idx);
+  if (!sel || !sel.value) return;
+  var opt = sel.options[sel.selectedIndex];
+  if (desc) desc.value = opt.dataset.name || opt.textContent;
+  if (unitSel && opt.dataset.unit) unitSel.value = opt.dataset.unit;
+  poRequestItems[idx].product_id = sel.value;
+  poRequestItems[idx].description = opt.dataset.name || opt.textContent;
+}
+
+async function poDoSubmitRequest() {
+  var locationId = document.getElementById('poReqLocation').value;
+  if (!locationId) { poToast('Location is required', 'warning'); return; }
+
+  // Collect items
+  var items = [];
+  poRequestItems.forEach(function(item, idx) {
+    var desc = document.getElementById('poReqDesc_' + idx);
+    var prodSel = document.getElementById('poReqProd_' + idx);
+    var qty = document.getElementById('poReqQty_' + idx);
+    var unit = document.getElementById('poReqUnit_' + idx);
+    var description = desc ? desc.value : item.description;
+    var productId = (prodSel && prodSel.value) ? parseInt(prodSel.value) : (item.product_id ? parseInt(item.product_id) : null);
+    if (description || productId) {
+      items.push({
+        product_id: productId,
+        description: description,
+        qty_requested: parseInt(qty ? qty.value : item.qty_requested) || 1,
+        unit: unit ? unit.value : item.unit
+      });
+    }
+  });
+
+  if (items.length === 0) { poToast('Add at least one item', 'warning'); return; }
+
+  try {
+    var resp = await poAPI.post('/api/purchasing/requests', {
+      location_id: parseInt(locationId),
+      order_type: document.getElementById('poReqType').value || null,
+      urgency: document.getElementById('poReqUrgency').value || 'normal',
+      reason: document.getElementById('poReqReason').value || null,
+      notes: document.getElementById('poReqNotes').value || null,
+      items: items
+    }, { headers: poHeaders() });
+    poToast('Request ' + resp.data.request_number + ' submitted');
+    poCloseModal();
+    poNav('requests');
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
 // ==================== HELPERS ====================
 function poEsc(s) {
   if (!s) return '';
@@ -1266,4 +1648,14 @@ function poTypeLabel(type) {
 function poStatusLabel(status) {
   var labels = { draft: 'Draft', ordered: 'Ordered', in_transit: 'In Transit', delayed: 'Delayed', partial: 'Partial', received: 'Received', cancelled: 'Cancelled', claim: 'Claim' };
   return labels[status] || status || '—';
+}
+
+function poReqStatusLabel(status) {
+  var labels = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected', converted: 'Converted', cancelled: 'Cancelled' };
+  return labels[status] || status || '—';
+}
+
+function poUrgencyLabel(urgency) {
+  var labels = { low: 'Low', normal: 'Normal', high: 'High', critical: 'Critical' };
+  return labels[urgency] || urgency || 'Normal';
 }
