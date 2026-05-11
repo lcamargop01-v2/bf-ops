@@ -38,9 +38,8 @@ ALTER TABLE customers ADD COLUMN sponsor_discount REAL DEFAULT 0;
 ALTER TABLE customers ADD COLUMN priority_rank INTEGER DEFAULT 0;
 ALTER TABLE customers ADD COLUMN location_id INTEGER REFERENCES locations(id);
 
--- Add truck_requirement and driver_restrictions to addresses (referenced by logistics queries)
-ALTER TABLE addresses ADD COLUMN truck_requirement TEXT;
-ALTER TABLE addresses ADD COLUMN driver_restrictions TEXT;
+-- NOTE: truck_requirement and driver_restrictions already exist on addresses table
+-- (added during logistics development). No ALTER TABLE needed for those columns.
 
 -- Add tax_rate field to products
 ALTER TABLE products ADD COLUMN tax_rate REAL DEFAULT 0;

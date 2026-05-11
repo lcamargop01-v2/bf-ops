@@ -61,9 +61,9 @@ function renderLogin() {
         <div class="shell-quick-logins">
           <p>Quick access</p>
           <div class="grid">
-            <button class="shell-quick-btn" onclick="shellQuickLogin('admin@britishfeed.com','admin123')"><i class="fas fa-crown"></i> Admin</button>
-            <button class="shell-quick-btn" onclick="shellQuickLogin('dispatch@britishfeed.com','dispatch123')"><i class="fas fa-headset"></i> Dispatch</button>
-            <button class="shell-quick-btn" onclick="shellQuickLogin('warehouse@britishfeed.com','warehouse123')"><i class="fas fa-warehouse"></i> Warehouse</button>
+            <button class="shell-quick-btn" onclick="shellQuickLogin('laura@britishfeed.com','admin123')"><i class="fas fa-crown"></i> Admin</button>
+            <button class="shell-quick-btn" onclick="shellQuickLogin('baylee@britishfeed.com','dispatch123')"><i class="fas fa-headset"></i> Dispatch</button>
+            <button class="shell-quick-btn" onclick="shellQuickLogin('taj@britishfeed.com','warehouse123')"><i class="fas fa-warehouse"></i> Warehouse</button>
             <button class="shell-quick-btn" onclick="shellQuickLogin('james@britishfeed.com','driver123')"><i class="fas fa-truck"></i> Driver</button>
           </div>
         </div>
