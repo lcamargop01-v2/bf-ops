@@ -525,8 +525,8 @@ async function poSearchItemProduct(term, idx) {
       if (!sel) return;
       sel.innerHTML = '<option value="">— or pick from catalog —</option>';
       (resp.data.products || []).forEach(function(p) {
-        sel.innerHTML += '<option value="' + p.id + '" data-name="' + poEsc(p.name) + '" data-price="' + (p.price || 0) + '" data-unit="' + poEsc(p.unit_type || 'each') + '">' +
-          poEsc(p.name) + ' (' + poEsc(p.sku || 'no SKU') + ') - $' + (p.price || 0) + '</option>';
+        sel.innerHTML += '<option value="' + p.id + '" data-name="' + poEsc(p.name) + '" data-cost="' + (p.cost || 0) + '" data-price="' + (p.price || 0) + '" data-unit="' + poEsc(p.unit_type || 'each') + '">' +
+          poEsc(p.name) + ' (' + poEsc(p.sku || 'no SKU') + ') - Cost: $' + (p.cost || 0).toFixed(2) + ' / Sell: $' + (p.price || 0) + '</option>';
       });
     } catch(e) {}
   }, 300);
@@ -540,7 +540,7 @@ function poSelectItemProduct(idx) {
   var costInput = document.getElementById('poItemCost_' + idx);
   var unitInput = document.getElementById('poItemUnit_' + idx);
   if (descInput && opt.dataset.name) descInput.value = opt.dataset.name;
-  if (costInput && opt.dataset.price) costInput.value = opt.dataset.price;
+  if (costInput) costInput.value = opt.dataset.cost || opt.dataset.price || '';
   if (unitInput && opt.dataset.unit) unitInput.value = opt.dataset.unit;
   poNewItems[idx].product_id = sel.value;
 }

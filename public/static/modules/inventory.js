@@ -10,6 +10,10 @@ var invSelectedLocation = null; // null = all locations
 var invProducts = [];
 var invStockData = [];
 var invSummary = {};
+var invCategoryList = [];
+var invProductsPageData = [];
+var invProductsTotal = 0;
+var invProductsOffset = 0;
 
 // ==================== AUTH BRIDGE ====================
 function invGetToken() {
@@ -27,8 +31,8 @@ window._inventoryInit = function() {
     try { invUser = JSON.parse(savedUser); } catch(e) { invUser = null; }
   }
   invPage = 'dashboard';
-  invLoadLocations().then(function() {
-    console.log('[Inventory] locations loaded:', invLocations.length, '— rendering');
+  Promise.all([invLoadLocations(), invLoadCategories()]).then(function() {
+    console.log('[Inventory] locations loaded:', invLocations.length, ', categories:', invCategoryList.length, '— rendering');
     invRender();
   }).catch(function(e) {
     console.error('[Inventory] init failed:', e);
@@ -50,6 +54,15 @@ async function invLoadLocations() {
     var resp = await invAPI.get('/api/locations', { headers: invHeaders() });
     invLocations = resp.data.locations || [];
   } catch(e) { invLocations = []; }
+}
+
+async function invLoadCategories() {
+  try {
+    var resp = await invAPI.get('/api/inventory/products/categories', { headers: invHeaders() });
+    invCategoryList = resp.data.categories || [];
+  } catch(e) {
+    invCategoryList = ['horse','cattle','poultry','swine','goat','supplement','hay','shavings','fly_spray','fly_control','electrolyte','gut_health','psyllium','oil','grooming','shampoo','liniment','clippers','leather','barn','treats','other'];
+  }
 }
 
 async function invLoadDashboard() {
@@ -114,6 +127,11 @@ async function invRender() {
   } else if (invPage === 'stock') {
     await invLoadStock();
     root.innerHTML = invRenderNav() + invRenderStockList();
+  } else if (invPage === 'products') {
+    root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
+    var html = await invRenderProductsPage();
+    root = document.getElementById('inventory-app'); if (!root) return;
+    root.innerHTML = invRenderNav() + html;
   } else if (invPage === 'count') {
     await invLoadStock();
     root.innerHTML = invRenderNav() + invRenderQuickCount();
@@ -154,6 +172,7 @@ function invRenderNav() {
   var pages = [
     { id: 'dashboard', icon: 'fa-chart-line', label: 'Dashboard' },
     { id: 'stock', icon: 'fa-boxes-stacked', label: 'Stock' },
+    { id: 'products', icon: 'fa-tags', label: 'Products' },
     { id: 'count', icon: 'fa-calculator', label: 'Count' },
     { id: 'transfers', icon: 'fa-truck-ramp-box', label: 'Transfers' },
     { id: 'batches', icon: 'fa-layer-group', label: 'Batches' },
@@ -293,7 +312,7 @@ function invRenderStockList() {
   html += '<div class="inv-toolbar">';
   html += '<div class="inv-search-box"><i class="fas fa-search"></i><input id="invSearchInput" type="text" placeholder="Search products..." oninput="invDebounceSearch()"></div>';
   html += '<select id="invCategoryFilter" onchange="invRender()" class="inv-select"><option value="">All Categories</option>';
-  ['horse','cattle','poultry','swine','goat','supplement','hay','shavings','fly_spray','fly_control','electrolyte','gut_health','psyllium','oil','grooming','shampoo','liniment','clippers','leather','barn','treats','other'].forEach(function(c) {
+  (invCategoryList || []).forEach(function(c) {
     var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
     html += '<option value="' + c + '">' + label + '</option>';
   });
@@ -305,7 +324,7 @@ function invRenderStockList() {
 
   // Stock table (desktop) / cards (mobile)
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
-  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Reserved</th><th class="text-right">Available</th><th class="text-right">Value</th><th></th></tr></thead><tbody>';
+  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th><th class="text-right">Sell</th><th class="text-right">Cost</th><th class="text-right">Value</th><th></th></tr></thead><tbody>';
 
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
@@ -317,9 +336,10 @@ function invRenderStockList() {
       '<td><span class="inv-loc-badge">' + escH(s.location_code) + '</span></td>' +
       '<td class="text-right"><strong>' + (s.qty_on_hand || 0).toLocaleString() + '</strong></td>' +
       '<td class="text-right">' + (s.qty_on_hold || 0 ? '<span class="inv-hold-badge">' + s.qty_on_hold + '</span>' : '—') + '</td>' +
-      '<td class="text-right">' + (s.qty_reserved || 0 ? '<span class="inv-res-badge">' + s.qty_reserved + '</span>' : '—') + '</td>' +
       '<td class="text-right' + (avail <= 0 ? ' inv-danger' : lowStock ? ' inv-warning' : '') + '"><strong>' + avail.toLocaleString() + '</strong></td>' +
-      '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' +
+      '<td class="text-right">$' + (s.price || 0).toFixed(2) + '</td>' +
+      '<td class="text-right inv-muted">$' + (s.cost || 0).toFixed(2) + '</td>' +
+      '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' +
       '<td><button class="inv-btn inv-btn-xs" onclick="invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i></button>' +
       '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + escH(s.product_name).replace(/'/g, "\\'") + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i></button></td>' +
       '</tr>';
@@ -338,9 +358,9 @@ function invRenderStockList() {
       '</div>' +
       '<div class="inv-stock-card-nums">' +
       '<div><span class="inv-muted">On Hand</span><strong>' + (s.qty_on_hand || 0) + '</strong></div>' +
-      '<div><span class="inv-muted">Hold</span><span>' + (s.qty_on_hold || 0) + '</span></div>' +
-      '<div><span class="inv-muted">Reserved</span><span>' + (s.qty_reserved || 0) + '</span></div>' +
       '<div><span class="inv-muted">Available</span><strong class="' + (avail <= 0 ? 'inv-danger' : '') + '">' + avail + '</strong></div>' +
+      '<div><span class="inv-muted">Sell</span><span>$' + (s.price || 0).toFixed(2) + '</span></div>' +
+      '<div><span class="inv-muted">Cost</span><span>$' + (s.cost || 0).toFixed(2) + '</span></div>' +
       '</div>' +
       '<div class="inv-stock-card-actions">' +
       '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i> Adjust</button>' +
@@ -1429,11 +1449,27 @@ async function invShowProductDetail(productId) {
     var holds = resp.data.holds || [];
     var reservations = resp.data.reservations || [];
 
-    var pResp = await invAPI.get('/api/inventory/products?search=', { headers: invHeaders() });
-    var product = (pResp.data.products || []).find(function(p) { return p.id === productId; });
+    var pResp = await invAPI.get('/api/inventory/products/' + productId, { headers: invHeaders() });
+    var product = pResp.data.product || null;
     var pName = product ? product.name : 'Product #' + productId;
 
-    var body = '<h4>Stock by Location</h4>';
+    // Product info card
+    var body = '';
+    if (product) {
+      var margin = product.price && product.cost ? (((product.price - product.cost) / product.price) * 100).toFixed(1) : '—';
+      body += '<div class="inv-product-info-card">';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">SKU</span><strong>' + escH(product.sku || '—') + '</strong></div>';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">Category</span><span class="inv-cat-badge inv-cat-' + (product.category || 'other') + '">' + escH(product.category || 'other') + '</span></div>';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">Unit</span><span>' + escH(product.unit_type || 'each') + '</span></div>';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">Sell Price</span><strong style="color:#059669">$' + (product.price || 0).toFixed(2) + '</strong></div>';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">Cost</span><strong style="color:#DC2626">$' + (product.cost || 0).toFixed(2) + '</strong></div>';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">Margin</span><span>' + margin + '%</span></div>';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">Tax Rate</span><span>' + ((product.tax_rate || 0) * 100).toFixed(1) + '%</span></div>';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">Status</span><span class="inv-cat-badge ' + (product.active ? 'inv-cat-supplement' : 'inv-cat-other') + '">' + (product.active ? 'Active' : 'Inactive') + '</span></div>';
+      body += '</div>';
+    }
+
+    body += '<h4 style="margin-top:16px">Stock by Location</h4>';
     if (stock.length === 0) {
       body += '<p class="inv-muted">No stock records for this product.</p>';
     } else {
@@ -1475,7 +1511,8 @@ async function invShowProductDetail(productId) {
       });
     }
 
-    invShowModal('<i class="fas fa-box"></i> ' + escH(pName), body, '');
+    var footer = '<button class="inv-btn inv-btn-primary" onclick="invCloseModal();invShowEditProduct(' + productId + ')"><i class="fas fa-pen"></i> Edit Product</button>';
+    invShowModal('<i class="fas fa-box"></i> ' + escH(pName), body, footer);
 
   } catch(e) { invToast('Failed to load product detail', 'error'); }
 }
@@ -1492,12 +1529,12 @@ async function invInitStock(locationId) {
 
 // ==================== EXPORT ====================
 function invExportStock() {
-  var csv = 'Product,SKU,Category,Location,On Hand,On Hold,Reserved,Available,Unit Price,Value\n';
+  var csv = 'Product,SKU,Category,Location,On Hand,On Hold,Reserved,Available,Sell Price,Cost,Value\n';
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
     csv += '"' + (s.product_name || '') + '","' + (s.sku || '') + '","' + (s.category || '') + '","' + (s.location_name || '') + '",' +
       (s.qty_on_hand || 0) + ',' + (s.qty_on_hold || 0) + ',' + (s.qty_reserved || 0) + ',' + avail + ',' +
-      (s.price || 0) + ',' + ((s.qty_on_hand || 0) * (s.price || 0)).toFixed(2) + '\n';
+      (s.price || 0) + ',' + (s.cost || 0) + ',' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toFixed(2) + '\n';
   });
   var blob = new Blob([csv], { type: 'text/csv' });
   var url = URL.createObjectURL(blob);
@@ -1528,4 +1565,279 @@ var invSearchTimer = null;
 function invDebounceSearch() {
   clearTimeout(invSearchTimer);
   invSearchTimer = setTimeout(function() { invRender(); }, 300);
+}
+
+// ==================== PRODUCTS MANAGEMENT PAGE ====================
+
+var invProdSearchTimer = null;
+function invDebounceProductSearch() {
+  clearTimeout(invProdSearchTimer);
+  invProdSearchTimer = setTimeout(function() { invProductsOffset = 0; invRender(); }, 300);
+}
+
+async function invRenderProductsPage() {
+  // Load products with search/filter/pagination
+  var search = '';
+  var cat = '';
+  var searchEl = document.getElementById('invProdSearchInput');
+  var catEl = document.getElementById('invProdCategoryFilter');
+  if (searchEl) search = searchEl.value;
+  if (catEl) cat = catEl.value;
+
+  var url = '/api/inventory/products?limit=50&offset=' + invProductsOffset;
+  if (search) url += '&search=' + encodeURIComponent(search);
+  if (cat) url += '&category=' + cat;
+  url += '&include_inactive=1';
+
+  try {
+    var resp = await invAPI.get(url, { headers: invHeaders() });
+    invProductsPageData = resp.data.products || [];
+    invProductsTotal = resp.data.total || 0;
+  } catch(e) {
+    invProductsPageData = [];
+    invProductsTotal = 0;
+  }
+
+  var html = '<div class="inv-stock-page">';
+
+  // Toolbar
+  html += '<div class="inv-toolbar">';
+  html += '<div class="inv-search-box"><i class="fas fa-search"></i><input id="invProdSearchInput" type="text" placeholder="Search products..." value="' + escH(search) + '" oninput="invDebounceProductSearch()"></div>';
+  html += '<select id="invProdCategoryFilter" onchange="invProductsOffset=0;invRender()" class="inv-select"><option value="">All Categories</option>';
+  (invCategoryList || []).forEach(function(c) {
+    var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+    html += '<option value="' + c + '"' + (cat === c ? ' selected' : '') + '>' + label + '</option>';
+  });
+  html += '</select>';
+  html += '<button class="inv-btn inv-btn-primary inv-btn-sm" onclick="invShowNewProduct()"><i class="fas fa-plus"></i> New Product</button>';
+  html += '</div>';
+
+  html += '<div class="inv-stock-count">' + invProductsTotal + ' products (showing ' + invProductsPageData.length + ')</div>';
+
+  // Products table (desktop)
+  html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
+  html += '<thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Unit</th><th class="text-right">Sell Price</th><th class="text-right">Cost</th><th class="text-right">Margin</th><th>Status</th><th></th></tr></thead><tbody>';
+
+  invProductsPageData.forEach(function(p) {
+    var margin = p.price && p.cost ? (((p.price - p.cost) / p.price) * 100).toFixed(1) + '%' : '—';
+    html += '<tr class="' + (!p.active ? 'inv-row-inactive' : '') + '">' +
+      '<td class="inv-clickable" onclick="invShowProductDetail(' + p.id + ')"><strong>' + escH(p.name) + '</strong></td>' +
+      '<td class="inv-muted">' + escH(p.sku || '—') + '</td>' +
+      '<td><span class="inv-cat-badge inv-cat-' + (p.category || 'other') + '">' + escH(p.category || 'other') + '</span></td>' +
+      '<td>' + escH(p.unit_type || 'each') + '</td>' +
+      '<td class="text-right">$' + (p.price || 0).toFixed(2) + '</td>' +
+      '<td class="text-right inv-muted">$' + (p.cost || 0).toFixed(2) + '</td>' +
+      '<td class="text-right">' + margin + '</td>' +
+      '<td>' + (p.active ? '<span class="inv-cat-badge inv-cat-supplement">Active</span>' : '<span class="inv-cat-badge inv-cat-other">Inactive</span>') + '</td>' +
+      '<td><button class="inv-btn inv-btn-xs" onclick="invShowEditProduct(' + p.id + ')" title="Edit"><i class="fas fa-pen"></i></button></td>' +
+      '</tr>';
+  });
+  html += '</tbody></table></div>';
+
+  // Mobile cards
+  html += '<div class="inv-mobile-only inv-stock-cards">';
+  invProductsPageData.forEach(function(p) {
+    var margin = p.price && p.cost ? (((p.price - p.cost) / p.price) * 100).toFixed(1) + '%' : '—';
+    html += '<div class="inv-stock-card' + (!p.active ? ' inv-card-inactive' : '') + '" onclick="invShowProductDetail(' + p.id + ')">' +
+      '<div class="inv-stock-card-top">' +
+      '<div><strong>' + escH(p.name) + '</strong><br><span class="inv-muted">' + escH(p.sku || '') + ' · ' + escH(p.category || 'other') + '</span></div>' +
+      (p.active ? '' : '<span class="inv-cat-badge inv-cat-other">Inactive</span>') +
+      '</div>' +
+      '<div class="inv-stock-card-nums">' +
+      '<div><span class="inv-muted">Sell</span><strong>$' + (p.price || 0).toFixed(2) + '</strong></div>' +
+      '<div><span class="inv-muted">Cost</span><span>$' + (p.cost || 0).toFixed(2) + '</span></div>' +
+      '<div><span class="inv-muted">Margin</span><span>' + margin + '</span></div>' +
+      '<div><span class="inv-muted">Unit</span><span>' + escH(p.unit_type || 'each') + '</span></div>' +
+      '</div>' +
+      '<div class="inv-stock-card-actions">' +
+      '<button class="inv-btn inv-btn-xs inv-btn-primary" onclick="event.stopPropagation();invShowEditProduct(' + p.id + ')"><i class="fas fa-pen"></i> Edit</button>' +
+      '</div></div>';
+  });
+  html += '</div>';
+
+  // Pagination
+  if (invProductsTotal > 50) {
+    var totalPages = Math.ceil(invProductsTotal / 50);
+    var currentPage = Math.floor(invProductsOffset / 50) + 1;
+    html += '<div class="inv-pagination">';
+    if (invProductsOffset > 0) {
+      html += '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invProductsOffset=Math.max(0,invProductsOffset-50);invRender()"><i class="fas fa-chevron-left"></i> Prev</button>';
+    }
+    html += '<span class="inv-muted" style="margin:0 12px">Page ' + currentPage + ' of ' + totalPages + '</span>';
+    if (invProductsOffset + 50 < invProductsTotal) {
+      html += '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invProductsOffset+=50;invRender()">Next <i class="fas fa-chevron-right"></i></button>';
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+// ==================== EDIT PRODUCT MODAL ====================
+
+async function invShowEditProduct(productId) {
+  try {
+    var resp = await invAPI.get('/api/inventory/products/' + productId, { headers: invHeaders() });
+    var p = resp.data.product;
+    if (!p) { invToast('Product not found', 'error'); return; }
+
+    var catOpts = '';
+    (invCategoryList || []).forEach(function(c) {
+      var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+      catOpts += '<option value="' + c + '"' + (p.category === c ? ' selected' : '') + '>' + label + '</option>';
+    });
+
+    var unitOpts = '';
+    ['each','bag','bale','bottle','tub','tube','gallon','box','case','roll','pair','set','lb','oz','bar'].forEach(function(u) {
+      unitOpts += '<option value="' + u + '"' + (p.unit_type === u ? ' selected' : '') + '>' + u + '</option>';
+    });
+
+    var body = '<div class="inv-edit-form">';
+    body += '<div class="inv-form-row">';
+    body += '<div class="inv-form-group" style="flex:2"><label>Product Name</label><input type="text" class="inv-input" id="invEditName" value="' + escH(p.name) + '"></div>';
+    body += '<div class="inv-form-group" style="flex:1"><label>SKU</label><input type="text" class="inv-input" id="invEditSku" value="' + escH(p.sku || '') + '"></div>';
+    body += '</div>';
+
+    body += '<div class="inv-form-row">';
+    body += '<div class="inv-form-group"><label>Category</label><select class="inv-select" id="invEditCategory">' + catOpts + '</select></div>';
+    body += '<div class="inv-form-group"><label>Unit Type</label><select class="inv-select" id="invEditUnit">' + unitOpts + '</select></div>';
+    body += '<div class="inv-form-group"><label>Status</label><select class="inv-select" id="invEditActive"><option value="1"' + (p.active ? ' selected' : '') + '>Active</option><option value="0"' + (!p.active ? ' selected' : '') + '>Inactive</option></select></div>';
+    body += '</div>';
+
+    body += '<div class="inv-form-row">';
+    body += '<div class="inv-form-group"><label>Sell Price ($)</label><input type="number" step="0.01" class="inv-input" id="invEditPrice" value="' + (p.price || 0) + '"></div>';
+    body += '<div class="inv-form-group"><label>Cost ($)</label><input type="number" step="0.01" class="inv-input" id="invEditCost" value="' + (p.cost || 0) + '"></div>';
+    body += '<div class="inv-form-group"><label>Tax Rate</label><input type="number" step="0.01" class="inv-input" id="invEditTaxRate" value="' + (p.tax_rate || 0) + '" placeholder="e.g. 0.07 = 7%"></div>';
+    body += '</div>';
+
+    // Margin preview
+    if (p.price && p.cost) {
+      var marginPct = (((p.price - p.cost) / p.price) * 100).toFixed(1);
+      var marginAmt = (p.price - p.cost).toFixed(2);
+      body += '<div class="inv-margin-preview" id="invMarginPreview"><i class="fas fa-chart-pie"></i> Margin: $' + marginAmt + ' (' + marginPct + '%)</div>';
+    } else {
+      body += '<div class="inv-margin-preview" id="invMarginPreview"><i class="fas fa-chart-pie"></i> Margin: —</div>';
+    }
+
+    body += '<div class="inv-form-row">';
+    body += '<div class="inv-form-group"><label>Weight per Unit (lbs)</label><input type="number" step="0.1" class="inv-input" id="invEditWeight" value="' + (p.weight_per_unit || 0) + '"></div>';
+    body += '<div class="inv-form-group"><label>Pallet Qty</label><input type="number" class="inv-input" id="invEditPalletQty" value="' + (p.pallet_qty || 0) + '"></div>';
+    body += '</div>';
+    body += '</div>';
+
+    var footer = '<button class="inv-btn inv-btn-outline" onclick="invCloseModal()">Cancel</button>' +
+      '<button class="inv-btn inv-btn-primary" onclick="invSaveProduct(' + productId + ')"><i class="fas fa-save"></i> Save Changes</button>';
+
+    invShowModal('<i class="fas fa-pen"></i> Edit Product — ' + escH(p.name), body, footer);
+
+    // Live margin preview update
+    setTimeout(function() {
+      var priceEl = document.getElementById('invEditPrice');
+      var costEl = document.getElementById('invEditCost');
+      if (priceEl && costEl) {
+        var updateMargin = function() {
+          var price = parseFloat(priceEl.value) || 0;
+          var cost = parseFloat(costEl.value) || 0;
+          var preview = document.getElementById('invMarginPreview');
+          if (preview && price > 0) {
+            var m = (((price - cost) / price) * 100).toFixed(1);
+            var a = (price - cost).toFixed(2);
+            preview.innerHTML = '<i class="fas fa-chart-pie"></i> Margin: $' + a + ' (' + m + '%)';
+            preview.style.color = (price - cost) > 0 ? '#059669' : '#DC2626';
+          }
+        };
+        priceEl.oninput = updateMargin;
+        costEl.oninput = updateMargin;
+      }
+    }, 100);
+
+  } catch(e) { invToast('Failed to load product: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function invSaveProduct(productId) {
+  var data = {
+    name: document.getElementById('invEditName').value.trim(),
+    sku: document.getElementById('invEditSku').value.trim() || null,
+    category: document.getElementById('invEditCategory').value,
+    unit_type: document.getElementById('invEditUnit').value,
+    active: parseInt(document.getElementById('invEditActive').value),
+    price: parseFloat(document.getElementById('invEditPrice').value) || 0,
+    cost: parseFloat(document.getElementById('invEditCost').value) || 0,
+    tax_rate: parseFloat(document.getElementById('invEditTaxRate').value) || 0,
+    weight_per_unit: parseFloat(document.getElementById('invEditWeight').value) || 0,
+    pallet_qty: parseInt(document.getElementById('invEditPalletQty').value) || 0
+  };
+
+  if (!data.name) { invToast('Product name is required', 'error'); return; }
+
+  try {
+    await invAPI.put('/api/inventory/products/' + productId, data, { headers: invHeaders() });
+    invToast('Product updated successfully');
+    invCloseModal();
+    invRender();
+  } catch(e) { invToast('Save failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ==================== NEW PRODUCT MODAL ====================
+
+function invShowNewProduct() {
+  var catOpts = '';
+  (invCategoryList || []).forEach(function(c) {
+    var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+    catOpts += '<option value="' + c + '"' + (c === 'other' ? ' selected' : '') + '>' + label + '</option>';
+  });
+
+  var unitOpts = '';
+  ['each','bag','bale','bottle','tub','tube','gallon','box','case','roll','pair','set','lb','oz','bar'].forEach(function(u) {
+    unitOpts += '<option value="' + u + '"' + (u === 'each' ? ' selected' : '') + '>' + u + '</option>';
+  });
+
+  var body = '<div class="inv-edit-form">';
+  body += '<div class="inv-form-row">';
+  body += '<div class="inv-form-group" style="flex:2"><label>Product Name *</label><input type="text" class="inv-input" id="invNewName" placeholder="Enter product name"></div>';
+  body += '<div class="inv-form-group" style="flex:1"><label>SKU</label><input type="text" class="inv-input" id="invNewSku" placeholder="Optional"></div>';
+  body += '</div>';
+  body += '<div class="inv-form-row">';
+  body += '<div class="inv-form-group"><label>Category</label><select class="inv-select" id="invNewCategory">' + catOpts + '</select></div>';
+  body += '<div class="inv-form-group"><label>Unit Type</label><select class="inv-select" id="invNewUnit">' + unitOpts + '</select></div>';
+  body += '</div>';
+  body += '<div class="inv-form-row">';
+  body += '<div class="inv-form-group"><label>Sell Price ($)</label><input type="number" step="0.01" class="inv-input" id="invNewPrice" value="0"></div>';
+  body += '<div class="inv-form-group"><label>Cost ($)</label><input type="number" step="0.01" class="inv-input" id="invNewCost" value="0"></div>';
+  body += '<div class="inv-form-group"><label>Tax Rate</label><input type="number" step="0.01" class="inv-input" id="invNewTaxRate" value="0" placeholder="e.g. 0.07"></div>';
+  body += '</div>';
+  body += '<div class="inv-form-row">';
+  body += '<div class="inv-form-group"><label>Weight per Unit (lbs)</label><input type="number" step="0.1" class="inv-input" id="invNewWeight" value="0"></div>';
+  body += '<div class="inv-form-group"><label>Pallet Qty</label><input type="number" class="inv-input" id="invNewPalletQty" value="0"></div>';
+  body += '</div>';
+  body += '</div>';
+
+  var footer = '<button class="inv-btn inv-btn-outline" onclick="invCloseModal()">Cancel</button>' +
+    '<button class="inv-btn inv-btn-primary" onclick="invCreateProduct()"><i class="fas fa-plus"></i> Create Product</button>';
+
+  invShowModal('<i class="fas fa-plus"></i> New Product', body, footer);
+}
+
+async function invCreateProduct() {
+  var data = {
+    name: document.getElementById('invNewName').value.trim(),
+    sku: document.getElementById('invNewSku').value.trim() || null,
+    category: document.getElementById('invNewCategory').value,
+    unit_type: document.getElementById('invNewUnit').value,
+    price: parseFloat(document.getElementById('invNewPrice').value) || 0,
+    cost: parseFloat(document.getElementById('invNewCost').value) || 0,
+    tax_rate: parseFloat(document.getElementById('invNewTaxRate').value) || 0,
+    weight_per_unit: parseFloat(document.getElementById('invNewWeight').value) || 0,
+    pallet_qty: parseInt(document.getElementById('invNewPalletQty').value) || 0
+  };
+
+  if (!data.name) { invToast('Product name is required', 'error'); return; }
+
+  try {
+    var resp = await invAPI.post('/api/inventory/products', data, { headers: invHeaders() });
+    invToast('Product "' + data.name + '" created');
+    invCloseModal();
+    invRender();
+  } catch(e) { invToast('Create failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }

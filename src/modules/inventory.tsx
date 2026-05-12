@@ -57,7 +57,7 @@ app.get('/api/inventory/dashboard', async (c) => {
   const db = c.env.DB
   const locationId = c.req.query('location_id')
 
-  let stockQuery = `SELECT s.*, p.name as product_name, p.sku, p.category, p.unit_type, p.price, p.weight_per_unit,
+  let stockQuery = `SELECT s.*, p.name as product_name, p.sku, p.category, p.unit_type, p.price, p.cost, p.weight_per_unit,
     l.name as location_name, l.code as location_code
     FROM inventory_stock s
     JOIN products p ON s.product_id = p.id
@@ -111,7 +111,7 @@ app.get('/api/inventory/stock', async (c) => {
   const search = c.req.query('search')
   const lowStockOnly = c.req.query('low_stock') === '1'
 
-  let query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.unit_type, p.price, p.weight_per_unit, p.pallet_qty,
+  let query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
     l.name as location_name, l.code as location_code
     FROM inventory_stock s
     JOIN products p ON s.product_id = p.id
@@ -1090,17 +1090,129 @@ app.delete('/api/inventory/batch-images/:imageId', async (c) => {
   return c.json({ success: true })
 })
 
-// ==================== PRODUCTS LIST (for dropdowns) ====================
+// ==================== PRODUCTS LIST & CRUD ====================
 
+// List products (for dropdowns + inventory table)
 app.get('/api/inventory/products', async (c) => {
   const db = c.env.DB
   const search = c.req.query('search')
-  let query = 'SELECT id, name, sku, category, unit_type, price, weight_per_unit FROM products WHERE active = 1'
+  const category = c.req.query('category')
+  const includeInactive = c.req.query('include_inactive') === '1'
+  const limit = parseInt(c.req.query('limit') || '500')
+  const offset = parseInt(c.req.query('offset') || '0')
+
+  let query = 'SELECT id, name, sku, category, unit_type, price, cost, weight_per_unit, active, tax_rate, pallet_qty, stock_quantity FROM products'
+  const conditions: string[] = []
   const binds: any[] = []
-  if (search) { query += ' AND (name LIKE ? OR sku LIKE ?)'; binds.push(`%${search}%`, `%${search}%`) }
-  query += ' ORDER BY name ASC'
+
+  if (!includeInactive) { conditions.push('active = 1') }
+  if (search) { conditions.push('(name LIKE ? OR sku LIKE ?)'); binds.push(`%${search}%`, `%${search}%`) }
+  if (category) { conditions.push('category = ?'); binds.push(category) }
+
+  if (conditions.length) query += ' WHERE ' + conditions.join(' AND ')
+  query += ' ORDER BY name ASC LIMIT ? OFFSET ?'
+  binds.push(limit, offset)
+
   const products = await db.prepare(query).bind(...binds).all()
-  return c.json({ products: products.results || [] })
+
+  // Get total count for pagination
+  let countQuery = 'SELECT COUNT(*) as total FROM products'
+  const countBinds: any[] = []
+  const countConditions: string[] = []
+  if (!includeInactive) { countConditions.push('active = 1') }
+  if (search) { countConditions.push('(name LIKE ? OR sku LIKE ?)'); countBinds.push(`%${search}%`, `%${search}%`) }
+  if (category) { countConditions.push('category = ?'); countBinds.push(category) }
+  if (countConditions.length) countQuery += ' WHERE ' + countConditions.join(' AND ')
+  const countResult = await db.prepare(countQuery).bind(...countBinds).first() as any
+
+  return c.json({ products: products.results || [], total: countResult?.total || 0 })
+})
+
+// Get all unique categories (for filter dropdowns)
+app.get('/api/inventory/products/categories', async (c) => {
+  const db = c.env.DB
+  const cats = await db.prepare('SELECT DISTINCT category FROM products WHERE active = 1 ORDER BY category ASC').all()
+  return c.json({ categories: (cats.results || []).map((r: any) => r.category) })
+})
+
+// Get single product detail
+app.get('/api/inventory/products/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first()
+  if (!product) return c.json({ error: 'Product not found' }, 404)
+  return c.json({ product })
+})
+
+// Update product
+app.put('/api/inventory/products/:id', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+
+  const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first() as any
+  if (!product) return c.json({ error: 'Product not found' }, 404)
+
+  // Fields that can be updated
+  const allowedFields = ['name', 'sku', 'category', 'unit_type', 'price', 'cost', 'weight_per_unit',
+    'active', 'tax_rate', 'pallet_qty', 'pallet_weight', 'length_in', 'width_in', 'height_in',
+    'stackable', 'max_stack', 'bag_length_in', 'bag_width_in', 'bag_height_in']
+
+  const sets: string[] = []
+  const vals: any[] = []
+  for (const field of allowedFields) {
+    if (body[field] !== undefined) {
+      sets.push(`${field} = ?`)
+      vals.push(body[field])
+    }
+  }
+
+  if (!sets.length) return c.json({ error: 'No fields to update' }, 400)
+
+  vals.push(id)
+  await db.prepare(`UPDATE products SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run()
+
+  // Log the change in audit
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+  const changes = allowedFields.filter(f => body[f] !== undefined && body[f] !== product[f]).map(f => `${f}: ${product[f]} → ${body[f]}`).join(', ')
+  if (changes) {
+    // Find any stock entry for this product to get a location_id for audit
+    const anyStock = await db.prepare('SELECT location_id FROM inventory_stock WHERE product_id = ? LIMIT 1').bind(id).first() as any
+    if (anyStock) {
+      await auditLog(db, {
+        product_id: id, location_id: anyStock.location_id, action: 'product_updated', qty_change: 0,
+        reason: 'Product details updated', notes: changes,
+        user_id: user.id, user_name: userInfo?.name || user.email
+      })
+    }
+  }
+
+  const updated = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first()
+  return c.json({ success: true, product: updated })
+})
+
+// Create new product
+app.post('/api/inventory/products', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const body = await c.req.json()
+
+  if (!body.name) return c.json({ error: 'Product name is required' }, 400)
+
+  const result = await db.prepare(
+    `INSERT INTO products (name, sku, category, unit_type, price, cost, weight_per_unit, active, tax_rate, pallet_qty)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    body.name, body.sku || null, body.category || 'other', body.unit_type || 'each',
+    body.price || 0, body.cost || 0, body.weight_per_unit || 0,
+    body.active !== undefined ? body.active : 1, body.tax_rate || 0, body.pallet_qty || 0
+  ).run()
+
+  const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(result.meta.last_row_id).first()
+  return c.json({ success: true, product })
 })
 
 export default app

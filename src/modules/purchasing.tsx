@@ -514,7 +514,7 @@ app.get('/api/purchasing/products', async (c) => {
   const search = c.req.query('search') || ''
   const category = c.req.query('category')
 
-  let q = 'SELECT id, name, sku, category, unit_type, price FROM products WHERE active = 1'
+  let q = 'SELECT id, name, sku, category, unit_type, price, cost FROM products WHERE active = 1'
   const binds: any[] = []
   if (search) { q += ' AND (name LIKE ? OR sku LIKE ?)'; binds.push(`%${search}%`, `%${search}%`) }
   if (category) { q += ' AND category = ?'; binds.push(category) }
