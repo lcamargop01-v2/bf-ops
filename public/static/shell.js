@@ -10,6 +10,7 @@ var MODULES = [
   { id: 'logistics', name: 'Logistics', icon: 'fa-truck-fast', desc: 'Delivery routes, orders, fleet management', color: '#1E3A8A' },
   { id: 'inventory', name: 'Inventory', icon: 'fa-warehouse', desc: 'Stock levels, movements, multi-location tracking', color: '#059669' },
   { id: 'ordering', name: 'Purchasing', icon: 'fa-cart-shopping', desc: 'Purchase orders, vendors, receiving', color: '#D97706' },
+  { id: 'crm', name: 'CRM', icon: 'fa-handshake', desc: 'Contacts, organizations, sales pipeline', color: '#6366F1' },
   { id: 'pos', name: 'Point of Sale', icon: 'fa-cash-register', desc: 'Register, payments, receipts', color: '#7C3AED', soon: true },
   { id: 'tasks', name: 'Tasks', icon: 'fa-list-check', desc: 'Team tasks, checklists, operations', color: '#DC2626', soon: true },
 ];
@@ -221,6 +222,8 @@ function launchModule(moduleId) {
     loadInventoryModule();
   } else if (moduleId === 'ordering') {
     loadPurchasingModule();
+  } else if (moduleId === 'crm') {
+    loadCRMModule();
   } else {
     document.getElementById('moduleFrame').innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px">
@@ -236,7 +239,10 @@ function cleanupActiveModule() {
   if (typeof window._logisticsCleanup === 'function') {
     try { window._logisticsCleanup(); } catch(e) {}
   }
-  // Remove logistics-specific stylesheets
+  if (typeof window._crmCleanup === 'function') {
+    try { window._crmCleanup(); } catch(e) {}
+  }
+  // Remove module-specific stylesheets
   document.querySelectorAll('link[data-module]').forEach(el => el.remove());
   // Remove module-injected scripts (but keep cached references)
   // Reset module globals
@@ -402,6 +408,36 @@ function loadPurchasingModule() {
   }
 }
 
+// ==================== CRM MODULE LOADER ====================
+
+function loadCRMModule() {
+  const frame = document.getElementById('moduleFrame');
+
+  // Load CRM CSS if needed
+  if (!document.querySelector('link[data-module="crm-css"]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/static/modules/crm.css?v=' + Date.now();
+    link.dataset.module = 'crm-css';
+    document.head.appendChild(link);
+  }
+
+  frame.innerHTML = '<div id="crm-app"></div>';
+
+  if (!loadedModuleScripts.crm) {
+    const script = document.createElement('script');
+    script.src = '/static/modules/crm.js?v=' + Date.now();
+    script.dataset.module = 'crm';
+    script.onload = () => {
+      loadedModuleScripts.crm = true;
+      if (typeof window._crmInit === 'function') window._crmInit();
+    };
+    document.body.appendChild(script);
+  } else {
+    if (typeof window._crmInit === 'function') window._crmInit();
+  }
+}
+
 // ==================== ADMIN PANEL ==
 
 async function renderAdminPanel() {
@@ -415,7 +451,7 @@ async function renderAdminPanel() {
     ]);
     const users = usersRes.data.users || [];
     const locations = locationsRes.data.locations || [];
-    const allModuleIds = ['logistics', 'inventory', 'ordering', 'pos', 'tasks'];
+    const allModuleIds = ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks'];
 
     frame.innerHTML = `
       <div class="shell-admin-panel">

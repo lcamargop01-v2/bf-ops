@@ -4,6 +4,7 @@ import type { BFBindings, BFVariables } from './lib/types'
 import { logisticsApp } from './modules/logistics'
 import { inventoryApp } from './modules/inventory'
 import { purchasingApp } from './modules/purchasing'
+import { crmApp } from './modules/crm'
 
 const app = new Hono<{ Bindings: BFBindings; Variables: BFVariables }>()
 
@@ -40,7 +41,7 @@ app.post('/api/auth/login', async (c) => {
   const modules = accessRows.results?.map((r: any) => r.module) || []
 
   // Admins get all modules
-  const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'pos', 'tasks', 'admin'] : modules
+  const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : modules
 
   // Generate simple token (same approach as logistics)
   const token = btoa(JSON.stringify({ id: user.id, email: user.email, role: user.role, exp: Date.now() + 86400000 }))
@@ -64,7 +65,7 @@ app.get('/api/auth/me', async (c) => {
 
     const accessRows = await db.prepare('SELECT module FROM user_module_access WHERE user_id = ?').bind(user.id).all()
     const modules = accessRows.results?.map((r: any) => r.module) || []
-    const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'pos', 'tasks', 'admin'] : modules
+    const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : modules
 
     return c.json({ user: { ...user, modules: allModules } })
   } catch { return c.json({ error: 'Invalid token' }, 401) }
@@ -84,7 +85,7 @@ app.get('/api/admin/users', async (c) => {
   }
   const result = (users.results || []).map((u: any) => ({
     ...u,
-    modules: u.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'pos', 'tasks', 'admin'] : (accessMap[u.id] || [])
+    modules: u.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : (accessMap[u.id] || [])
   }))
   return c.json({ users: result })
 })
@@ -138,6 +139,9 @@ app.route('/', inventoryApp)
 
 // Purchasing module: /api/purchasing/*
 app.route('/', purchasingApp)
+
+// CRM module: /api/crm/*
+app.route('/', crmApp)
 
 // Logistics module: /api/orders, /api/routes, /api/customers, etc.
 app.route('/', logisticsApp)
