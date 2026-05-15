@@ -1,5 +1,5 @@
 // BF Ops - CRM Module
-// Mirrors Insightly: Organizations, Contacts, Opportunities (pipeline), Activities
+// Organizations, Contacts, Leads (pipeline), Activities
 // Ties into POS via convert-to-customer flow
 
 var crmAPI = axios.create({ baseURL: '' });
@@ -151,7 +151,7 @@ async function crmRenderDashboard() {
       '<div class="crm-cards-grid">' +
         crmStatCard('fa-building', '#6366F1', '#EEF2FF', s.organizations, 'Organizations', "crmGoPage('organizations')") +
         crmStatCard('fa-address-book', '#0EA5E9', '#F0F9FF', s.contacts, 'Contacts', "crmGoPage('contacts')") +
-        crmStatCard('fa-handshake', '#F59E0B', '#FFFBEB', s.open_opportunities, 'Open Deals', "crmGoPage('pipeline')") +
+        crmStatCard('fa-handshake', '#F59E0B', '#FFFBEB', s.open_opportunities, 'Active Leads', "crmGoPage('pipeline')") +
         crmStatCard('fa-dollar-sign', '#059669', '#F0FDF4', crmFmt$(s.open_value), 'Pipeline Value', "crmGoPage('pipeline')") +
         crmStatCard('fa-trophy', '#7C3AED', '#F5F3FF', s.won_opportunities, 'Won', null) +
         crmStatCard('fa-dollar-sign', '#059669', '#F0FDF4', crmFmt$(s.won_value), 'Won Revenue', null) +
@@ -181,9 +181,9 @@ async function crmRenderDashboard() {
       // Recent opportunities + upcoming tasks side by side
       '<div class="crm-dash-split">' +
         '<div class="crm-section">' +
-          '<h2 class="crm-section-title"><i class="fas fa-handshake"></i> Recent Opportunities</h2>' +
-          (recentOpps.length === 0 ? '<p class="crm-muted">No open opportunities yet.</p>' :
-            '<div class="crm-table-wrap"><table class="crm-table crm-table-hover"><thead><tr><th>Deal</th><th>Org</th><th>Stage</th><th class="text-right">Value</th></tr></thead><tbody>' +
+          '<h2 class="crm-section-title"><i class="fas fa-handshake"></i> Recent Leads</h2>' +
+          (recentOpps.length === 0 ? '<p class="crm-muted">No active leads yet.</p>' :
+            '<div class="crm-table-wrap"><table class="crm-table crm-table-hover"><thead><tr><th>Lead</th><th>Org</th><th>Stage</th><th class="text-right">Value</th></tr></thead><tbody>' +
             recentOpps.map(function(o) {
               return '<tr class="crm-clickable" onclick="crmViewOpp(' + o.id + ')">' +
                 '<td><strong>' + crmEsc(o.name) + '</strong></td>' +
@@ -223,7 +223,7 @@ async function crmRenderDashboard() {
         '<div class="crm-quick-actions">' +
           '<button class="crm-action-btn" onclick="crmShowNewOrg()"><i class="fas fa-building"></i> New Organization</button>' +
           '<button class="crm-action-btn" onclick="crmShowNewContact()"><i class="fas fa-user-plus"></i> New Contact</button>' +
-          '<button class="crm-action-btn" onclick="crmShowNewOpp()"><i class="fas fa-handshake"></i> New Opportunity</button>' +
+          '<button class="crm-action-btn" onclick="crmShowNewOpp()"><i class="fas fa-handshake"></i> New Lead</button>' +
           '<button class="crm-action-btn" onclick="crmShowNewActivity()"><i class="fas fa-sticky-note"></i> Log Activity</button>' +
         '</div>' +
       '</div>' +
@@ -248,7 +248,7 @@ async function crmRenderPipeline() {
     '<div class="crm-pipeline-page">' +
       '<div class="crm-pipeline-header">' +
         '<h2><i class="fas fa-columns"></i> Sales Pipeline</h2>' +
-        '<button class="crm-btn crm-btn-primary" onclick="crmShowNewOpp()"><i class="fas fa-plus"></i> New Deal</button>' +
+        '<button class="crm-btn crm-btn-primary" onclick="crmShowNewOpp()"><i class="fas fa-plus"></i> New Lead</button>' +
       '</div>' +
       '<div class="crm-pipeline-board" id="crmPipelineBoard">' +
         openStages.map(function(stage) {
@@ -270,7 +270,7 @@ async function crmRenderPipeline() {
                   '</div>' +
                 '</div>';
               }).join('') +
-              (stageOpps.length === 0 ? '<div class="crm-pipeline-empty">No deals</div>' : '') +
+              (stageOpps.length === 0 ? '<div class="crm-pipeline-empty">No leads</div>' : '') +
             '</div>' +
           '</div>';
         }).join('') +
@@ -290,10 +290,10 @@ async function crmDrop(ev, stageId) {
   if (!crmDragOppId) return;
   try {
     await crmAPI.post('/api/crm/opportunities/' + crmDragOppId + '/move', { stage_id: stageId }, { headers: crmHeaders() });
-    crmToast('Deal moved');
+    crmToast('Lead moved');
     crmDragOppId = null;
     crmRenderPipeline();
-  } catch(e) { crmToast('Failed to move deal', 'error'); }
+  } catch(e) { crmToast('Failed to move lead', 'error'); }
 }
 
 // ==================== ORGANIZATIONS PAGE ====================
@@ -326,7 +326,7 @@ function crmRenderOrgsContent() {
 
       // Desktop table
       '<div class="crm-desktop-only"><div class="crm-table-wrap"><table class="crm-table crm-table-hover"><thead><tr>' +
-        '<th>Organization</th><th>Type</th><th>Phone</th><th>Email</th><th>Contacts</th><th>Open Deals</th>' +
+        '<th>Organization</th><th>Type</th><th>Phone</th><th>Email</th><th>Contacts</th><th>Active Leads</th>' +
       '</tr></thead><tbody>' +
       (crmOrgs.length === 0 ? '<tr><td colspan="6" style="text-align:center;padding:24px;color:#94A3B8">No organizations found</td></tr>' :
         crmOrgs.map(function(o) {
@@ -352,7 +352,7 @@ function crmRenderOrgsContent() {
             '</div>' +
             '<div class="crm-stock-card-nums" style="grid-template-columns:repeat(3,1fr)">' +
               '<div><span class="crm-muted">Contacts</span><strong>' + (o.contact_count || 0) + '</strong></div>' +
-              '<div><span class="crm-muted">Deals</span><strong>' + (o.open_opps || 0) + '</strong></div>' +
+              '<div><span class="crm-muted">Leads</span><strong>' + (o.open_opps || 0) + '</strong></div>' +
               '<div><span class="crm-muted">Phone</span><span style="font-size:12px">' + crmEsc(o.phone || '—') + '</span></div>' +
             '</div>' +
           '</div>';
@@ -472,7 +472,7 @@ function crmRenderOrgDetail() {
         '<button class="crm-btn crm-btn-outline crm-btn-sm" onclick="crmGoPage(\'organizations\')"><i class="fas fa-arrow-left"></i> Back</button>' +
         '<div class="crm-detail-actions">' +
           '<button class="crm-btn crm-btn-outline crm-btn-sm" onclick="crmShowEditOrg(' + org.id + ')"><i class="fas fa-edit"></i> Edit</button>' +
-          '<button class="crm-btn crm-btn-primary crm-btn-sm" onclick="crmShowNewOpp(' + org.id + ')"><i class="fas fa-plus"></i> New Deal</button>' +
+          '<button class="crm-btn crm-btn-primary crm-btn-sm" onclick="crmShowNewOpp(' + org.id + ')"><i class="fas fa-plus"></i> New Lead</button>' +
         '</div>' +
       '</div>' +
 
@@ -527,9 +527,9 @@ function crmRenderOrgDetail() {
 
       // Opportunities
       '<div class="crm-section">' +
-        '<div class="crm-section-header"><h2 class="crm-section-title"><i class="fas fa-handshake"></i> Opportunities (' + opps.length + ')</h2></div>' +
-        (opps.length === 0 ? '<p class="crm-muted">No opportunities yet.</p>' :
-          '<div class="crm-table-wrap"><table class="crm-table crm-table-hover"><thead><tr><th>Deal</th><th>Stage</th><th>Status</th><th class="text-right">Value</th></tr></thead><tbody>' +
+        '<div class="crm-section-header"><h2 class="crm-section-title"><i class="fas fa-handshake"></i> Leads (' + opps.length + ')</h2></div>' +
+        (opps.length === 0 ? '<p class="crm-muted">No leads yet.</p>' :
+          '<div class="crm-table-wrap"><table class="crm-table crm-table-hover"><thead><tr><th>Lead</th><th>Stage</th><th>Status</th><th class="text-right">Value</th></tr></thead><tbody>' +
           opps.map(function(o) {
             return '<tr class="crm-clickable" onclick="crmViewOpp(' + o.id + ')">' +
               '<td><strong>' + crmEsc(o.name) + '</strong></td>' +
@@ -572,7 +572,7 @@ function crmRenderContactDetail() {
         '<button class="crm-btn crm-btn-outline crm-btn-sm" onclick="crmGoPage(\'contacts\')"><i class="fas fa-arrow-left"></i> Back</button>' +
         '<div class="crm-detail-actions">' +
           '<button class="crm-btn crm-btn-outline crm-btn-sm" onclick="crmShowEditContact(' + c.id + ')"><i class="fas fa-edit"></i> Edit</button>' +
-          '<button class="crm-btn crm-btn-primary crm-btn-sm" onclick="crmShowNewOpp(null, ' + c.id + ')"><i class="fas fa-plus"></i> New Deal</button>' +
+          '<button class="crm-btn crm-btn-primary crm-btn-sm" onclick="crmShowNewOpp(null, ' + c.id + ')"><i class="fas fa-plus"></i> New Lead</button>' +
         '</div>' +
       '</div>' +
 
@@ -608,9 +608,9 @@ function crmRenderContactDetail() {
 
       // Opportunities
       '<div class="crm-section">' +
-        '<div class="crm-section-header"><h2 class="crm-section-title"><i class="fas fa-handshake"></i> Opportunities (' + opps.length + ')</h2></div>' +
-        (opps.length === 0 ? '<p class="crm-muted">No opportunities yet.</p>' :
-          '<div class="crm-table-wrap"><table class="crm-table crm-table-hover"><thead><tr><th>Deal</th><th>Stage</th><th>Status</th><th class="text-right">Value</th></tr></thead><tbody>' +
+        '<div class="crm-section-header"><h2 class="crm-section-title"><i class="fas fa-handshake"></i> Leads (' + opps.length + ')</h2></div>' +
+        (opps.length === 0 ? '<p class="crm-muted">No leads yet.</p>' :
+          '<div class="crm-table-wrap"><table class="crm-table crm-table-hover"><thead><tr><th>Lead</th><th>Stage</th><th>Status</th><th class="text-right">Value</th></tr></thead><tbody>' +
           opps.map(function(o) {
             return '<tr class="crm-clickable" onclick="crmViewOpp(' + o.id + ')">' +
               '<td><strong>' + crmEsc(o.name) + '</strong></td>' +
@@ -635,7 +635,7 @@ async function crmViewOpp(id) {
   try {
     var resp = await crmAPI.get('/api/crm/opportunities/' + id, { headers: crmHeaders() });
     crmDetailData = resp.data;
-  } catch(e) { ct.innerHTML = '<div class="crm-empty"><p>Failed to load opportunity</p></div>'; return; }
+  } catch(e) { ct.innerHTML = '<div class="crm-empty"><p>Failed to load lead</p></div>'; return; }
   crmRenderOppDetail();
 }
 
@@ -683,7 +683,7 @@ function crmRenderOppDetail() {
 
       '<div class="crm-detail-info-grid">' +
         '<div class="crm-info-card">' +
-          '<h4><i class="fas fa-dollar-sign"></i> Deal Info</h4>' +
+          '<h4><i class="fas fa-dollar-sign"></i> Lead Info</h4>' +
           crmInfoRow('Value', crmFmt$(o.value)) + crmInfoRow('Probability', (o.probability || 0) + '%') +
           crmInfoRow('Close Date', crmFmtDate(o.close_date)) + crmInfoRow('Source', o.source) +
         '</div>' +
@@ -713,7 +713,7 @@ async function crmMoveOppToStage(oppId, stageId) {
 }
 
 async function crmConvertOpp(oppId) {
-  if (!confirm('Convert this opportunity to a POS customer?\n\nThis will:\n- Create a customer record\n- Mark the deal as WON\n- Link the organization and contact')) return;
+  if (!confirm('Convert this lead to a POS customer?\n\nThis will:\n- Create a customer record\n- Mark the lead as WON\n- Link the organization and contact')) return;
   try {
     var resp = await crmAPI.post('/api/crm/opportunities/' + oppId + '/convert', {}, { headers: crmHeaders() });
     crmToast('Converted! Customer #' + resp.data.customer_id + ' created: ' + resp.data.business_name);
@@ -722,11 +722,11 @@ async function crmConvertOpp(oppId) {
 }
 
 async function crmLoseOpp(oppId) {
-  var reason = prompt('Reason for losing this deal (optional):');
+  var reason = prompt('Reason for losing this lead (optional):');
   if (reason === null) return;
   try {
     await crmAPI.put('/api/crm/opportunities/' + oppId, { status: 'lost', lost_reason: reason || null }, { headers: crmHeaders() });
-    crmToast('Deal marked as lost');
+    crmToast('Lead marked as lost');
     crmViewOpp(oppId);
   } catch(e) { crmToast('Failed to update', 'error'); }
 }
@@ -1066,11 +1066,11 @@ function crmShowNewOpp(orgId, contactId) {
     return '<option value="' + s.id + '">' + crmEsc(s.name) + '</option>';
   }).join('');
 
-  crmShowModal('<i class="fas fa-handshake" style="color:#F59E0B"></i> New Opportunity',
+  crmShowModal('<i class="fas fa-handshake" style="color:#F59E0B"></i> New Lead',
     '<div class="crm-edit-form">' +
-      '<div class="crm-form-group"><label>Deal Name *</label><input class="crm-input" id="crmOppName" placeholder="e.g. Monthly Feed Supply"></div>' +
+      '<div class="crm-form-group"><label>Lead Name *</label><input class="crm-input" id="crmOppName" placeholder="e.g. Monthly Feed Supply"></div>' +
       '<div class="crm-form-row">' +
-        '<div class="crm-form-group"><label>Value ($)</label><input class="crm-input" id="crmOppValue" type="number" step="0.01" value="0" placeholder="Deal value"></div>' +
+        '<div class="crm-form-group"><label>Est. Value ($)</label><input class="crm-input" id="crmOppValue" type="number" step="0.01" value="0" placeholder="Estimated value"></div>' +
         '<div class="crm-form-group"><label>Close Date</label><input class="crm-input" id="crmOppCloseDate" type="date"></div>' +
       '</div>' +
       '<div class="crm-form-row">' +
@@ -1088,7 +1088,7 @@ function crmShowNewOpp(orgId, contactId) {
 
 async function crmCreateOpp() {
   var name = document.getElementById('crmOppName').value.trim();
-  if (!name) { crmToast('Deal name is required', 'error'); return; }
+  if (!name) { crmToast('Lead name is required', 'error'); return; }
   try {
     var resp = await crmAPI.post('/api/crm/opportunities', {
       name: name,
@@ -1101,7 +1101,7 @@ async function crmCreateOpp() {
       source: document.getElementById('crmOppSource').value || null,
       notes: document.getElementById('crmOppNotes').value || null
     }, { headers: crmHeaders() });
-    crmToast('Opportunity created');
+    crmToast('Lead created');
     crmCloseModal();
     crmViewOpp(resp.data.id);
   } catch(e) { crmToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
@@ -1115,9 +1115,9 @@ async function crmShowEditOpp(id) {
     return '<option value="' + s.id + '" ' + (o.stage_id === s.id ? 'selected' : '') + '>' + crmEsc(s.name) + '</option>';
   }).join('');
 
-  crmShowModal('<i class="fas fa-edit" style="color:#F59E0B"></i> Edit Opportunity',
+  crmShowModal('<i class="fas fa-edit" style="color:#F59E0B"></i> Edit Lead',
     '<div class="crm-edit-form">' +
-      '<div class="crm-form-group"><label>Deal Name *</label><input class="crm-input" id="crmOppName" value="' + crmEsc(o.name) + '"></div>' +
+      '<div class="crm-form-group"><label>Lead Name *</label><input class="crm-input" id="crmOppName" value="' + crmEsc(o.name) + '"></div>' +
       '<div class="crm-form-row">' +
         '<div class="crm-form-group"><label>Value ($)</label><input class="crm-input" id="crmOppValue" type="number" step="0.01" value="' + (o.value || 0) + '"></div>' +
         '<div class="crm-form-group"><label>Close Date</label><input class="crm-input" id="crmOppCloseDate" type="date" value="' + (o.close_date || '') + '"></div>' +
@@ -1137,7 +1137,7 @@ async function crmShowEditOpp(id) {
 
 async function crmSaveOpp(id) {
   var name = document.getElementById('crmOppName').value.trim();
-  if (!name) { crmToast('Deal name is required', 'error'); return; }
+  if (!name) { crmToast('Lead name is required', 'error'); return; }
   try {
     await crmAPI.put('/api/crm/opportunities/' + id, {
       name: name,
@@ -1169,7 +1169,7 @@ function crmShowNewActivity(entityType, entityId) {
         '<div class="crm-form-row">' +
           '<div class="crm-form-group"><label>Contact ID</label><input class="crm-input" id="crmActContactId" placeholder="(optional)"></div>' +
           '<div class="crm-form-group"><label>Organization ID</label><input class="crm-input" id="crmActOrgId" placeholder="(optional)"></div>' +
-          '<div class="crm-form-group"><label>Opportunity ID</label><input class="crm-input" id="crmActOppId" placeholder="(optional)"></div>' +
+          '<div class="crm-form-group"><label>Lead ID</label><input class="crm-input" id="crmActOppId" placeholder="(optional)"></div>' +
         '</div>') +
     '</div>',
     '<button class="crm-btn crm-btn-outline" onclick="crmCloseModal()">Cancel</button>' +
