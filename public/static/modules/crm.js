@@ -13,6 +13,7 @@ var crmContacts = []; var crmContactsTotal = 0; var crmContactsOffset = 0;
 var crmOpps = [];
 var crmDetailData = null; // current detail view data
 var crmDragOppId = null;
+var crmAllOrgs = []; // cached org list for dropdowns
 
 // ==================== AUTH BRIDGE ====================
 function crmGetToken() { return localStorage.getItem('bf_ops_token') || localStorage.getItem('bf_token') || ''; }
@@ -23,6 +24,21 @@ function crmFmt$(v) { return '$' + (parseFloat(v) || 0).toLocaleString('en-US', 
 function crmFmtDate(d) { if (!d) return '—'; return dayjs(d).format('MMM D, YYYY'); }
 function crmFmtDateTime(d) { if (!d) return '—'; return dayjs(d).format('MMM D, YYYY h:mm A'); }
 function crmEsc(s) { if (!s) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+async function crmFetchAllOrgs() {
+  try {
+    var resp = await crmAPI.get('/api/crm/organizations?limit=500&offset=0', { headers: crmHeaders() });
+    crmAllOrgs = resp.data.organizations || [];
+  } catch(e) { crmAllOrgs = []; }
+}
+function crmOrgSelectHtml(fieldId, selectedId, required) {
+  var html = '<select class="crm-input" id="' + fieldId + '">';
+  html += '<option value="">' + (required ? '-- Select Organization --' : '(None)') + '</option>';
+  crmAllOrgs.forEach(function(o) {
+    html += '<option value="' + o.id + '"' + (o.id == selectedId ? ' selected' : '') + '>' + crmEsc(o.name) + (o.org_type ? ' (' + o.org_type + ')' : '') + '</option>';
+  });
+  html += '</select>';
+  return html;
+}
 function crmToast(msg, type) {
   type = type || 'success';
   var el = document.createElement('div');
@@ -961,7 +977,8 @@ async function crmSaveOrg(id) {
 }
 
 // ==================== NEW/EDIT CONTACT ====================
-function crmShowNewContact(orgId) {
+async function crmShowNewContact(orgId) {
+  await crmFetchAllOrgs();
   crmShowModal('<i class="fas fa-user-plus" style="color:#0EA5E9"></i> New Contact',
     '<div class="crm-edit-form">' +
       '<div class="crm-form-row">' +
@@ -974,7 +991,7 @@ function crmShowNewContact(orgId) {
         '<div class="crm-form-group"><label>Mobile</label><input class="crm-input" id="crmConMobile" placeholder="Mobile"></div>' +
       '</div>' +
       '<div class="crm-form-group"><label>Email</label><input class="crm-input" id="crmConEmail" placeholder="Email"></div>' +
-      '<div class="crm-form-group"><label>Organization ID</label><input class="crm-input" id="crmConOrgId" value="' + (orgId || '') + '" placeholder="Org ID (optional)"></div>' +
+      '<div class="crm-form-group"><label>Organization</label>' + crmOrgSelectHtml('crmConOrgId', orgId) + '</div>' +
       '<div class="crm-form-row">' +
         '<div class="crm-form-group"><label>Lead Source</label><input class="crm-input" id="crmConSource" placeholder="e.g. Referral, Walk-In"></div>' +
         '<div class="crm-form-group"><label>Lead Status</label><select class="crm-input" id="crmConStatus"><option value="new">New</option><option value="contacted">Contacted</option><option value="qualified">Qualified</option><option value="unqualified">Unqualified</option></select></div>' +
@@ -1009,6 +1026,7 @@ async function crmCreateContact() {
 }
 
 async function crmShowEditContact(id) {
+  await crmFetchAllOrgs();
   var resp = await crmAPI.get('/api/crm/contacts/' + id, { headers: crmHeaders() });
   var c = resp.data.contact;
 
@@ -1024,7 +1042,7 @@ async function crmShowEditContact(id) {
         '<div class="crm-form-group"><label>Mobile</label><input class="crm-input" id="crmConMobile" value="' + crmEsc(c.mobile || '') + '"></div>' +
       '</div>' +
       '<div class="crm-form-group"><label>Email</label><input class="crm-input" id="crmConEmail" value="' + crmEsc(c.email || '') + '"></div>' +
-      '<div class="crm-form-group"><label>Organization ID</label><input class="crm-input" id="crmConOrgId" value="' + (c.organization_id || '') + '"></div>' +
+      '<div class="crm-form-group"><label>Organization</label>' + crmOrgSelectHtml('crmConOrgId', c.organization_id) + '</div>' +
       '<div class="crm-form-row">' +
         '<div class="crm-form-group"><label>Lead Source</label><input class="crm-input" id="crmConSource" value="' + crmEsc(c.lead_source || '') + '"></div>' +
         '<div class="crm-form-group"><label>Lead Status</label><select class="crm-input" id="crmConStatus">' +
@@ -1061,7 +1079,8 @@ async function crmSaveContact(id) {
 }
 
 // ==================== NEW/EDIT OPPORTUNITY ====================
-function crmShowNewOpp(orgId, contactId) {
+async function crmShowNewOpp(orgId, contactId) {
+  await crmFetchAllOrgs();
   var stageOpts = crmStages.filter(function(s) { return s.stage_type === 'open'; }).map(function(s) {
     return '<option value="' + s.id + '">' + crmEsc(s.name) + '</option>';
   }).join('');
@@ -1074,7 +1093,7 @@ function crmShowNewOpp(orgId, contactId) {
         '<div class="crm-form-group"><label>Close Date</label><input class="crm-input" id="crmOppCloseDate" type="date"></div>' +
       '</div>' +
       '<div class="crm-form-row">' +
-        '<div class="crm-form-group"><label>Organization ID</label><input class="crm-input" id="crmOppOrgId" value="' + (orgId || '') + '" placeholder="Org ID"></div>' +
+        '<div class="crm-form-group"><label>Organization</label>' + crmOrgSelectHtml('crmOppOrgId', orgId) + '</div>' +
         '<div class="crm-form-group"><label>Contact ID</label><input class="crm-input" id="crmOppContactId" value="' + (contactId || '') + '" placeholder="Contact ID"></div>' +
       '</div>' +
       '<div class="crm-form-group"><label>Stage</label><select class="crm-input" id="crmOppStage">' + stageOpts + '</select></div>' +
@@ -1108,6 +1127,7 @@ async function crmCreateOpp() {
 }
 
 async function crmShowEditOpp(id) {
+  await crmFetchAllOrgs();
   var resp = await crmAPI.get('/api/crm/opportunities/' + id, { headers: crmHeaders() });
   var o = resp.data.opportunity;
 
@@ -1123,7 +1143,7 @@ async function crmShowEditOpp(id) {
         '<div class="crm-form-group"><label>Close Date</label><input class="crm-input" id="crmOppCloseDate" type="date" value="' + (o.close_date || '') + '"></div>' +
       '</div>' +
       '<div class="crm-form-row">' +
-        '<div class="crm-form-group"><label>Organization ID</label><input class="crm-input" id="crmOppOrgId" value="' + (o.organization_id || '') + '"></div>' +
+        '<div class="crm-form-group"><label>Organization</label>' + crmOrgSelectHtml('crmOppOrgId', o.organization_id) + '</div>' +
         '<div class="crm-form-group"><label>Contact ID</label><input class="crm-input" id="crmOppContactId" value="' + (o.contact_id || '') + '"></div>' +
       '</div>' +
       '<div class="crm-form-group"><label>Stage</label><select class="crm-input" id="crmOppStage">' + stageOpts + '</select></div>' +
@@ -1156,7 +1176,8 @@ async function crmSaveOpp(id) {
 }
 
 // ==================== NEW ACTIVITY ====================
-function crmShowNewActivity(entityType, entityId) {
+async function crmShowNewActivity(entityType, entityId) {
+  await crmFetchAllOrgs();
   crmShowModal('<i class="fas fa-stream" style="color:#059669"></i> Log Activity',
     '<div class="crm-edit-form">' +
       '<div class="crm-form-row">' +
@@ -1168,7 +1189,7 @@ function crmShowNewActivity(entityType, entityId) {
       (entityType && entityId ? '<input type="hidden" id="crmActEntityType" value="' + entityType + '"><input type="hidden" id="crmActEntityId" value="' + entityId + '">' : 
         '<div class="crm-form-row">' +
           '<div class="crm-form-group"><label>Contact ID</label><input class="crm-input" id="crmActContactId" placeholder="(optional)"></div>' +
-          '<div class="crm-form-group"><label>Organization ID</label><input class="crm-input" id="crmActOrgId" placeholder="(optional)"></div>' +
+          '<div class="crm-form-group"><label>Organization</label>' + crmOrgSelectHtml('crmActOrgId') + '</div>' +
           '<div class="crm-form-group"><label>Lead ID</label><input class="crm-input" id="crmActOppId" placeholder="(optional)"></div>' +
         '</div>') +
     '</div>',
