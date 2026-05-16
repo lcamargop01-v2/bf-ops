@@ -16,6 +16,14 @@ function getUserFromHeader(c: any): any {
   } catch { return null }
 }
 
+// ==================== USERS (for sales rep dropdown) ====================
+
+app.get('/api/crm/users', async (c) => {
+  const db = c.env.DB
+  const users = await db.prepare('SELECT id, name, email, role FROM users WHERE active = 1 ORDER BY name').all()
+  return c.json({ users: users.results || [] })
+})
+
 // ==================== PIPELINE & STAGES ====================
 
 app.get('/api/crm/pipelines', async (c) => {
@@ -262,8 +270,8 @@ app.get('/api/crm/opportunities', async (c) => {
 app.get('/api/crm/opportunities/:id', async (c) => {
   const db = c.env.DB
   const id = parseInt(c.req.param('id'))
-  const opp = await db.prepare(`SELECT o.*, s.name as stage_name, org.name as org_name, c.first_name || ' ' || COALESCE(c.last_name,'') as contact_name
-    FROM crm_opportunities o LEFT JOIN crm_pipeline_stages s ON o.stage_id = s.id LEFT JOIN crm_organizations org ON o.organization_id = org.id LEFT JOIN crm_contacts c ON o.contact_id = c.id WHERE o.id = ?`).bind(id).first()
+  const opp = await db.prepare(`SELECT o.*, s.name as stage_name, org.name as org_name, c.first_name || ' ' || COALESCE(c.last_name,'') as contact_name, u.name as owner_name
+    FROM crm_opportunities o LEFT JOIN crm_pipeline_stages s ON o.stage_id = s.id LEFT JOIN crm_organizations org ON o.organization_id = org.id LEFT JOIN crm_contacts c ON o.contact_id = c.id LEFT JOIN users u ON o.owner_id = u.id WHERE o.id = ?`).bind(id).first()
   if (!opp) return c.json({ error: 'Opportunity not found' }, 404)
 
   const activities = await db.prepare(`SELECT a.*, u.name as owner_name FROM crm_activities a LEFT JOIN users u ON a.owner_id = u.id WHERE a.opportunity_id = ? ORDER BY a.created_at DESC`).bind(id).all()

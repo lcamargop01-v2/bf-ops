@@ -14,6 +14,7 @@ var crmOpps = [];
 var crmDetailData = null; // current detail view data
 var crmDragOppId = null;
 var crmAllOrgs = []; // cached org list for dropdowns
+var crmAllUsers = []; // cached user list for sales rep dropdowns
 
 // ==================== AUTH BRIDGE ====================
 function crmGetToken() { return localStorage.getItem('bf_ops_token') || localStorage.getItem('bf_token') || ''; }
@@ -29,6 +30,21 @@ async function crmFetchAllOrgs() {
     var resp = await crmAPI.get('/api/crm/organizations?limit=500&offset=0', { headers: crmHeaders() });
     crmAllOrgs = resp.data.organizations || [];
   } catch(e) { crmAllOrgs = []; }
+}
+async function crmFetchAllUsers() {
+  try {
+    var resp = await crmAPI.get('/api/crm/users', { headers: crmHeaders() });
+    crmAllUsers = resp.data.users || [];
+  } catch(e) { crmAllUsers = []; }
+}
+function crmUserSelectHtml(fieldId, selectedId) {
+  var html = '<select class="crm-input" id="' + fieldId + '">';
+  html += '<option value="">(Unassigned)</option>';
+  crmAllUsers.forEach(function(u) {
+    html += '<option value="' + u.id + '"' + (u.id == selectedId ? ' selected' : '') + '>' + crmEsc(u.name) + '</option>';
+  });
+  html += '</select>';
+  return html;
 }
 function crmOrgSelectHtml(fieldId, selectedId, required) {
   var html = '<select class="crm-input" id="' + fieldId + '">';
@@ -258,7 +274,8 @@ async function crmRenderPipeline() {
   ct.innerHTML = '<div class="crm-loading"><i class="fas fa-spinner fa-spin"></i> Loading pipeline...</div>';
   await crmLoadOpps();
 
-  var openStages = crmStages.filter(function(s) { return s.stage_type === 'open'; });
+  var stageColors = { open: '#6366F1', won: '#059669', lost: '#DC2626' };
+  var allStages = crmStages.slice().sort(function(a, b) { return a.sort_order - b.sort_order; });
 
   ct.innerHTML =
     '<div class="crm-pipeline-page">' +
@@ -267,12 +284,14 @@ async function crmRenderPipeline() {
         '<button class="crm-btn crm-btn-primary" onclick="crmShowNewOpp()"><i class="fas fa-plus"></i> New Lead</button>' +
       '</div>' +
       '<div class="crm-pipeline-board" id="crmPipelineBoard">' +
-        openStages.map(function(stage) {
+        allStages.map(function(stage) {
           var stageOpps = crmOpps.filter(function(o) { return o.stage_id === stage.id; });
           var totalVal = stageOpps.reduce(function(s, o) { return s + (parseFloat(o.value) || 0); }, 0);
-          return '<div class="crm-pipeline-col" data-stage-id="' + stage.id + '" ondragover="crmDragOver(event)" ondrop="crmDrop(event, ' + stage.id + ')">' +
+          var colColor = stageColors[stage.stage_type] || stageColors.open;
+          var isTerminal = stage.stage_type === 'won' || stage.stage_type === 'lost';
+          return '<div class="crm-pipeline-col' + (isTerminal ? ' crm-pipeline-col-terminal' : '') + '" data-stage-id="' + stage.id + '" ondragover="crmDragOver(event)" ondrop="crmDrop(event, ' + stage.id + ')" style="border-top:3px solid ' + colColor + '">' +
             '<div class="crm-pipeline-col-header">' +
-              '<div class="crm-pipeline-col-title">' + crmEsc(stage.name) + '</div>' +
+              '<div class="crm-pipeline-col-title">' + (stage.stage_type === 'won' ? '<i class="fas fa-trophy" style="color:#059669;margin-right:4px"></i>' : stage.stage_type === 'lost' ? '<i class="fas fa-times-circle" style="color:#DC2626;margin-right:4px"></i>' : '') + crmEsc(stage.name) + '</div>' +
               '<div class="crm-pipeline-col-meta">' + stageOpps.length + ' &middot; ' + crmFmt$(totalVal) + '</div>' +
             '</div>' +
             '<div class="crm-pipeline-col-body">' +
@@ -280,6 +299,7 @@ async function crmRenderPipeline() {
                 return '<div class="crm-pipeline-card" draggable="true" ondragstart="crmDragStart(event, ' + o.id + ')" onclick="crmViewOpp(' + o.id + ')">' +
                   '<div class="crm-pipeline-card-title">' + crmEsc(o.name) + '</div>' +
                   '<div class="crm-pipeline-card-org">' + crmEsc(o.org_name || '—') + '</div>' +
+                  (o.owner_name ? '<div class="crm-pipeline-card-rep"><i class="fas fa-user-tie"></i> ' + crmEsc(o.owner_name) + '</div>' : '') +
                   '<div class="crm-pipeline-card-footer">' +
                     '<span class="crm-pipeline-card-value">' + crmFmt$(o.value) + '</span>' +
                     (o.close_date ? '<span class="crm-pipeline-card-date">' + crmFmtDate(o.close_date) + '</span>' : '') +
@@ -707,7 +727,7 @@ function crmRenderOppDetail() {
           '<h4><i class="fas fa-link"></i> Related</h4>' +
           crmInfoRow('Organization', o.org_name, o.organization_id ? 'crmViewOrg(' + o.organization_id + ')' : null) +
           crmInfoRow('Contact', o.contact_name && o.contact_name.trim() ? o.contact_name : null, o.contact_id ? 'crmViewContact(' + o.contact_id + ')' : null) +
-          crmInfoRow('Owner', o.owner_name) +
+          crmInfoRow('Sales Rep', o.owner_name) +
           (o.won_at ? crmInfoRow('Won At', crmFmtDateTime(o.won_at)) : '') +
           (o.lost_reason ? crmInfoRow('Lost Reason', o.lost_reason) : '') +
         '</div>' +
@@ -1081,6 +1101,7 @@ async function crmSaveContact(id) {
 // ==================== NEW/EDIT OPPORTUNITY ====================
 async function crmShowNewOpp(orgId, contactId) {
   await crmFetchAllOrgs();
+  await crmFetchAllUsers();
   var stageOpts = crmStages.filter(function(s) { return s.stage_type === 'open'; }).map(function(s) {
     return '<option value="' + s.id + '">' + crmEsc(s.name) + '</option>';
   }).join('');
@@ -1097,7 +1118,10 @@ async function crmShowNewOpp(orgId, contactId) {
         '<div class="crm-form-group"><label>Contact ID</label><input class="crm-input" id="crmOppContactId" value="' + (contactId || '') + '" placeholder="Contact ID"></div>' +
       '</div>' +
       '<div class="crm-form-group"><label>Stage</label><select class="crm-input" id="crmOppStage">' + stageOpts + '</select></div>' +
-      '<div class="crm-form-group"><label>Source</label><input class="crm-input" id="crmOppSource" placeholder="e.g. Referral, Cold Call"></div>' +
+      '<div class="crm-form-row">' +
+        '<div class="crm-form-group"><label>Sales Rep</label>' + crmUserSelectHtml('crmOppOwner', crmUser ? crmUser.id : '') + '</div>' +
+        '<div class="crm-form-group"><label>Source</label><input class="crm-input" id="crmOppSource" placeholder="e.g. Referral, Cold Call"></div>' +
+      '</div>' +
       '<div class="crm-form-group"><label>Notes</label><textarea class="crm-input" id="crmOppNotes" rows="3" placeholder="Notes..."></textarea></div>' +
     '</div>',
     '<button class="crm-btn crm-btn-outline" onclick="crmCloseModal()">Cancel</button>' +
@@ -1118,7 +1142,8 @@ async function crmCreateOpp() {
       stage_id: parseInt(document.getElementById('crmOppStage').value) || null,
       pipeline_id: 1,
       source: document.getElementById('crmOppSource').value || null,
-      notes: document.getElementById('crmOppNotes').value || null
+      notes: document.getElementById('crmOppNotes').value || null,
+      owner_id: parseInt(document.getElementById('crmOppOwner').value) || null
     }, { headers: crmHeaders() });
     crmToast('Lead created');
     crmCloseModal();
@@ -1128,6 +1153,7 @@ async function crmCreateOpp() {
 
 async function crmShowEditOpp(id) {
   await crmFetchAllOrgs();
+  await crmFetchAllUsers();
   var resp = await crmAPI.get('/api/crm/opportunities/' + id, { headers: crmHeaders() });
   var o = resp.data.opportunity;
 
@@ -1147,7 +1173,10 @@ async function crmShowEditOpp(id) {
         '<div class="crm-form-group"><label>Contact ID</label><input class="crm-input" id="crmOppContactId" value="' + (o.contact_id || '') + '"></div>' +
       '</div>' +
       '<div class="crm-form-group"><label>Stage</label><select class="crm-input" id="crmOppStage">' + stageOpts + '</select></div>' +
-      '<div class="crm-form-group"><label>Source</label><input class="crm-input" id="crmOppSource" value="' + crmEsc(o.source || '') + '"></div>' +
+      '<div class="crm-form-row">' +
+        '<div class="crm-form-group"><label>Sales Rep</label>' + crmUserSelectHtml('crmOppOwner', o.owner_id) + '</div>' +
+        '<div class="crm-form-group"><label>Source</label><input class="crm-input" id="crmOppSource" value="' + crmEsc(o.source || '') + '"></div>' +
+      '</div>' +
       '<div class="crm-form-group"><label>Notes</label><textarea class="crm-input" id="crmOppNotes" rows="3">' + crmEsc(o.notes || '') + '</textarea></div>' +
     '</div>',
     '<button class="crm-btn crm-btn-outline" onclick="crmCloseModal()">Cancel</button>' +
@@ -1167,7 +1196,8 @@ async function crmSaveOpp(id) {
       contact_id: parseInt(document.getElementById('crmOppContactId').value) || null,
       stage_id: parseInt(document.getElementById('crmOppStage').value) || null,
       source: document.getElementById('crmOppSource').value || null,
-      notes: document.getElementById('crmOppNotes').value || null
+      notes: document.getElementById('crmOppNotes').value || null,
+      owner_id: parseInt(document.getElementById('crmOppOwner').value) || null
     }, { headers: crmHeaders() });
     crmToast('Saved');
     crmCloseModal();

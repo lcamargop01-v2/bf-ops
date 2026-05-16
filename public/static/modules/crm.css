@@ -207,7 +207,11 @@
 .crm-pipeline-card:hover { border-color: #6366F1; box-shadow: 0 4px 12px rgba(99,102,241,0.12); }
 .crm-pipeline-card.crm-dragging { opacity: 0.5; transform: rotate(2deg); }
 .crm-pipeline-card-title { font-weight: 600; font-size: 14px; color: #0F172A; margin-bottom: 4px; }
-.crm-pipeline-card-org { font-size: 12px; color: #64748B; margin-bottom: 8px; }
+.crm-pipeline-card-org { font-size: 12px; color: #64748B; margin-bottom: 4px; }
+.crm-pipeline-card-rep { font-size: 11px; color: #8B5CF6; margin-bottom: 6px; }
+.crm-pipeline-card-rep i { margin-right: 3px; font-size: 10px; }
+.crm-pipeline-col-terminal { background: #F8FAFC; }
+.crm-pipeline-col-terminal .crm-pipeline-col-body { max-height: 400px; overflow-y: auto; }
 .crm-pipeline-card-footer {
   display: flex;
   justify-content: space-between;
