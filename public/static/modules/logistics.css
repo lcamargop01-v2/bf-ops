@@ -833,6 +833,9 @@ tr[draggable="true"]:hover .drag-handle { color: var(--navy); }
 .sq-scanning .sq-info-status { animation: sqPulse 1.5s ease-in-out infinite; color: var(--orange); font-weight: 600; }
 
 /* Mobile responsive */
+@media (max-width: 768px) {
+  #trSplitGrid { grid-template-columns: 1fr !important; }
+}
 @media (max-width: 480px) {
   .scan-queue-dock { width: calc(100vw - 24px); right: 12px; bottom: 12px; max-height: 400px; }
   .scan-queue-dock.collapsed { width: 220px; }

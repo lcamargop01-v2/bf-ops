@@ -1729,6 +1729,7 @@ function renderSidebarContent() {
     { section: t('nav_operations') },
     { id: 'dashboard', icon: 'fa-tachometer-alt', label: t('nav_dashboard') },
     { id: 'orders', icon: 'fa-clipboard-list', label: t('nav_orders') },
+    { id: 'ticket_review', icon: 'fa-rectangle-list', label: 'Ticket Review', dynamicBadge: 'sqReadyCount' },
     { id: 'schedule', icon: 'fa-calendar-alt', label: t('nav_schedule') },
     { id: 'routes', icon: 'fa-route', label: t('nav_routes') },
     { id: 'route_builder', icon: 'fa-map-location-dot', label: 'Route Builder' },
@@ -1771,7 +1772,7 @@ function renderSidebarContent() {
     <nav class="sidebar-nav">
       ${items.map(item => item.section
         ? `<div class="nav-section">${item.section}</div>`
-        : `<div class="nav-item ${currentPage===item.id?'active':''}" onclick="navigate('${item.id}')"><i class="fas ${item.icon}"></i> ${item.label}${item.badge ? ` <span style="font-size:9px;background:linear-gradient(135deg,#7C3AED,#5B21B6);color:white;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700">${item.badge}</span>` : ''}</div>`
+        : `<div class="nav-item ${currentPage===item.id?'active':''}" onclick="navigate('${item.id}')"><i class="fas ${item.icon}"></i> ${item.label}${item.badge ? ` <span style="font-size:9px;background:linear-gradient(135deg,#7C3AED,#5B21B6);color:white;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700">${item.badge}</span>` : ''}${item.dynamicBadge ? `<span class="nav-badge" id="navBadge_${item.dynamicBadge}" style="display:none"></span>` : ''}</div>`
       ).join('')}
     </nav>
     <div style="padding:12px 16px">${langSelectorHTML()}</div>
@@ -1790,10 +1791,10 @@ function renderSidebarUser() {
 }
 
 function renderPage() {
-  const titles = { dashboard:t('nav_dashboard'), orders:t('nav_orders'), schedule:t('nav_schedule'), routes:t('nav_routes'), route_builder:'Route Builder', zones:t('zones_title'), recurring:t('recurring_title'), customers:t('nav_customers'), products:t('nav_products'), trucks:t('trucks_title'), drivers_mgmt:t('nav_drivers')||'Drivers', maintenance:t('nav_maintenance')||'Fleet Maintenance', driver:t('nav_driver_view'), packing:t('nav_packing_lists'), returns:'Returns', learning:'AI Learning Engine', fleet_tracking:'Fleet Tracking', fleet_sync:'Fleet Sync' };
+  const titles = { dashboard:t('nav_dashboard'), orders:t('nav_orders'), ticket_review:'Ticket Review', schedule:t('nav_schedule'), routes:t('nav_routes'), route_builder:'Route Builder', zones:t('zones_title'), recurring:t('recurring_title'), customers:t('nav_customers'), products:t('nav_products'), trucks:t('trucks_title'), drivers_mgmt:t('nav_drivers')||'Drivers', maintenance:t('nav_maintenance')||'Fleet Maintenance', driver:t('nav_driver_view'), packing:t('nav_packing_lists'), returns:'Returns', learning:'AI Learning Engine', fleet_tracking:'Fleet Tracking', fleet_sync:'Fleet Sync' };
   const el = document.getElementById('pageTitle');
   if (el) el.textContent = titles[currentPage] || '';
-  const pages = { dashboard: renderDashboard, orders: renderOrders, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
+  const pages = { dashboard: renderDashboard, orders: renderOrders, ticket_review: renderTicketReview, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
   const fn = pages[currentPage];
   if (fn) {
     const result = fn();
@@ -14195,6 +14196,451 @@ window._logisticsInit = function() {
   render();
 };
 
+// ==================== TICKET REVIEW PAGE (QuickBooks-style split screen) ====================
+
+async function renderTicketReview() {
+  const pc = document.getElementById('pageContent');
+  const sq = window._scanQueue;
+
+  // Make sure scan queue is initialized
+  sqInit();
+
+  // Fetch customers & products for dropdowns (cache in window)
+  if (!window._custList || !window._custList.length) {
+    try { const r = await API.get('/customers'); window._custList = r.data.customers || []; } catch(e) {}
+  }
+  if (!window._prodList || !window._prodList.length) {
+    try { const r = await API.get('/products'); window._prodList = r.data.products || []; } catch(e) {}
+  }
+
+  // Get reviewable items (ready or error)
+  const reviewable = sq.items.filter(i => i.status === 'ready' || i.status === 'error');
+  const scanning = sq.items.filter(i => i.status === 'scanning' || i.status === 'queued');
+  const selectedIdx = window._trSelectedIdx || 0;
+
+  pc.innerHTML = `
+    <div class="filters-bar no-print" style="flex-wrap:wrap;gap:8px">
+      <h3 style="font-weight:700;font-size:16px"><i class="fas fa-rectangle-list" style="color:var(--orange);margin-right:8px"></i>Ticket Review</h3>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        ${scanning.length > 0 ? `<span style="font-size:13px;color:var(--orange)"><i class="fas fa-circle-notch fa-spin"></i> ${scanning.length} scanning...</span>` : ''}
+        <span style="font-size:13px;color:var(--gray-500)">${reviewable.length} ticket${reviewable.length !== 1 ? 's' : ''} to review</span>
+        <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;position:relative;overflow:hidden">
+          <i class="fas fa-plus"></i> Add Tickets
+          <input type="file" accept="*/*" multiple style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="trAddFiles(event)">
+        </label>
+        <button class="btn btn-outline btn-sm" onclick="trStartCamera()"><i class="fas fa-camera"></i></button>
+      </div>
+    </div>
+
+    <div id="trContent">
+      ${reviewable.length === 0 && scanning.length === 0 ? trEmptyState() : ''}
+      ${reviewable.length === 0 && scanning.length > 0 ? trScanningState(scanning) : ''}
+      ${reviewable.length > 0 ? trSplitView(reviewable, selectedIdx) : ''}
+    </div>
+  `;
+
+  // Load addresses if a customer is pre-selected
+  if (reviewable.length > 0) {
+    const item = reviewable[Math.min(selectedIdx, reviewable.length - 1)];
+    if (item.result?.customer_id) {
+      trLoadAddresses(item.result.customer_id, item.result?.delivery_address);
+    }
+  }
+
+  // Set up auto-refresh when scanning
+  if (scanning.length > 0) {
+    window._trRefreshTimer = setTimeout(() => {
+      if (currentPage === 'ticket_review') renderTicketReview();
+    }, 3000);
+  }
+}
+
+function trEmptyState() {
+  return `
+    <div class="card" style="padding:60px;text-align:center">
+      <div style="font-size:48px;color:var(--gray-300);margin-bottom:16px"><i class="fas fa-inbox"></i></div>
+      <h3 style="color:var(--gray-600);margin-bottom:8px">No tickets to review</h3>
+      <p style="color:var(--gray-400);margin-bottom:20px;font-size:14px">Upload ticket photos to scan them with AI and create orders</p>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+        <label class="btn btn-primary" style="cursor:pointer;margin:0;position:relative;overflow:hidden">
+          <i class="fas fa-upload"></i> Upload Ticket Photos
+          <input type="file" accept="*/*" multiple style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="trAddFiles(event)">
+        </label>
+        <button class="btn btn-outline" onclick="trStartCamera()"><i class="fas fa-camera"></i> Take Photo</button>
+      </div>
+    </div>`;
+}
+
+function trScanningState(scanning) {
+  return `
+    <div class="card" style="padding:40px;text-align:center">
+      <div style="font-size:40px;color:var(--orange);margin-bottom:16px"><i class="fas fa-cog fa-spin"></i></div>
+      <h3 style="color:var(--gray-600);margin-bottom:8px">Scanning ${scanning.length} ticket${scanning.length !== 1 ? 's' : ''}...</h3>
+      <p style="color:var(--gray-400);font-size:14px">AI is extracting order details. This page will update automatically.</p>
+      <div style="display:flex;gap:12px;justify-content:center;margin-top:20px;flex-wrap:wrap">
+        ${scanning.map(item => `
+          <div style="width:80px;text-align:center">
+            <div style="width:64px;height:64px;border-radius:10px;background:var(--gray-100);display:flex;align-items:center;justify-content:center;margin:0 auto 6px">
+              ${item.thumbnail ? `<img src="${item.thumbnail}" style="width:64px;height:64px;object-fit:cover;border-radius:10px">` : '<i class="fas fa-image" style="font-size:24px;color:var(--gray-300)"></i>'}
+            </div>
+            <div style="font-size:11px;color:var(--orange);font-weight:600"><i class="fas fa-circle-notch fa-spin"></i> ${item.status === 'queued' ? 'Queued' : 'Scanning'}</div>
+          </div>
+        `).join('')}
+      </div>
+      <div style="margin-top:20px">
+        <label class="btn btn-outline btn-sm" style="cursor:pointer;margin:0;position:relative;overflow:hidden">
+          <i class="fas fa-plus"></i> Add More
+          <input type="file" accept="*/*" multiple style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="trAddFiles(event)">
+        </label>
+      </div>
+    </div>`;
+}
+
+function trSplitView(reviewable, selectedIdx) {
+  const idx = Math.min(selectedIdx, reviewable.length - 1);
+  const item = reviewable[idx];
+  const result = item.result || {};
+  const isError = item.status === 'error';
+
+  // Ticket thumbnails strip
+  const strip = reviewable.map((r, i) => {
+    const isActive = i === idx;
+    const icon = r.status === 'ready' ? 'fa-check-circle' : 'fa-exclamation-circle';
+    const iconColor = r.status === 'ready' ? 'var(--green)' : 'var(--red)';
+    return `<div onclick="trSelectTicket(${i})" style="cursor:pointer;flex-shrink:0;position:relative;border:2px solid ${isActive ? 'var(--navy)' : 'transparent'};border-radius:10px;overflow:hidden;width:56px;height:56px;transition:border 0.2s">
+      <img src="${r.thumbnail}" style="width:56px;height:56px;object-fit:cover;display:block;${!isActive ? 'opacity:0.6' : ''}">
+      <i class="fas ${icon}" style="position:absolute;bottom:2px;right:2px;font-size:12px;color:${iconColor};background:white;border-radius:50%;padding:1px"></i>
+    </div>`;
+  }).join('');
+
+  // Customer dropdown
+  const customers = window._custList || [];
+  const matchedCustId = result.customer_id || '';
+  const custOpts = customers.map(c =>
+    `<option value="${c.id}" ${c.id == matchedCustId ? 'selected' : ''}>${c.business_name}</option>`
+  ).join('');
+  const newCustOpt = !matchedCustId && result.customer_name
+    ? `<option value="__new__" selected>+ New: ${escapeHtml(result.customer_name)}</option>` : '';
+
+  // Items
+  const items = result.items || [];
+  const products = window._prodList || [];
+  const itemRows = items.map((itm, i) => {
+    const prod = itm.product_id ? products.find(p => p.id === itm.product_id) : null;
+    const name = prod ? prod.name : (itm.product_name || 'Unknown product');
+    const sku = prod ? prod.sku : (itm.sku || '');
+    const unit = prod ? (prod.unit_type || 'bag') : (itm.unit || 'bag');
+    return `<tr>
+      <td style="max-width:180px"><strong style="font-size:13px">${escapeHtml(name)}</strong>${sku ? '<br><code style="font-size:10px;color:var(--gray-400)">' + escapeHtml(sku) + '</code>' : ''}</td>
+      <td><input type="number" class="form-input" value="${itm.quantity || 1}" min="1" style="width:65px;font-size:13px" id="trQty_${i}"></td>
+      <td style="font-size:12px;color:var(--gray-500)">${unit}</td>
+    </tr>`;
+  }).join('');
+
+  const confPct = Math.round((result.confidence || 0) * 100);
+  const confClass = confPct >= 70 ? 'high' : confPct >= 40 ? 'medium' : 'low';
+
+  return `
+    <!-- Ticket strip -->
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;overflow-x:auto;padding:4px 0">
+      ${strip}
+      <div style="flex-shrink:0;font-size:12px;color:var(--gray-400);margin-left:4px">${idx + 1} of ${reviewable.length}</div>
+    </div>
+
+    <!-- Split screen -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start" id="trSplitGrid">
+      <!-- LEFT: Ticket image -->
+      <div class="card" style="padding:0;overflow:hidden;position:sticky;top:80px">
+        <div style="padding:10px 14px;background:var(--gray-50);border-bottom:1px solid var(--gray-200);display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:13px;font-weight:700;color:var(--gray-600)"><i class="fas fa-image" style="margin-right:6px;color:var(--orange)"></i>Ticket Image</span>
+          <span class="confidence-badge confidence-${confClass}" style="font-size:11px"><i class="fas fa-signal"></i> ${confPct}%</span>
+        </div>
+        <div style="background:#1a1a1a;display:flex;align-items:center;justify-content:center;min-height:400px;max-height:70vh;overflow:auto">
+          <img src="${item.thumbnail}" style="max-width:100%;max-height:70vh;object-fit:contain;display:block" id="trTicketImg" onclick="trZoomImage(this)">
+        </div>
+        ${result.raw_text ? `<div style="padding:10px 14px;background:var(--gray-50);border-top:1px solid var(--gray-200);max-height:100px;overflow-y:auto">
+          <div style="font-size:10px;font-weight:600;color:var(--gray-400);text-transform:uppercase;margin-bottom:4px">Extracted Text</div>
+          <div style="font-size:11px;color:var(--gray-600);white-space:pre-wrap;font-family:monospace">${escapeHtml(result.raw_text)}</div>
+        </div>` : ''}
+      </div>
+
+      <!-- RIGHT: Order form -->
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="padding:10px 14px;background:var(--gray-50);border-bottom:1px solid var(--gray-200)">
+          <span style="font-size:13px;font-weight:700;color:var(--gray-600)"><i class="fas fa-clipboard-list" style="margin-right:6px;color:var(--navy-light)"></i>${isError ? 'Scan Failed — Manual Entry' : 'Order Details'}</span>
+        </div>
+        <div style="padding:16px">
+          ${isError ? `<div style="padding:10px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;margin-bottom:16px;font-size:13px;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> ${escapeHtml(item.error || 'Could not extract details')}. <button class="btn btn-outline btn-sm" style="margin-left:8px" onclick="trRetryItem(${item.id})"><i class="fas fa-redo"></i> Retry Scan</button></div>` : ''}
+
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="form-label" style="font-size:12px">Customer *</label>
+            <select class="form-select" id="trCustomer" onchange="trLoadAddresses(this.value)">
+              <option value="">— Select customer —</option>
+              ${custOpts}
+              ${newCustOpt}
+            </select>
+          </div>
+
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="form-label" style="font-size:12px">Delivery Address</label>
+            <select class="form-select" id="trAddress"><option value="">Loading...</option></select>
+          </div>
+
+          <div class="form-row" style="gap:10px;margin-bottom:12px">
+            <div class="form-group" style="flex:1">
+              <label class="form-label" style="font-size:12px">Order #</label>
+              <input class="form-input" id="trOrderNum" value="${escapeHtml(result.order_number || '')}" placeholder="Auto if empty" style="font-family:monospace;font-size:13px">
+            </div>
+            <div class="form-group" style="flex:1">
+              <label class="form-label" style="font-size:12px">Delivery Date</label>
+              <input class="form-input" type="date" id="trDate" value="${result.delivery_date || ''}">
+            </div>
+          </div>
+
+          <div class="form-row" style="gap:10px;margin-bottom:12px">
+            <div class="form-group" style="flex:1">
+              <label class="form-label" style="font-size:12px">Priority</label>
+              <select class="form-select" id="trPriority">
+                <option value="normal" ${(result.priority||'normal')==='normal'?'selected':''}>Normal</option>
+                <option value="high" ${result.priority==='high'?'selected':''}>High</option>
+                <option value="urgent" ${result.priority==='urgent'?'selected':''}>Urgent</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex:1">
+              <label class="form-label" style="font-size:12px">Notes</label>
+              <input class="form-input" id="trNotes" value="${escapeHtml(result.special_instructions || '')}" placeholder="Special instructions">
+            </div>
+          </div>
+
+          <div style="margin-bottom:12px">
+            <label class="form-label" style="font-size:12px">Items (${items.length})</label>
+            ${items.length > 0 ? `<table class="sq-review-items-table" style="width:100%">
+              <thead><tr><th>Product</th><th>Qty</th><th>Unit</th></tr></thead>
+              <tbody>${itemRows}</tbody>
+            </table>` : '<div style="padding:12px;background:var(--gray-50);border-radius:8px;font-size:13px;color:var(--gray-400);text-align:center">No items extracted</div>'}
+          </div>
+
+          <!-- Action buttons -->
+          <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--gray-200)">
+            <button class="btn btn-outline btn-sm" onclick="trSkipTicket(${item.id})" style="flex:0"><i class="fas fa-forward"></i> Skip</button>
+            <button class="btn btn-outline btn-sm" onclick="trDismissTicket(${item.id})" style="flex:0;color:var(--red)"><i class="fas fa-trash"></i></button>
+            <div style="flex:1"></div>
+            <button class="btn btn-primary" onclick="trCreateOrder(${item.id})" id="trCreateBtn"><i class="fas fa-check"></i> Create Order</button>
+          </div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:8px;text-align:right">
+            ${reviewable.length > 1 ? `Will auto-advance to next ticket (${reviewable.length - 1} remaining)` : 'Last ticket in queue'}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function trAddFiles(event) {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+  sqInit();
+  sqShow();
+  for (let i = 0; i < files.length; i++) {
+    sqAddFile(files[i]);
+  }
+  event.target.value = '';
+  // If we're on the review page, refresh it after a short delay
+  if (currentPage === 'ticket_review') {
+    setTimeout(() => renderTicketReview(), 500);
+  }
+}
+
+function trStartCamera() {
+  var tempInput = document.createElement('input');
+  tempInput.type = 'file';
+  tempInput.accept = 'image/*';
+  tempInput.capture = 'environment';
+  tempInput.style.display = 'none';
+  tempInput.onchange = function(e) {
+    if (e.target.files[0]) {
+      sqInit();
+      sqShow();
+      sqAddFile(e.target.files[0]);
+      if (currentPage === 'ticket_review') {
+        setTimeout(() => renderTicketReview(), 500);
+      }
+    }
+    tempInput.remove();
+  };
+  document.body.appendChild(tempInput);
+  tempInput.click();
+}
+
+function trSelectTicket(idx) {
+  window._trSelectedIdx = idx;
+  renderTicketReview();
+}
+
+async function trLoadAddresses(custId, ticketAddr) {
+  const sel = document.getElementById('trAddress');
+  if (!sel) return;
+  if (!custId || custId === '__new__') {
+    sel.innerHTML = '<option value="">Will use ticket address</option>';
+    return;
+  }
+  try {
+    const { data } = await API.get('/customers/' + custId);
+    const addrs = data.addresses || [];
+    sel.innerHTML = addrs.length > 0
+      ? addrs.map(a => `<option value="${a.id}">${a.label}: ${a.street}, ${a.city}</option>`).join('')
+      : '<option value="">No addresses on file</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Error loading addresses</option>';
+  }
+}
+
+function trZoomImage(img) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:20px';
+  overlay.onclick = () => overlay.remove();
+  const bigImg = document.createElement('img');
+  bigImg.src = img.src;
+  bigImg.style.cssText = 'max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px';
+  overlay.appendChild(bigImg);
+  document.body.appendChild(overlay);
+}
+
+function trRetryItem(id) {
+  sqRetryItem(id);
+  setTimeout(() => renderTicketReview(), 500);
+}
+
+function trSkipTicket(id) {
+  const sq = window._scanQueue;
+  const reviewable = sq.items.filter(i => i.status === 'ready' || i.status === 'error');
+  const curIdx = window._trSelectedIdx || 0;
+  // Move to next ticket
+  if (curIdx < reviewable.length - 1) {
+    window._trSelectedIdx = curIdx; // stays same since we skip
+  } else {
+    window._trSelectedIdx = Math.max(0, curIdx - 1);
+  }
+  sqDismissItem(id);
+  renderTicketReview();
+}
+
+function trDismissTicket(id) {
+  window._trSelectedIdx = 0;
+  sqDismissItem(id);
+  renderTicketReview();
+}
+
+async function trCreateOrder(id) {
+  const sq = window._scanQueue;
+  const item = sq.items.find(i => i.id === id);
+  if (!item) return;
+
+  const btn = document.getElementById('trCreateBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...'; }
+
+  const result = item.result || {};
+  const custVal = document.getElementById('trCustomer')?.value;
+  const addrVal = document.getElementById('trAddress')?.value;
+  const items = result.items || [];
+
+  try {
+    let customerId = custVal;
+
+    // Auto-create customer if new
+    if (custVal === '__new__' || (!custVal && result.customer_name)) {
+      const custPayload = {
+        business_name: result.customer_name,
+        contact_name: result.contact_name || null,
+        phone: result.phone || null,
+        email: result.email || null,
+        customer_type: 'farm',
+      };
+      if (result.delivery_address?.street) {
+        custPayload.address = {
+          street: result.delivery_address.street,
+          city: result.delivery_address.city || 'Wellington',
+          state: result.delivery_address.state || 'FL',
+          zip: result.delivery_address.zip || null,
+        };
+      }
+      const { data: newCust } = await API.post('/customers', custPayload);
+      customerId = newCust.id;
+      if (window._custList) window._custList.push(newCust.customer || { id: newCust.id, business_name: result.customer_name });
+    }
+
+    if (!customerId) {
+      showToast('Please select a customer', 'warning');
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Create Order'; }
+      return;
+    }
+
+    // Auto-create unmatched products
+    const orderItems = [];
+    for (let i = 0; i < items.length; i++) {
+      const itm = items[i];
+      const qty = parseInt(document.getElementById('trQty_' + i)?.value) || itm.quantity || 1;
+      if (itm.product_id) {
+        orderItems.push({ product_id: itm.product_id, quantity: qty });
+      } else if (itm.product_name) {
+        try {
+          const { data: newProd } = await API.post('/products', {
+            name: itm.product_name, sku: itm.sku || null,
+            category: 'other', weight_per_unit: 50, unit_type: 'bag', price: itm.price || 0,
+          });
+          const prod = newProd.product || { id: newProd.id };
+          if (window._prodList) window._prodList.push(prod);
+          orderItems.push({ product_id: prod.id, quantity: qty });
+        } catch (e) { console.error('Auto-create product failed:', e); }
+      }
+    }
+
+    // Get address
+    let addrId = addrVal ? parseInt(addrVal) : null;
+    if (!addrId && customerId && (custVal === '__new__' || !custVal)) {
+      try {
+        const { data: cd } = await API.get('/customers/' + customerId);
+        if (cd.addresses?.length) addrId = cd.addresses[0].id;
+      } catch(e) {}
+    }
+
+    const { data } = await API.post('/orders', {
+      customer_id: parseInt(customerId),
+      address_id: addrId,
+      order_number: document.getElementById('trOrderNum')?.value.trim() || null,
+      priority: document.getElementById('trPriority')?.value,
+      scheduled_date: document.getElementById('trDate')?.value || null,
+      special_instructions: document.getElementById('trNotes')?.value || null,
+      items: orderItems,
+      created_by: currentUser?.id,
+      ticket_image: item.imageData || null,
+    });
+
+    // Mark as created and remove
+    item.status = 'created';
+    showToast(`Order ${data.order_number} created!`, 'success');
+
+    // Advance to next ticket
+    const remaining = sq.items.filter(i => i.status === 'ready' || i.status === 'error');
+    if (remaining.length > 0) {
+      // Remove the created item and re-render at same index
+      sq.items = sq.items.filter(i => i.id !== id);
+      window._trSelectedIdx = 0;
+    } else {
+      sq.items = sq.items.filter(i => i.id !== id);
+      window._trSelectedIdx = 0;
+    }
+    sqRenderList();
+    sqUpdateBadge();
+    renderTicketReview();
+
+  } catch (err) {
+    console.error('TR create order error:', err);
+    showToast('Failed: ' + (err.response?.data?.error || err.message), 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Create Order'; }
+  }
+}
+
 // ==================== SCAN QUEUE (QuickBooks-style background scanning) ====================
 
 window._scanQueue = {
@@ -14250,9 +14696,21 @@ function sqToggleCollapse() {
 
 function sqUpdateBadge() {
   const sq = window._scanQueue;
-  const pending = sq.items.filter(i => i.status === 'scanning' || i.status === 'ready').length;
+  const scanning = sq.items.filter(i => i.status === 'scanning' || i.status === 'queued').length;
+  const ready = sq.items.filter(i => i.status === 'ready').length;
+  const total = scanning + ready;
   const badge = document.getElementById('sqBadge');
-  if (badge) badge.textContent = pending;
+  if (badge) badge.textContent = total;
+  // Update sidebar nav badge
+  const navBadge = document.getElementById('navBadge_sqReadyCount');
+  if (navBadge) {
+    if (ready > 0) {
+      navBadge.textContent = ready;
+      navBadge.style.display = '';
+    } else {
+      navBadge.style.display = 'none';
+    }
+  }
 }
 
 function sqRenderList() {
@@ -14282,7 +14740,7 @@ function sqRenderList() {
       const custName = item.result?.customer_name || item.result?.customer_id ? 'Customer matched' : 'Unknown';
       const itemCount = item.result?.items?.length || 0;
       statusHtml = `<span style="color:var(--green)"><i class="fas fa-check-circle"></i> Ready</span> &middot; ${custName} &middot; ${itemCount} item${itemCount !== 1 ? 's' : ''}`;
-      actionsHtml = `<button class="sq-item-btn review" onclick="sqReviewItem(${item.id})" title="Review & create order"><i class="fas fa-check"></i></button>`;
+      actionsHtml = `<button class="sq-item-btn review" onclick="navigate('ticket_review')" title="Review & create order"><i class="fas fa-check"></i></button>`;
     } else if (item.status === 'error') {
       thumbHtml = `<img class="sq-thumb" src="${item.thumbnail}" alt="ticket" style="opacity:0.5">`;
       statusHtml = `<span style="color:var(--red)"><i class="fas fa-exclamation-circle"></i> Failed</span>`;
@@ -14411,7 +14869,15 @@ function sqProcessNext() {
 function sqNotify(item) {
   const custName = item.result?.customer_name || 'Unknown customer';
   const itemCount = item.result?.items?.length || 0;
-  showToast(`Ticket scanned: ${custName}, ${itemCount} item${itemCount !== 1 ? 's' : ''} — tap to review`, 'success');
+  showToast(`Ticket scanned: ${custName}, ${itemCount} item${itemCount !== 1 ? 's' : ''} — open Ticket Review`, 'success');
+
+  // Update sidebar badge
+  sqUpdateBadge();
+
+  // If on the ticket review page, auto-refresh
+  if (currentPage === 'ticket_review') {
+    renderTicketReview();
+  }
 
   // Expand dock if collapsed
   if (window._scanQueue.collapsed) {
@@ -14704,12 +15170,16 @@ function openScanQueue() {
   sqShow();
 }
 
-// Batch upload from the orders page — dedicated button
+// Batch upload — navigate to review page and trigger file picker
 function sqBatchUpload() {
+  sqInit();
   sqShow();
-  // Trigger file picker
-  const input = document.querySelector('#scanQueueDock .sq-actions input[type="file"]');
-  if (input) input.click();
+  navigate('ticket_review');
+  // Small delay so the page renders before triggering file picker
+  setTimeout(() => {
+    const input = document.querySelector('#trContent input[type="file"]');
+    if (input) input.click();
+  }, 200);
 }
 
 // Expose cleanup for when parent shell unloads this module
@@ -14725,6 +15195,8 @@ window._logisticsCleanup = function() {
   }
   window._scanQueue.items = [];
   window._scanQueue.activeCount = 0;
+  if (window._trRefreshTimer) clearTimeout(window._trRefreshTimer);
+  window._trSelectedIdx = 0;
   // Reset state
   currentUser = null;
   currentPage = 'dashboard';
