@@ -2934,13 +2934,13 @@ async function showNewOrderModal() {
           <span class="badge badge-normal" style="font-size:11px" id="ocrStatusBadge">${ocrStatusHtml}</span>
         </div>
         <div class="ticket-scan-body">
-          <div class="ticket-upload-area" id="ticketUploadArea" onclick="document.getElementById('ticketFileInput').click()">
+          <div class="ticket-upload-area" id="ticketUploadArea" onclick="triggerTicketUpload(event)">
             <div id="ticketPlaceholder">
               <div class="ticket-upload-icon"><i class="fas fa-file-image"></i></div>
               <div class="ticket-upload-text">Upload or snap a photo of the order ticket</div>
               <div class="ticket-upload-hint">Supports camera capture, JPG, PNG &bull; AI will auto-extract order details</div>
               <div class="ticket-actions" onclick="event.stopPropagation()">
-                <button class="btn btn-primary btn-sm" onclick="document.getElementById('ticketFileInput').click()"><i class="fas fa-upload"></i> Upload File</button>
+                <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0"><i class="fas fa-upload"></i> Upload File<input type="file" accept="*/*" style="display:none;position:absolute;opacity:0;width:0;height:0" onchange="handleTicketFile(event)"></label>
                 <button class="btn btn-outline btn-sm" onclick="startCameraCapture()"><i class="fas fa-camera"></i> Take Photo</button>
               </div>
             </div>
@@ -2949,7 +2949,7 @@ async function showNewOrderModal() {
               <div class="ticket-actions" onclick="event.stopPropagation()">
                 <button class="btn btn-warning btn-sm" id="scanTicketBtn" onclick="scanTicketImage()"><i class="fas fa-magic"></i> Scan Ticket</button>
                 <button class="btn btn-outline btn-sm" onclick="clearTicketUpload()"><i class="fas fa-trash"></i> Remove</button>
-                <button class="btn btn-outline btn-sm" onclick="document.getElementById('ticketFileInput').click()"><i class="fas fa-redo"></i> Retake</button>
+                <button class="btn btn-outline btn-sm" onclick="triggerTicketUpload(event)"><i class="fas fa-redo"></i> Retake</button>
               </div>
             </div>
             <div id="ticketScanOverlay" class="scan-overlay" style="display:none">
@@ -2959,7 +2959,7 @@ async function showNewOrderModal() {
               <div class="scan-progress"><div class="scan-progress-bar"></div></div>
             </div>
           </div>
-          <input type="file" id="ticketFileInput" accept="image/jpeg,image/png,image/heic,image/heif,image/webp,.jpg,.jpeg,.png,.heic,.heif,.webp" style="display:none" onchange="handleTicketFile(event)">
+          <input type="file" id="ticketFileInput" accept="*/*" style="display:none" onchange="handleTicketFile(event)">
           <div id="scanResultBanner"></div>
           ${!serverOcrReady ? `<div style="margin-top:10px;padding:10px 12px;background:var(--gray-50);border-radius:8px;border:1px solid var(--gray-200)">
             <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer" onclick="toggleApiKeySettings()">
@@ -3209,6 +3209,19 @@ function compressImage(file, maxDim, quality) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+function triggerTicketUpload(event) {
+  // Only trigger if tapping the area itself, not a button inside it
+  if (event.target.closest('.ticket-actions') || event.target.closest('button') || event.target.closest('label')) return;
+  // Create a fresh input without capture to get gallery picker
+  var tempInput = document.createElement('input');
+  tempInput.type = 'file';
+  tempInput.accept = '*/*';
+  tempInput.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+  tempInput.onchange = function(e) { handleTicketFile(e); tempInput.remove(); };
+  document.body.appendChild(tempInput);
+  tempInput.click();
 }
 
 function startCameraCapture() {
@@ -9743,14 +9756,14 @@ function showDeliveryProofModal(stopId, orderId, businessName, orderNumber, lat,
           ${t('proof_take_photo')} <span style="color:var(--red)">*</span>
           <span style="font-size:11px;color:var(--gray-400);font-weight:400">(Required)</span>
         </label>
-        <div class="proof-upload-area" id="proofUploadArea" onclick="document.getElementById('proofPhotoInput').click()">
+        <div class="proof-upload-area" id="proofUploadArea" onclick="triggerProofUpload(event)">
           <div id="proofPlaceholder">
             <div style="font-size:36px;color:var(--gray-300);margin-bottom:8px"><i class="fas fa-camera-retro"></i></div>
             <div style="font-size:14px;font-weight:600;color:var(--gray-600)">Take a photo of the delivered goods</div>
             <div style="font-size:12px;color:var(--gray-400);margin-top:4px">Photo at delivery location with visible feed bags</div>
             <div style="display:flex;gap:8px;justify-content:center;margin-top:12px" onclick="event.stopPropagation()">
               <button class="btn btn-primary btn-sm" onclick="captureProofPhoto()"><i class="fas fa-camera"></i> ${t('proof_take_photo')}</button>
-              <button class="btn btn-outline btn-sm" onclick="document.getElementById('proofPhotoInput').click()"><i class="fas fa-upload"></i> ${t('proof_upload_photo')}</button>
+              <label class="btn btn-outline btn-sm" style="cursor:pointer;margin:0"><i class="fas fa-upload"></i> ${t('proof_upload_photo')}<input type="file" accept="*/*" style="display:none;position:absolute;opacity:0;width:0;height:0" onchange="handleProofPhoto(event)"></label>
             </div>
           </div>
           <div id="proofPreviewContainer" style="display:none">
@@ -9761,7 +9774,7 @@ function showDeliveryProofModal(stopId, orderId, businessName, orderNumber, lat,
             </div>
           </div>
         </div>
-        <input type="file" id="proofPhotoInput" accept="image/jpeg,image/png,image/heic,image/heif,image/webp,.jpg,.jpeg,.png,.heic,.heif,.webp" style="display:none" onchange="handleProofPhoto(event)">
+        <input type="file" id="proofPhotoInput" accept="*/*" style="display:none" onchange="handleProofPhoto(event)">
       </div>
 
       <div class="form-group" style="margin-bottom:8px">
@@ -9783,6 +9796,17 @@ function showDeliveryProofModal(stopId, orderId, businessName, orderNumber, lat,
   </div>`;
   document.body.appendChild(modal);
   window._proofPhotoData = null;
+}
+
+function triggerProofUpload(event) {
+  if (event.target.closest('button') || event.target.closest('label')) return;
+  var tempInput = document.createElement('input');
+  tempInput.type = 'file';
+  tempInput.accept = '*/*';
+  tempInput.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+  tempInput.onchange = function(e) { handleProofPhoto(e); tempInput.remove(); };
+  document.body.appendChild(tempInput);
+  tempInput.click();
 }
 
 function captureProofPhoto() {
@@ -10974,17 +10998,17 @@ function showReportIssueModal() {
       <div class="form-group"><label class="form-label">${t('maint_description')} *</label><textarea class="form-textarea" id="issueDesc" rows="3" placeholder="Describe the issue in detail..."></textarea></div>
       <div class="form-group">
         <label class="form-label"><i class="fas fa-camera" style="color:var(--orange);margin-right:4px"></i> Attach Photo</label>
-        <div class="proof-upload-area" style="min-height:80px" id="issuePhotoArea" onclick="document.getElementById('issuePhotoInput').click()">
+        <div class="proof-upload-area" style="min-height:80px" id="issuePhotoArea" onclick="triggerIssueUpload(event)">
           <div id="issuePhotoPlaceholder" style="text-align:center;padding:16px">
             <i class="fas fa-camera" style="font-size:24px;color:var(--gray-300)"></i>
-            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">Click to take or upload a photo of the issue</div>
+            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">Tap to upload a photo of the issue</div>
           </div>
           <div id="issuePhotoPreview" style="display:none;text-align:center">
             <img id="issuePhotoImg" style="max-height:150px;max-width:100%;border-radius:8px;object-fit:contain">
             <div style="margin-top:6px"><span class="badge badge-confirmed"><i class="fas fa-check"></i> Photo attached</span></div>
           </div>
         </div>
-        <input type="file" id="issuePhotoInput" accept="image/jpeg,image/png,image/heic,image/heif,image/webp,.jpg,.jpeg,.png,.heic,.heif,.webp" style="display:none" onchange="handleIssuePhoto(event)">
+        <input type="file" id="issuePhotoInput" accept="*/*" style="display:none" onchange="handleIssuePhoto(event)">
       </div>
     </div>
     <div class="modal-footer">
@@ -10994,6 +11018,17 @@ function showReportIssueModal() {
   </div>`;
   document.body.appendChild(modal);
   window._issuePhotoData = null;
+}
+
+function triggerIssueUpload(event) {
+  if (event.target.closest('button') || event.target.closest('label')) return;
+  var tempInput = document.createElement('input');
+  tempInput.type = 'file';
+  tempInput.accept = '*/*';
+  tempInput.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+  tempInput.onchange = function(e) { handleIssuePhoto(e); tempInput.remove(); };
+  document.body.appendChild(tempInput);
+  tempInput.click();
 }
 
 function handleIssuePhoto(event) {
