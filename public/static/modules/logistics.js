@@ -2959,7 +2959,7 @@ async function showNewOrderModal() {
               <div class="scan-progress"><div class="scan-progress-bar"></div></div>
             </div>
           </div>
-          <input type="file" id="ticketFileInput" accept="image/*" capture="environment" style="display:none" onchange="handleTicketFile(event)">
+          <input type="file" id="ticketFileInput" accept="image/*" style="display:none" onchange="handleTicketFile(event)">
           <div id="scanResultBanner"></div>
           ${!serverOcrReady ? `<div style="margin-top:10px;padding:10px 12px;background:var(--gray-50);border-radius:8px;border:1px solid var(--gray-200)">
             <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer" onclick="toggleApiKeySettings()">
@@ -3216,6 +3216,8 @@ function startCameraCapture() {
   const input = document.getElementById('ticketFileInput');
   input.setAttribute('capture', 'environment');
   input.click();
+  // Remove capture after click so Upload File opens gallery next time
+  setTimeout(function() { input.removeAttribute('capture'); }, 500);
 }
 
 function showTicketPreview(dataUrl) {
@@ -9756,7 +9758,7 @@ function showDeliveryProofModal(stopId, orderId, businessName, orderNumber, lat,
             </div>
           </div>
         </div>
-        <input type="file" id="proofPhotoInput" accept="image/*" capture="environment" style="display:none" onchange="handleProofPhoto(event)">
+        <input type="file" id="proofPhotoInput" accept="image/*" style="display:none" onchange="handleProofPhoto(event)">
       </div>
 
       <div class="form-group" style="margin-bottom:8px">
@@ -9784,6 +9786,7 @@ function captureProofPhoto() {
   const input = document.getElementById('proofPhotoInput');
   input.setAttribute('capture', 'environment');
   input.click();
+  setTimeout(function() { input.removeAttribute('capture'); }, 500);
 }
 
 function handleProofPhoto(event) {
@@ -10974,7 +10977,7 @@ function showReportIssueModal() {
             <div style="margin-top:6px"><span class="badge badge-confirmed"><i class="fas fa-check"></i> Photo attached</span></div>
           </div>
         </div>
-        <input type="file" id="issuePhotoInput" accept="image/*" capture="environment" style="display:none" onchange="handleIssuePhoto(event)">
+        <input type="file" id="issuePhotoInput" accept="image/*" style="display:none" onchange="handleIssuePhoto(event)">
       </div>
     </div>
     <div class="modal-footer">
