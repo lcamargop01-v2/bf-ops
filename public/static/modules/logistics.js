@@ -14194,6 +14194,8 @@ window._logisticsInit = function() {
     } catch (e) { clearToken(); }
   }
   render();
+  // Initialize scan queue (restores from localStorage if there are saved items)
+  sqInit();
 };
 
 // ==================== TICKET REVIEW PAGE (QuickBooks-style split screen) ====================
@@ -14652,6 +14654,58 @@ window._scanQueue = {
   activeCount: 0,
 };
 
+// Persist scan queue to localStorage
+function sqSave() {
+  try {
+    const sq = window._scanQueue;
+    const serializable = sq.items.map(item => ({
+      id: item.id,
+      fileName: item.fileName,
+      thumbnail: item.thumbnail,
+      imageData: item.imageData,
+      status: item.status,
+      result: item.result,
+      error: item.error,
+      createdAt: item.createdAt,
+    }));
+    localStorage.setItem('bf_scan_queue', JSON.stringify({ items: serializable, nextId: sq.nextId }));
+  } catch (e) {
+    // localStorage might be full with large base64 images — silently fail
+    console.warn('Failed to save scan queue:', e.message);
+  }
+}
+
+// Restore scan queue from localStorage
+function sqRestore() {
+  try {
+    const saved = localStorage.getItem('bf_scan_queue');
+    if (!saved) return;
+    const data = JSON.parse(saved);
+    const sq = window._scanQueue;
+    sq.nextId = data.nextId || 1;
+    sq.items = (data.items || []).map(item => ({
+      ...item,
+      file: null, // File objects can't be serialized
+    }));
+    // Items that were 'scanning' or 'queued' when app closed need to be re-scanned
+    sq.items.forEach(item => {
+      if (item.status === 'scanning' || item.status === 'queued') {
+        if (item.imageData) {
+          item.status = 'queued'; // re-queue for scanning
+        } else {
+          item.status = 'error';
+          item.error = 'Lost during app restart (no image data)';
+        }
+      }
+    });
+    // Remove items older than 24 hours or already created
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    sq.items = sq.items.filter(i => i.status !== 'created' && (i.createdAt || Date.now()) > cutoff);
+  } catch (e) {
+    console.warn('Failed to restore scan queue:', e.message);
+  }
+}
+
 function sqInit() {
   if (window._scanQueue.dockEl) return;
   const dock = document.createElement('div');
@@ -14678,6 +14732,16 @@ function sqInit() {
   `;
   document.body.appendChild(dock);
   window._scanQueue.dockEl = dock;
+
+  // Restore saved queue from localStorage
+  sqRestore();
+  const sq = window._scanQueue;
+  if (sq.items.length > 0) {
+    dock.classList.remove('hidden');
+    sqRenderList();
+    // Resume scanning for any queued items
+    sqProcessNext();
+  }
 }
 
 function sqShow() {
@@ -14715,6 +14779,7 @@ function sqUpdateBadge() {
 
 function sqRenderList() {
   const sq = window._scanQueue;
+  sqSave(); // Persist to localStorage
   const list = document.getElementById('sqList');
   if (!list) return;
 
