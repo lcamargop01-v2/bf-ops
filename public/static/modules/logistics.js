@@ -2075,6 +2075,7 @@ async function renderOrders() {
         <option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option>
       </select>
       ${archiveToggleBtn(showArchived, "toggleArchive('orders','renderOrders')")}
+      <button class="btn" style="background:linear-gradient(135deg,#F97316,#EA580C);color:white;font-weight:700" onclick="sqBatchUpload()"><i class="fas fa-layer-group"></i> Batch Scan</button>
       <button class="btn" style="background:linear-gradient(135deg,#7C3AED,#5B21B6);color:white;font-weight:700" onclick="showBulkUpload()"><i class="fas fa-file-upload"></i> Bulk Upload</button>
       <button class="btn btn-primary" onclick="showNewOrderModal()"><i class="fas fa-plus"></i> New Order</button>
     </div>
@@ -2940,8 +2941,9 @@ async function showNewOrderModal() {
               <div class="ticket-upload-text">Upload or snap a photo of the order ticket</div>
               <div class="ticket-upload-hint">Supports camera capture, JPG, PNG &bull; AI will auto-extract order details</div>
               <div class="ticket-actions">
-                <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;position:relative;overflow:hidden"><i class="fas fa-upload"></i> Upload File<input type="file" accept="*/*" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="handleTicketFile(event)"></label>
+                <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;position:relative;overflow:hidden"><i class="fas fa-upload"></i> Upload File(s)<input type="file" accept="*/*" multiple style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="handleTicketFile(event)"></label>
                 <button class="btn btn-outline btn-sm" onclick="startCameraCapture()"><i class="fas fa-camera"></i> Take Photo</button>
+                <button class="btn btn-outline btn-sm" onclick="sqBatchUpload()" title="Open batch scan queue"><i class="fas fa-layer-group"></i> Batch</button>
               </div>
             </div>
             <div id="ticketPreviewContainer" style="display:none">
@@ -3180,13 +3182,22 @@ function cancelInlineProduct() {
 
 // ==================== TICKET UPLOAD & OCR ====================
 function handleTicketFile(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  // Compress image to avoid D1 SQLITE_TOOBIG errors
-  compressImage(file, 1200, 0.6).then(compressed => {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+  // First file goes to the current modal's single-ticket flow
+  const firstFile = files[0];
+  compressImage(firstFile, 1200, 0.6).then(compressed => {
     window._ticketImageData = compressed;
     showTicketPreview(compressed);
   });
+  // If multiple files were selected, send extras to the background scan queue
+  if (files.length > 1) {
+    sqShow();
+    for (let i = 1; i < files.length; i++) {
+      sqAddFile(files[i]);
+    }
+    showToast(`${files.length - 1} additional ticket(s) sent to background scan queue`, 'info');
+  }
 }
 
 function compressImage(file, maxDim, quality) {
@@ -3678,6 +3689,7 @@ async function renderSchedule() {
       <h3 style="font-weight:700;font-size:16px"><i class="fas fa-calendar-week" style="color:var(--navy-light);margin-right:8px"></i>Week of ${days[0].format('MMM D')} - ${days[5].format('MMM D, YYYY')}</h3>
       <div style="margin-left:auto;display:flex;gap:8px">
         <button class="btn btn-outline btn-sm" id="toggleMapBtn" onclick="toggleScheduleMap()"><i class="fas fa-map"></i> <span id="toggleMapLabel">Show Map</span></button>
+        <button class="btn btn-sm" style="background:linear-gradient(135deg,#F97316,#EA580C);color:white;font-weight:700" onclick="sqBatchUpload()"><i class="fas fa-layer-group"></i> Batch Scan</button>
         <button class="btn btn-primary btn-sm" onclick="showNewOrderModal()"><i class="fas fa-plus"></i> New Order</button>
       </div>
     </div>
@@ -14183,12 +14195,536 @@ window._logisticsInit = function() {
   render();
 };
 
+// ==================== SCAN QUEUE (QuickBooks-style background scanning) ====================
+
+window._scanQueue = {
+  items: [],       // { id, file, thumbnail, imageData, status, result, error, createdAt }
+  nextId: 1,
+  dockEl: null,
+  collapsed: false,
+  maxConcurrent: 2,
+  activeCount: 0,
+};
+
+function sqInit() {
+  if (window._scanQueue.dockEl) return;
+  const dock = document.createElement('div');
+  dock.className = 'scan-queue-dock hidden';
+  dock.id = 'scanQueueDock';
+  dock.innerHTML = `
+    <div class="sq-header" onclick="sqToggleCollapse()">
+      <i class="fas fa-layer-group"></i>
+      <span>Ticket Scan Queue</span>
+      <span class="sq-header-badge" id="sqBadge">0</span>
+      <i class="fas fa-chevron-down sq-header-chevron"></i>
+      <button class="sq-header-close" onclick="event.stopPropagation();sqClearAll()" title="Clear all"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="sq-body" id="sqBody">
+      <div class="sq-actions">
+        <label class="btn btn-primary btn-sm" style="flex:1;cursor:pointer;margin:0;position:relative;overflow:hidden;text-align:center">
+          <i class="fas fa-plus"></i> Add Tickets
+          <input type="file" accept="*/*" multiple style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="sqHandleFiles(event)">
+        </label>
+        <button class="btn btn-outline btn-sm" onclick="sqStartCameraForQueue()" style="flex:0"><i class="fas fa-camera"></i></button>
+      </div>
+      <div id="sqList"></div>
+    </div>
+  `;
+  document.body.appendChild(dock);
+  window._scanQueue.dockEl = dock;
+}
+
+function sqShow() {
+  sqInit();
+  const dock = window._scanQueue.dockEl;
+  dock.classList.remove('hidden');
+  window._scanQueue.collapsed = false;
+  dock.classList.remove('collapsed');
+}
+
+function sqToggleCollapse() {
+  const sq = window._scanQueue;
+  sq.collapsed = !sq.collapsed;
+  sq.dockEl.classList.toggle('collapsed', sq.collapsed);
+}
+
+function sqUpdateBadge() {
+  const sq = window._scanQueue;
+  const pending = sq.items.filter(i => i.status === 'scanning' || i.status === 'ready').length;
+  const badge = document.getElementById('sqBadge');
+  if (badge) badge.textContent = pending;
+}
+
+function sqRenderList() {
+  const sq = window._scanQueue;
+  const list = document.getElementById('sqList');
+  if (!list) return;
+
+  if (sq.items.length === 0) {
+    list.innerHTML = '<div class="sq-empty"><i class="fas fa-inbox" style="font-size:20px;display:block;margin-bottom:8px"></i>Drop ticket photos here or tap Add Tickets</div>';
+    sqUpdateBadge();
+    return;
+  }
+
+  list.innerHTML = sq.items.map(item => {
+    let statusHtml = '';
+    let actionsHtml = '';
+    let thumbHtml = '';
+
+    if (item.status === 'scanning') {
+      thumbHtml = `<div class="sq-progress-ring">
+        <svg width="44" height="44"><circle class="sq-ring-bg" cx="22" cy="22" r="18" fill="none" stroke-width="3"/><circle class="sq-ring-fg" cx="22" cy="22" r="18" fill="none" stroke-width="3" stroke-dasharray="113" stroke-dashoffset="40" stroke-linecap="round"/></svg>
+        <i class="fas fa-cog sq-spinner" style="font-size:14px;color:var(--orange)"></i>
+      </div>`;
+      statusHtml = '<span style="color:var(--orange)"><i class="fas fa-circle-notch sq-spinner"></i> Scanning...</span>';
+    } else if (item.status === 'ready') {
+      thumbHtml = `<img class="sq-thumb" src="${item.thumbnail}" alt="ticket">`;
+      const custName = item.result?.customer_name || item.result?.customer_id ? 'Customer matched' : 'Unknown';
+      const itemCount = item.result?.items?.length || 0;
+      statusHtml = `<span style="color:var(--green)"><i class="fas fa-check-circle"></i> Ready</span> &middot; ${custName} &middot; ${itemCount} item${itemCount !== 1 ? 's' : ''}`;
+      actionsHtml = `<button class="sq-item-btn review" onclick="sqReviewItem(${item.id})" title="Review & create order"><i class="fas fa-check"></i></button>`;
+    } else if (item.status === 'error') {
+      thumbHtml = `<img class="sq-thumb" src="${item.thumbnail}" alt="ticket" style="opacity:0.5">`;
+      statusHtml = `<span style="color:var(--red)"><i class="fas fa-exclamation-circle"></i> Failed</span>`;
+      actionsHtml = `<button class="sq-item-btn review" onclick="sqRetryItem(${item.id})" title="Retry"><i class="fas fa-redo"></i></button>`;
+    } else if (item.status === 'created') {
+      thumbHtml = `<img class="sq-thumb" src="${item.thumbnail}" alt="ticket" style="opacity:0.5">`;
+      statusHtml = `<span style="color:var(--green)"><i class="fas fa-check"></i> Order created</span>`;
+    } else { // queued
+      thumbHtml = `<img class="sq-thumb" src="${item.thumbnail}" alt="ticket">`;
+      statusHtml = '<span style="color:var(--gray-400)"><i class="fas fa-clock"></i> Queued</span>';
+    }
+    actionsHtml += `<button class="sq-item-btn dismiss" onclick="sqDismissItem(${item.id})" title="Remove"><i class="fas fa-times"></i></button>`;
+
+    return `<div class="sq-item ${item.status === 'scanning' ? 'sq-scanning' : ''}" data-sq-id="${item.id}">
+      ${thumbHtml}
+      <div class="sq-info">
+        <div class="sq-info-name">${item.fileName || 'Ticket ' + item.id}</div>
+        <div class="sq-info-status">${statusHtml}</div>
+      </div>
+      <div class="sq-item-actions">${actionsHtml}</div>
+    </div>`;
+  }).join('');
+
+  sqUpdateBadge();
+}
+
+function sqHandleFiles(event) {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+  sqShow();
+  for (let i = 0; i < files.length; i++) {
+    sqAddFile(files[i]);
+  }
+  // Reset the input so the same files can be re-selected
+  event.target.value = '';
+}
+
+function sqAddFile(file) {
+  const sq = window._scanQueue;
+  const item = {
+    id: sq.nextId++,
+    file: file,
+    fileName: file.name || 'Photo',
+    thumbnail: null,
+    imageData: null,
+    status: 'queued', // queued → scanning → ready|error|created
+    result: null,
+    error: null,
+    createdAt: Date.now(),
+  };
+  sq.items.unshift(item);
+
+  // Generate thumbnail and compressed image
+  compressImage(file, 1200, 0.6).then(compressed => {
+    item.imageData = compressed;
+    item.thumbnail = compressed;
+    sqRenderList();
+    sqProcessNext();
+  });
+
+  sqRenderList();
+}
+
+function sqStartCameraForQueue() {
+  var tempInput = document.createElement('input');
+  tempInput.type = 'file';
+  tempInput.accept = 'image/*';
+  tempInput.capture = 'environment';
+  tempInput.style.display = 'none';
+  tempInput.onchange = function(e) {
+    if (e.target.files[0]) sqAddFile(e.target.files[0]);
+    tempInput.remove();
+  };
+  document.body.appendChild(tempInput);
+  tempInput.click();
+}
+
+function sqProcessNext() {
+  const sq = window._scanQueue;
+  if (sq.activeCount >= sq.maxConcurrent) return;
+
+  const next = sq.items.find(i => i.status === 'queued' && i.imageData);
+  if (!next) return;
+
+  sq.activeCount++;
+  next.status = 'scanning';
+  sqRenderList();
+
+  // Build payload (same as scanTicketImage but non-blocking)
+  const payload = { image: next.imageData };
+  const hasUserKey = localStorage.getItem('bf_openai_key');
+  if (hasUserKey) {
+    payload.api_key = hasUserKey;
+    payload.base_url = localStorage.getItem('bf_openai_url') || undefined;
+  }
+  const userModel = localStorage.getItem('bf_openai_model');
+  if (userModel) payload.model = userModel;
+
+  API.post('/ocr/scan-ticket', payload)
+    .then(resp => {
+      sq.activeCount--;
+      if (resp.data.success && resp.data.data) {
+        next.status = 'ready';
+        next.result = resp.data.data;
+        // Play a subtle notification sound
+        sqNotify(next);
+      } else {
+        next.status = 'error';
+        next.error = 'Could not extract order details';
+      }
+      sqRenderList();
+      sqProcessNext();
+    })
+    .catch(err => {
+      sq.activeCount--;
+      next.status = 'error';
+      next.error = err.response?.data?.error || err.message || 'Scan failed';
+      sqRenderList();
+      sqProcessNext();
+    });
+
+  // Start another if we have capacity
+  sqProcessNext();
+}
+
+function sqNotify(item) {
+  const custName = item.result?.customer_name || 'Unknown customer';
+  const itemCount = item.result?.items?.length || 0;
+  showToast(`Ticket scanned: ${custName}, ${itemCount} item${itemCount !== 1 ? 's' : ''} — tap to review`, 'success');
+
+  // Expand dock if collapsed
+  if (window._scanQueue.collapsed) {
+    window._scanQueue.collapsed = false;
+    window._scanQueue.dockEl.classList.remove('collapsed');
+  }
+}
+
+function sqRetryItem(id) {
+  const item = window._scanQueue.items.find(i => i.id === id);
+  if (!item) return;
+  item.status = 'queued';
+  item.error = null;
+  item.result = null;
+  sqRenderList();
+  sqProcessNext();
+}
+
+function sqDismissItem(id) {
+  const sq = window._scanQueue;
+  sq.items = sq.items.filter(i => i.id !== id);
+  sqRenderList();
+  if (sq.items.length === 0) {
+    sq.dockEl.classList.add('hidden');
+  }
+}
+
+function sqClearAll() {
+  const sq = window._scanQueue;
+  sq.items = [];
+  sq.activeCount = 0;
+  sqRenderList();
+  sq.dockEl.classList.add('hidden');
+}
+
+// ==================== SCAN QUEUE REVIEW MODAL ====================
+async function sqReviewItem(id) {
+  const sq = window._scanQueue;
+  const item = sq.items.find(i => i.id === id);
+  if (!item || !item.result) return;
+
+  const result = item.result;
+
+  // Fetch customers and products for dropdowns
+  let customers = window._custList || [];
+  let products = window._prodList || [];
+  if (!customers.length) {
+    try { const r = await API.get('/customers'); customers = r.data.customers || []; window._custList = customers; } catch(e) {}
+  }
+  if (!products.length) {
+    try { const r = await API.get('/products'); products = r.data.products || []; window._prodList = products; } catch(e) {}
+  }
+
+  // Determine matched customer
+  const matchedCustId = result.customer_id || '';
+  const custOptions = customers.map(c =>
+    `<option value="${c.id}" ${c.id == matchedCustId ? 'selected' : ''}>${c.business_name}</option>`
+  ).join('');
+
+  // Build items table
+  const items = result.items || [];
+  const itemRows = items.map((itm, i) => {
+    const matchedProd = itm.product_id ? products.find(p => p.id === itm.product_id) : null;
+    const prodName = matchedProd ? matchedProd.name : (itm.product_name || 'Unknown');
+    const prodSku = matchedProd ? matchedProd.sku : (itm.sku || '');
+    return `<tr>
+      <td><strong>${escapeHtml(prodName)}</strong>${prodSku ? '<br><code style="font-size:11px">' + escapeHtml(prodSku) + '</code>' : ''}</td>
+      <td><input type="number" class="form-input" value="${itm.quantity || 1}" min="1" style="width:70px" id="sqRevQty_${i}"></td>
+      <td>${matchedProd?.unit_type || itm.unit || 'bag'}</td>
+    </tr>`;
+  }).join('');
+
+  const confPct = Math.round((result.confidence || 0) * 100);
+  const confClass = confPct >= 70 ? 'high' : confPct >= 40 ? 'medium' : 'low';
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay sq-review-modal';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.innerHTML = `<div class="modal" style="max-width:640px">
+    <div class="modal-header">
+      <h3 class="modal-title"><i class="fas fa-clipboard-check" style="color:var(--orange);margin-right:8px"></i>Review Scanned Ticket</h3>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+    </div>
+    <div class="modal-body" style="max-height:65vh;overflow-y:auto">
+
+      <div style="display:flex;gap:16px;margin-bottom:16px">
+        <img src="${item.thumbnail}" style="width:100px;height:100px;object-fit:cover;border-radius:10px;border:1px solid var(--gray-200);flex-shrink:0">
+        <div style="flex:1">
+          <span class="confidence-badge confidence-${confClass}"><i class="fas fa-signal"></i> ${confPct}% Confidence</span>
+          ${result.raw_text ? `<div style="margin-top:8px;font-size:11px;color:var(--gray-500);max-height:60px;overflow-y:auto;font-family:monospace;white-space:pre-wrap">${escapeHtml(result.raw_text.substring(0, 300))}</div>` : ''}
+        </div>
+      </div>
+
+      <div style="background:var(--gray-50);border-radius:10px;padding:14px;margin-bottom:16px">
+        <div class="sq-review-field">
+          <label>Customer</label>
+          <select class="form-select" id="sqRevCustomer" style="flex:1" onchange="sqRevLoadAddresses(this.value)">
+            <option value="">— Select —</option>
+            ${custOptions}
+            ${!matchedCustId && result.customer_name ? `<option value="__new__" selected>+ New: ${escapeHtml(result.customer_name)}</option>` : ''}
+          </select>
+        </div>
+        <div class="sq-review-field">
+          <label>Address</label>
+          <select class="form-select" id="sqRevAddress" style="flex:1"><option value="">Loading...</option></select>
+        </div>
+        <div class="sq-review-field">
+          <label>Order #</label>
+          <input class="form-input" id="sqRevOrderNum" value="${result.order_number || ''}" placeholder="Auto if empty" style="flex:1">
+        </div>
+        <div class="sq-review-field">
+          <label>Delivery Date</label>
+          <input class="form-input" type="date" id="sqRevDate" value="${result.delivery_date || ''}" style="flex:1">
+        </div>
+        <div class="sq-review-field">
+          <label>Priority</label>
+          <select class="form-select" id="sqRevPriority" style="flex:1">
+            <option value="normal" ${(result.priority||'normal')==='normal'?'selected':''}>Normal</option>
+            <option value="high" ${result.priority==='high'?'selected':''}>High</option>
+            <option value="urgent" ${result.priority==='urgent'?'selected':''}>Urgent</option>
+          </select>
+        </div>
+        <div class="sq-review-field">
+          <label>Notes</label>
+          <input class="form-input" id="sqRevNotes" value="${escapeHtml(result.special_instructions || '')}" placeholder="Special instructions" style="flex:1">
+        </div>
+      </div>
+
+      <h4 style="font-size:13px;font-weight:700;margin-bottom:6px"><i class="fas fa-box" style="color:var(--navy-light);margin-right:4px"></i>Items (${items.length})</h4>
+      ${items.length > 0 ? `<table class="sq-review-items-table">
+        <thead><tr><th>Product</th><th>Qty</th><th>Unit</th></tr></thead>
+        <tbody>${itemRows}</tbody>
+      </table>` : '<div style="color:var(--gray-400);font-size:13px;padding:10px">No items extracted — you can add them after creating the order</div>'}
+
+    </div>
+    <div class="modal-footer" style="display:flex;gap:8px">
+      <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+      <button class="btn btn-outline" onclick="sqSkipItem(${item.id});this.closest('.modal-overlay').remove()"><i class="fas fa-forward"></i> Skip</button>
+      <button class="btn btn-primary" onclick="sqConfirmItem(${item.id})" id="sqConfirmBtn"><i class="fas fa-check"></i> Create Order</button>
+    </div>
+  </div>`;
+
+  document.body.appendChild(modal);
+
+  // Load addresses for matched customer
+  if (matchedCustId) {
+    sqRevLoadAddresses(matchedCustId, result.delivery_address);
+  } else {
+    document.getElementById('sqRevAddress').innerHTML = '<option value="">— Select customer first —</option>';
+  }
+}
+
+async function sqRevLoadAddresses(custId, ticketAddr) {
+  const sel = document.getElementById('sqRevAddress');
+  if (!custId || custId === '__new__') {
+    sel.innerHTML = '<option value="">Will use ticket address for new customer</option>';
+    return;
+  }
+  try {
+    const { data } = await API.get('/customers/' + custId);
+    const addrs = data.addresses || [];
+    sel.innerHTML = addrs.map(a => `<option value="${a.id}">${a.label}: ${a.street}, ${a.city}</option>`).join('');
+    if (addrs.length === 0) sel.innerHTML = '<option value="">No addresses on file</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Error loading addresses</option>';
+  }
+}
+
+function sqSkipItem(id) {
+  // Just dismiss without creating
+  sqDismissItem(id);
+}
+
+async function sqConfirmItem(id) {
+  const sq = window._scanQueue;
+  const item = sq.items.find(i => i.id === id);
+  if (!item || !item.result) return;
+
+  const btn = document.getElementById('sqConfirmBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...'; }
+
+  const result = item.result;
+  const custVal = document.getElementById('sqRevCustomer').value;
+  const addrVal = document.getElementById('sqRevAddress').value;
+  const items = result.items || [];
+
+  try {
+    let customerId = custVal;
+
+    // Create new customer if needed
+    if (custVal === '__new__' || (!custVal && result.customer_name)) {
+      const custPayload = {
+        business_name: result.customer_name,
+        contact_name: result.contact_name || null,
+        phone: result.phone || null,
+        email: result.email || null,
+        customer_type: 'farm',
+      };
+      if (result.delivery_address?.street) {
+        custPayload.address = {
+          street: result.delivery_address.street,
+          city: result.delivery_address.city || 'Wellington',
+          state: result.delivery_address.state || 'FL',
+          zip: result.delivery_address.zip || null,
+        };
+      }
+      const { data: newCust } = await API.post('/customers', custPayload);
+      customerId = newCust.id;
+      if (window._custList) window._custList.push(newCust.customer || { id: newCust.id, business_name: result.customer_name });
+    }
+
+    if (!customerId) {
+      showToast('Please select a customer', 'warning');
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Create Order'; }
+      return;
+    }
+
+    // Auto-create unmatched products
+    const orderItems = [];
+    for (let i = 0; i < items.length; i++) {
+      const itm = items[i];
+      const qty = parseInt(document.getElementById('sqRevQty_' + i)?.value) || itm.quantity || 1;
+
+      if (itm.product_id) {
+        orderItems.push({ product_id: itm.product_id, quantity: qty });
+      } else if (itm.product_name) {
+        try {
+          const { data: newProd } = await API.post('/products', {
+            name: itm.product_name, sku: itm.sku || null,
+            category: 'other', weight_per_unit: 50, unit_type: 'bag', price: itm.price || 0,
+          });
+          const prod = newProd.product || { id: newProd.id };
+          if (window._prodList) window._prodList.push(prod);
+          orderItems.push({ product_id: prod.id, quantity: qty });
+        } catch (e) { console.error('Auto-create product failed:', e); }
+      }
+    }
+
+    // Load address for new customer if needed
+    let addrId = addrVal ? parseInt(addrVal) : null;
+    if (!addrId && customerId && custVal === '__new__') {
+      try {
+        const { data: custData } = await API.get('/customers/' + customerId);
+        if (custData.addresses?.length) addrId = custData.addresses[0].id;
+      } catch(e) {}
+    }
+
+    const { data } = await API.post('/orders', {
+      customer_id: parseInt(customerId),
+      address_id: addrId,
+      order_number: document.getElementById('sqRevOrderNum').value.trim() || null,
+      priority: document.getElementById('sqRevPriority').value,
+      scheduled_date: document.getElementById('sqRevDate').value || null,
+      special_instructions: document.getElementById('sqRevNotes').value || null,
+      items: orderItems,
+      created_by: currentUser?.id,
+      ticket_image: item.imageData || null,
+    });
+
+    // Mark item as created
+    item.status = 'created';
+    item.orderNumber = data.order_number;
+    sqRenderList();
+
+    // Close review modal
+    const modalEl = document.querySelector('.sq-review-modal');
+    if (modalEl) modalEl.remove();
+
+    showToast(`Order ${data.order_number} created from scan queue!`, 'success');
+
+    // Auto-dismiss created items after a delay
+    setTimeout(() => sqDismissItem(id), 3000);
+
+    // If all items processed, show summary
+    const remaining = sq.items.filter(i => i.status === 'ready');
+    if (remaining.length > 0) {
+      // Auto-open next review
+      setTimeout(() => sqReviewItem(remaining[0].id), 500);
+    }
+
+  } catch (err) {
+    console.error('SQ create order error:', err);
+    showToast('Failed to create order: ' + (err.response?.data?.error || err.message), 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Create Order'; }
+  }
+}
+
+// Open scan queue from anywhere in the app
+function openScanQueue() {
+  sqShow();
+}
+
+// Batch upload from the orders page — dedicated button
+function sqBatchUpload() {
+  sqShow();
+  // Trigger file picker
+  const input = document.querySelector('#scanQueueDock .sq-actions input[type="file"]');
+  if (input) input.click();
+}
+
 // Expose cleanup for when parent shell unloads this module
 window._logisticsCleanup = function() {
   // Clear any intervals/timers
   if (typeof fleetTrackingInterval !== 'undefined' && fleetTrackingInterval) {
     clearInterval(fleetTrackingInterval);
   }
+  // Remove scan queue dock
+  if (window._scanQueue.dockEl) {
+    window._scanQueue.dockEl.remove();
+    window._scanQueue.dockEl = null;
+  }
+  window._scanQueue.items = [];
+  window._scanQueue.activeCount = 0;
   // Reset state
   currentUser = null;
   currentPage = 'dashboard';
