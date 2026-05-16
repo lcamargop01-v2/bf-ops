@@ -14661,17 +14661,36 @@ function sqSave() {
     const serializable = sq.items.map(item => ({
       id: item.id,
       fileName: item.fileName,
-      thumbnail: item.thumbnail,
+      thumbnail: item.thumbSmall || item.thumbnail, // use small thumbnail
       imageData: item.imageData,
       status: item.status,
       result: item.result,
       error: item.error,
       createdAt: item.createdAt,
     }));
-    localStorage.setItem('bf_scan_queue', JSON.stringify({ items: serializable, nextId: sq.nextId }));
+    const json = JSON.stringify({ items: serializable, nextId: sq.nextId });
+    localStorage.setItem('bf_scan_queue', json);
   } catch (e) {
-    // localStorage might be full with large base64 images — silently fail
-    console.warn('Failed to save scan queue:', e.message);
+    // localStorage full — try saving without imageData (just thumbnails + results)
+    console.warn('Scan queue save failed, retrying without full images:', e.message);
+    try {
+      const sq = window._scanQueue;
+      const light = sq.items.map(item => ({
+        id: item.id,
+        fileName: item.fileName,
+        thumbnail: item.thumbSmall || item.thumbnail,
+        imageData: null, // skip heavy data
+        status: item.status === 'queued' ? 'error' : item.status, // can't re-scan without image
+        result: item.result,
+        error: item.status === 'queued' ? 'Image too large to persist' : item.error,
+        createdAt: item.createdAt,
+      }));
+      localStorage.setItem('bf_scan_queue', JSON.stringify({ items: light, nextId: sq.nextId }));
+    } catch (e2) {
+      console.warn('Scan queue save failed completely:', e2.message);
+      // Last resort — clear saved queue
+      localStorage.removeItem('bf_scan_queue');
+    }
   }
 }
 
@@ -14686,6 +14705,9 @@ function sqRestore() {
     sq.items = (data.items || []).map(item => ({
       ...item,
       file: null, // File objects can't be serialized
+      // If full imageData was saved, use it for thumbnail too; otherwise use saved thumbnail
+      thumbnail: item.imageData || item.thumbnail,
+      thumbSmall: item.thumbnail, // the persisted thumbnail is always the small one
     }));
     // Items that were 'scanning' or 'queued' when app closed need to be re-scanned
     sq.items.forEach(item => {
@@ -14694,7 +14716,7 @@ function sqRestore() {
           item.status = 'queued'; // re-queue for scanning
         } else {
           item.status = 'error';
-          item.error = 'Lost during app restart (no image data)';
+          item.error = 'Image lost during app restart — please re-upload';
         }
       }
     });
@@ -14703,6 +14725,7 @@ function sqRestore() {
     sq.items = sq.items.filter(i => i.status !== 'created' && (i.createdAt || Date.now()) > cutoff);
   } catch (e) {
     console.warn('Failed to restore scan queue:', e.message);
+    localStorage.removeItem('bf_scan_queue');
   }
 }
 
@@ -14850,6 +14873,7 @@ function sqAddFile(file) {
     file: file,
     fileName: file.name || 'Photo',
     thumbnail: null,
+    thumbSmall: null,  // tiny thumbnail for localStorage persistence
     imageData: null,
     status: 'queued', // queued → scanning → ready|error|created
     result: null,
@@ -14858,10 +14882,14 @@ function sqAddFile(file) {
   };
   sq.items.unshift(item);
 
-  // Generate thumbnail and compressed image
-  compressImage(file, 1200, 0.6).then(compressed => {
+  // Generate full compressed image for OCR + tiny thumbnail for persistence
+  Promise.all([
+    compressImage(file, 1200, 0.6),  // full size for scanning
+    compressImage(file, 80, 0.4),    // tiny thumbnail for localStorage
+  ]).then(([compressed, thumb]) => {
     item.imageData = compressed;
     item.thumbnail = compressed;
+    item.thumbSmall = thumb;
     sqRenderList();
     sqProcessNext();
   });
