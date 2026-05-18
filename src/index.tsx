@@ -150,8 +150,16 @@ app.put('/api/admin/users/:id', async (c) => {
   }
   if (fields.length === 0) return c.json({ error: 'No fields to update' }, 400)
   vals.push(id)
-  await db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run()
-  return c.json({ success: true })
+  try {
+    await db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run()
+    return c.json({ success: true })
+  } catch (err: any) {
+    console.error('User update error:', err)
+    if (err.message?.includes('CHECK') || err.message?.includes('constraint')) {
+      return c.json({ error: 'Invalid role or field value. Ensure the role exists in the system.' }, 400)
+    }
+    return c.json({ error: err.message || 'Failed to update user' }, 500)
+  }
 })
 
 app.put('/api/admin/users/:id/modules', async (c) => {
