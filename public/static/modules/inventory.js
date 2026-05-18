@@ -21,6 +21,12 @@ function invCanEdit(feature) {
   return fn('inventory', feature || invPage);
 }
 
+// Permission helper for financial data visibility
+function invCanViewFin() {
+  var fn = typeof window.canViewFinancials === 'function' ? window.canViewFinancials : function() { return true; };
+  return fn();
+}
+
 // ==================== AUTH BRIDGE ====================
 function invGetToken() {
   return localStorage.getItem('bf_ops_token') || localStorage.getItem('bf_token') || '';
