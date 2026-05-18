@@ -22,6 +22,7 @@ var crmTableStageFilter = '';
 var crmTableRepFilter = '';
 var crmTableTagFilter = '';
 var crmKanbanLimit = 25;
+var _crmSearchTimer = null; // debounce timer for search
 
 // ==================== AUTH BRIDGE ====================
 function crmGetToken() { return localStorage.getItem('bf_ops_token') || localStorage.getItem('bf_token') || ''; }
@@ -31,7 +32,7 @@ function crmHeaders() { return { Authorization: 'Bearer ' + crmGetToken() }; }
 function crmFmt$(v) { return '$' + (parseFloat(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function crmFmtDate(d) { if (!d) return '—'; return dayjs(d).format('MMM D, YYYY'); }
 function crmFmtDateTime(d) { if (!d) return '—'; return dayjs(d).format('MMM D, YYYY h:mm A'); }
-function crmEsc(s) { if (!s) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function crmEsc(s) { if (!s) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 async function crmFetchAllOrgs() {
   try {
     var resp = await crmAPI.get('/api/crm/organizations?limit=500&offset=0', { headers: crmHeaders() });
@@ -135,7 +136,8 @@ async function crmLoadOpps() {
   try {
     var resp = await crmAPI.get('/api/crm/opportunities?status=open&pipeline_id=1', { headers: crmHeaders() });
     crmOpps = resp.data.opportunities || [];
-  } catch(e) { crmOpps = []; }
+    console.log('[CRM] Loaded ' + crmOpps.length + ' opportunities');
+  } catch(e) { console.error('[CRM] Failed to load opps:', e); crmOpps = []; }
 }
 
 // ==================== MAIN RENDER ====================
@@ -278,81 +280,134 @@ function crmStatCard(icon, iconColor, iconBg, value, label, onclick) {
 // ==================== PIPELINE BOARD ====================
 async function crmRenderPipeline() {
   var ct = document.getElementById('crmContent');
+  if (!ct) return;
   ct.innerHTML = '<div class="crm-loading"><i class="fas fa-spinner fa-spin"></i> Loading pipeline...</div>';
-  await Promise.all([crmLoadOpps(), crmFetchAllUsers()]);
+  try {
+    await Promise.all([crmLoadOpps(), crmFetchAllUsers()]);
+    console.log('[CRM] Pipeline data loaded: ' + crmOpps.length + ' opps, ' + crmAllUsers.length + ' users, ' + crmStages.length + ' stages');
+  } catch(e) {
+    console.error('[CRM] Pipeline load error:', e);
+    ct.innerHTML = '<div class="crm-empty"><i class="fas fa-exclamation-triangle" style="font-size:48px;color:#F59E0B"></i><h3>Failed to load pipeline data</h3><p>' + (e.message || 'Unknown error') + '</p><button class="crm-btn crm-btn-primary" onclick="crmRenderPipeline()">Retry</button></div>';
+    return;
+  }
   crmRenderPipelineContent();
+}
+
+// Debounced search — only re-renders the body, not the toolbar
+function crmDebouncedSearch() {
+  if (_crmSearchTimer) clearTimeout(_crmSearchTimer);
+  var el = document.getElementById('crmPipelineSearch');
+  if (el) crmTableSearch = el.value;
+  _crmSearchTimer = setTimeout(function() {
+    crmRefreshPipelineBody();
+  }, 250);
+}
+
+// Re-render just the pipeline body (table/kanban) without replacing toolbar/search input
+function crmRefreshPipelineBody() {
+  try {
+    var allStages = crmStages.slice().sort(function(a, b) { return a.sort_order - b.sort_order; });
+    var filtered = crmFilterOpps(crmOpps);
+    // Update count display
+    var countEl = document.getElementById('crmFilteredCount');
+    if (countEl) countEl.textContent = filtered.length + ' of ' + crmOpps.length + ' lead' + (crmOpps.length !== 1 ? 's' : '');
+    if (crmPipelineView === 'table') {
+      crmRenderPipelineTable(allStages);
+    } else {
+      crmRenderPipelineKanban(allStages);
+    }
+  } catch(e) { console.error('[CRM] Body refresh error:', e); }
 }
 
 function crmRenderPipelineContent() {
   var ct = document.getElementById('crmContent');
-  var allStages = crmStages.slice().sort(function(a, b) { return a.sort_order - b.sort_order; });
+  if (!ct) { console.error('[CRM] crmContent element not found'); return; }
+  try {
+    var allStages = crmStages.slice().sort(function(a, b) { return a.sort_order - b.sort_order; });
 
-  // Compute summary counts
-  var totalLeads = crmOpps.length;
-  var totalValue = crmOpps.reduce(function(s, o) { return s + (parseFloat(o.value) || 0); }, 0);
+    // Compute summary counts
+    var totalLeads = crmOpps.length;
+    var totalValue = crmOpps.reduce(function(s, o) { return s + (parseFloat(o.value) || 0); }, 0);
 
-  // Build unique reps and tags for filters
-  var repSet = {}; var tagSet = {};
-  crmOpps.forEach(function(o) {
-    if (o.owner_name) repSet[o.owner_name] = 1;
-    // Also parse rep from tags
-    if (o.tags) {
-      o.tags.split(',').forEach(function(t) {
-        t = t.trim();
-        if (t.indexOf('rep:') === 0) { repSet[t.substring(4)] = 1; }
-        else if (t) { tagSet[t] = 1; }
-      });
-    }
-  });
-  var repNames = Object.keys(repSet).sort();
-  var tagNames = Object.keys(tagSet).sort();
+    // Build unique reps and tags for filters
+    var repSet = {}; var tagSet = {};
+    crmOpps.forEach(function(o) {
+      if (o.owner_name) repSet[o.owner_name] = 1;
+      // Also parse rep from tags
+      if (o.tags) {
+        o.tags.split(',').forEach(function(t) {
+          t = t.trim();
+          if (t.indexOf('rep:') === 0) { repSet[t.substring(4)] = 1; }
+          else if (t) { tagSet[t] = 1; }
+        });
+      }
+    });
+    var repNames = Object.keys(repSet).sort();
+    var tagNames = Object.keys(tagSet).sort();
 
-  ct.innerHTML =
-    '<div class="crm-pipeline-page">' +
-      '<div class="crm-pipeline-header">' +
-        '<h2><i class="fas fa-columns"></i> Sales Pipeline <span style="font-weight:400;font-size:14px;color:#64748B;margin-left:8px">' + totalLeads + ' leads &middot; ' + crmFmt$(totalValue) + '</span></h2>' +
-        '<div style="display:flex;gap:8px;align-items:center">' +
-          '<div class="crm-view-toggle">' +
-            '<button class="crm-view-toggle-btn ' + (crmPipelineView === 'table' ? 'active' : '') + '" onclick="crmSetPipelineView(\'table\')" title="Table View"><i class="fas fa-table"></i></button>' +
-            '<button class="crm-view-toggle-btn ' + (crmPipelineView === 'kanban' ? 'active' : '') + '" onclick="crmSetPipelineView(\'kanban\')" title="Kanban View"><i class="fas fa-columns"></i></button>' +
+    ct.innerHTML =
+      '<div class="crm-pipeline-page">' +
+        '<div class="crm-pipeline-header">' +
+          '<h2><i class="fas fa-columns"></i> Sales Pipeline <span style="font-weight:400;font-size:14px;color:#64748B;margin-left:8px">' + totalLeads + ' leads &middot; ' + crmFmt$(totalValue) + '</span></h2>' +
+          '<div style="display:flex;gap:8px;align-items:center">' +
+            '<div class="crm-view-toggle">' +
+              '<button class="crm-view-toggle-btn ' + (crmPipelineView === 'table' ? 'active' : '') + '" onclick="crmSetPipelineView(\'table\')" title="Table View"><i class="fas fa-table"></i></button>' +
+              '<button class="crm-view-toggle-btn ' + (crmPipelineView === 'kanban' ? 'active' : '') + '" onclick="crmSetPipelineView(\'kanban\')" title="Kanban View"><i class="fas fa-columns"></i></button>' +
+            '</div>' +
+            '<button class="crm-btn crm-btn-primary" onclick="crmShowNewOpp()"><i class="fas fa-plus"></i> New Lead</button>' +
           '</div>' +
-          '<button class="crm-btn crm-btn-primary" onclick="crmShowNewOpp()"><i class="fas fa-plus"></i> New Lead</button>' +
         '</div>' +
-      '</div>' +
-      // Toolbar with search and filters (visible in both views)
-      '<div class="crm-pipeline-toolbar">' +
-        '<div class="crm-search-box" style="max-width:280px"><i class="fas fa-search"></i>' +
-          '<input id="crmPipelineSearch" placeholder="Search leads..." value="' + crmEsc(crmTableSearch) + '" oninput="crmTableSearch=this.value;crmRenderPipelineContent()">' +
+        // Toolbar with search and filters (visible in both views)
+        '<div class="crm-pipeline-toolbar">' +
+          '<div class="crm-search-box" style="max-width:280px"><i class="fas fa-search"></i>' +
+            '<input id="crmPipelineSearch" placeholder="Search leads..." value="' + crmEsc(crmTableSearch) + '" oninput="crmDebouncedSearch()">' +
+          '</div>' +
+          '<select class="crm-select crm-select-sm" id="crmStageFilter" onchange="crmTableStageFilter=this.value;crmRefreshPipelineBody()">' +
+            '<option value="">All Stages</option>' +
+            allStages.map(function(s) { return '<option value="' + s.id + '" ' + (crmTableStageFilter == s.id ? 'selected' : '') + '>' + crmEsc(s.name) + '</option>'; }).join('') +
+          '</select>' +
+          '<select class="crm-select crm-select-sm" id="crmRepFilter" onchange="crmTableRepFilter=this.value;crmRefreshPipelineBody()">' +
+            '<option value="">All Reps</option>' +
+            repNames.map(function(r) { return '<option value="' + crmEsc(r) + '" ' + (crmTableRepFilter === r ? 'selected' : '') + '>' + crmEsc(r) + '</option>'; }).join('') +
+          '</select>' +
+          '<select class="crm-select crm-select-sm" id="crmTagFilter" onchange="crmTableTagFilter=this.value;crmRefreshPipelineBody()">' +
+            '<option value="">All Tags</option>' +
+            tagNames.map(function(t) { return '<option value="' + crmEsc(t) + '" ' + (crmTableTagFilter === t ? 'selected' : '') + '>' + crmEsc(t) + '</option>'; }).join('') +
+          '</select>' +
+          (crmTableSearch || crmTableStageFilter || crmTableRepFilter || crmTableTagFilter ?
+            '<button class="crm-btn crm-btn-outline crm-btn-sm" onclick="crmClearFilters()"><i class="fas fa-times"></i> Clear</button>' : '') +
         '</div>' +
-        '<select class="crm-select crm-select-sm" id="crmStageFilter" onchange="crmTableStageFilter=this.value;crmRenderPipelineContent()">' +
-          '<option value="">All Stages</option>' +
-          allStages.map(function(s) { return '<option value="' + s.id + '" ' + (crmTableStageFilter == s.id ? 'selected' : '') + '>' + crmEsc(s.name) + '</option>'; }).join('') +
-        '</select>' +
-        '<select class="crm-select crm-select-sm" id="crmRepFilter" onchange="crmTableRepFilter=this.value;crmRenderPipelineContent()">' +
-          '<option value="">All Reps</option>' +
-          repNames.map(function(r) { return '<option value="' + crmEsc(r) + '" ' + (crmTableRepFilter === r ? 'selected' : '') + '>' + crmEsc(r) + '</option>'; }).join('') +
-        '</select>' +
-        '<select class="crm-select crm-select-sm" id="crmTagFilter" onchange="crmTableTagFilter=this.value;crmRenderPipelineContent()">' +
-          '<option value="">All Tags</option>' +
-          tagNames.map(function(t) { return '<option value="' + crmEsc(t) + '" ' + (crmTableTagFilter === t ? 'selected' : '') + '>' + crmEsc(t) + '</option>'; }).join('') +
-        '</select>' +
-        (crmTableSearch || crmTableStageFilter || crmTableRepFilter || crmTableTagFilter ?
-          '<button class="crm-btn crm-btn-outline crm-btn-sm" onclick="crmTableSearch=\'\';crmTableStageFilter=\'\';crmTableRepFilter=\'\';crmTableTagFilter=\'\';crmRenderPipelineContent()"><i class="fas fa-times"></i> Clear</button>' : '') +
-      '</div>' +
-      '<div id="crmPipelineBody"></div>' +
-    '</div>';
+        '<div id="crmPipelineBody"></div>' +
+      '</div>';
 
-  if (crmPipelineView === 'table') {
-    crmRenderPipelineTable(allStages);
-  } else {
-    crmRenderPipelineKanban(allStages);
+    if (crmPipelineView === 'table') {
+      crmRenderPipelineTable(allStages);
+    } else {
+      crmRenderPipelineKanban(allStages);
+    }
+  } catch(e) {
+    console.error('[CRM] Pipeline render error:', e);
+    ct.innerHTML = '<div class="crm-empty"><i class="fas fa-exclamation-triangle" style="font-size:48px;color:#F59E0B"></i><h3>Error loading pipeline</h3><p>' + (e.message || 'Unknown error') + '</p><button class="crm-btn crm-btn-primary" onclick="crmRenderPipeline()">Retry</button></div>';
   }
+}
+
+function crmClearFilters() {
+  crmTableSearch = '';
+  crmTableStageFilter = '';
+  crmTableRepFilter = '';
+  crmTableTagFilter = '';
+  crmRenderPipelineContent();
 }
 
 function crmSetPipelineView(view) {
   crmPipelineView = view;
   localStorage.setItem('crm_pipeline_view', view);
-  crmRenderPipelineContent();
+  // Update toggle button active states without full re-render
+  var btns = document.querySelectorAll('.crm-view-toggle-btn');
+  btns.forEach(function(b) { b.classList.remove('active'); });
+  var activeBtn = document.querySelector('.crm-view-toggle-btn[title="' + (view === 'table' ? 'Table' : 'Kanban') + ' View"]');
+  if (activeBtn) activeBtn.classList.add('active');
+  crmRefreshPipelineBody();
 }
 
 // Restore saved view preference
@@ -412,6 +467,7 @@ function crmTierBadge(tags) {
 // ==================== TABLE VIEW ====================
 function crmRenderPipelineTable(allStages) {
   var body = document.getElementById('crmPipelineBody');
+  if (!body) { console.error('[CRM] crmPipelineBody not found'); return; }
   var filtered = crmFilterOpps(crmOpps);
 
   // Sort
@@ -463,21 +519,23 @@ function crmRenderPipelineTable(allStages) {
     '</tr></thead><tbody>' +
     (filtered.length === 0 ? '<tr><td colspan="8" style="text-align:center;padding:32px;color:#94A3B8">No leads match your filters</td></tr>' :
       filtered.map(function(o) {
-        var phone = o.contact_phone || o.org_phone || '';
-        var email = o.contact_email || '';
-        var rep = crmExtractRep(o);
-        var stageName = o.stage_name || '—';
-        var stageStyle = stageColorMap[stageName] || 'background:#F1F5F9;color:#475569';
-        return '<tr class="crm-clickable" onclick="crmViewOpp(' + o.id + ')">' +
-          '<td><strong>' + crmEsc(o.name) + '</strong></td>' +
-          '<td>' + crmEsc(o.org_name || '—') + '</td>' +
-          '<td><span class="crm-stage-badge" style="' + stageStyle + '">' + crmEsc(stageName) + '</span></td>' +
-          '<td>' + (rep ? '<span style="color:#6366F1;font-weight:500">' + crmEsc(rep) + '</span>' : '<span class="crm-muted">—</span>') + '</td>' +
-          '<td>' + crmTierBadge(o.tags) + '</td>' +
-          '<td>' + (phone ? '<a href="tel:' + crmEsc(phone) + '" onclick="event.stopPropagation()" style="color:#0EA5E9;text-decoration:none">' + crmEsc(phone) + '</a>' : '<span class="crm-muted">—</span>') + '</td>' +
-          '<td>' + (email ? '<a href="mailto:' + crmEsc(email) + '" onclick="event.stopPropagation()" style="color:#0EA5E9;text-decoration:none;font-size:12px">' + crmEsc(email) + '</a>' : '<span class="crm-muted">—</span>') + '</td>' +
-          '<td class="text-right"><strong>' + (parseFloat(o.value) > 0 ? crmFmt$(o.value) : '<span class="crm-muted">—</span>') + '</strong></td>' +
-        '</tr>';
+        try {
+          var phone = o.contact_phone || o.org_phone || '';
+          var email = o.contact_email || '';
+          var rep = crmExtractRep(o);
+          var stageName = o.stage_name || '\u2014';
+          var stageStyle = stageColorMap[stageName] || 'background:#F1F5F9;color:#475569';
+          return '<tr class="crm-clickable" onclick="crmViewOpp(' + o.id + ')">' +
+            '<td><strong>' + crmEsc(o.name) + '</strong></td>' +
+            '<td>' + crmEsc(o.org_name || '\u2014') + '</td>' +
+            '<td><span class="crm-stage-badge" style="' + stageStyle + '">' + crmEsc(stageName) + '</span></td>' +
+            '<td>' + (rep ? '<span style="color:#6366F1;font-weight:500">' + crmEsc(rep) + '</span>' : '<span class="crm-muted">\u2014</span>') + '</td>' +
+            '<td>' + crmTierBadge(o.tags) + '</td>' +
+            '<td>' + (phone ? '<a href="tel:' + crmEsc(phone) + '" onclick="event.stopPropagation()" style="color:#0EA5E9;text-decoration:none">' + crmEsc(phone) + '</a>' : '<span class="crm-muted">\u2014</span>') + '</td>' +
+            '<td>' + (email ? '<a href="mailto:' + crmEsc(email) + '" onclick="event.stopPropagation()" style="color:#0EA5E9;text-decoration:none;font-size:12px">' + crmEsc(email) + '</a>' : '<span class="crm-muted">\u2014</span>') + '</td>' +
+            '<td class="text-right"><strong>' + (parseFloat(o.value) > 0 ? crmFmt$(o.value) : '<span class="crm-muted">\u2014</span>') + '</strong></td>' +
+          '</tr>';
+        } catch(e) { console.error('[CRM] Row render error:', o.id, e); return ''; }
       }).join('')) +
     '</tbody></table></div>';
 }
@@ -489,12 +547,13 @@ function crmToggleSort(col) {
     crmTableSort.col = col;
     crmTableSort.dir = 'asc';
   }
-  crmRenderPipelineContent();
+  crmRefreshPipelineBody();
 }
 
 // ==================== KANBAN VIEW ====================
 function crmRenderPipelineKanban(allStages) {
   var body = document.getElementById('crmPipelineBody');
+  if (!body) { console.error('[CRM] crmPipelineBody not found for kanban'); return; }
   var stageColors = { open: '#6366F1', won: '#059669', lost: '#DC2626' };
   var filtered = crmFilterOpps(crmOpps);
 
@@ -1419,10 +1478,12 @@ async function crmCreateOpp() {
 }
 
 async function crmShowEditOpp(id) {
-  await crmFetchAllOrgs();
-  await crmFetchAllUsers();
-  var resp = await crmAPI.get('/api/crm/opportunities/' + id, { headers: crmHeaders() });
-  var o = resp.data.opportunity;
+  try {
+    await crmFetchAllOrgs();
+    await crmFetchAllUsers();
+    var resp = await crmAPI.get('/api/crm/opportunities/' + id, { headers: crmHeaders() });
+    var o = resp.data.opportunity;
+    if (!o) { crmToast('Lead not found', 'error'); return; }
 
   var stageOpts = crmStages.map(function(s) {
     return '<option value="' + s.id + '" ' + (o.stage_id === s.id ? 'selected' : '') + '>' + crmEsc(s.name) + '</option>';
@@ -1449,6 +1510,7 @@ async function crmShowEditOpp(id) {
     '<button class="crm-btn crm-btn-outline" onclick="crmCloseModal()">Cancel</button>' +
     '<button class="crm-btn crm-btn-primary" onclick="crmSaveOpp(' + id + ')"><i class="fas fa-save"></i> Save</button>'
   );
+  } catch(e) { console.error('[CRM] Edit opp error:', e); crmToast('Failed to open editor: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
 async function crmSaveOpp(id) {
