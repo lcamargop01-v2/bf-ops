@@ -7,6 +7,41 @@ var currentUser = null;
 var currentPage = 'dashboard';
 var sidebarOpen = false;
 
+// ==================== VIEW-ONLY ENFORCEMENT ====================
+// Check if user has edit access for the current logistics page
+function logCanEdit(feature) {
+  var fn = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
+  return fn('logistics', feature || currentPage);
+}
+
+// Guard function: call at the top of any data-modifying action
+// Returns true if blocked (view-only), false if allowed
+function logViewOnlyGuard(feature) {
+  if (!logCanEdit(feature)) {
+    showToast('View only — you don\'t have edit access', 'warning');
+    return true; // blocked
+  }
+  return false; // allowed
+}
+
+// Axios interceptor: block POST/PUT/DELETE API calls when in view-only mode
+API.interceptors.request.use(function(config) {
+  var method = (config.method || 'get').toLowerCase();
+  if (method === 'get') return config; // reads always allowed
+  // Check if user has edit permission for current page
+  if (!logCanEdit()) {
+    showToast('View only — changes are not allowed', 'warning');
+    return Promise.reject({ __viewOnly: true, message: 'View-only mode: write operations blocked' });
+  }
+  return config;
+});
+
+// Suppress console errors for view-only rejections
+API.interceptors.response.use(undefined, function(err) {
+  if (err && err.__viewOnly) return Promise.reject(err);
+  return Promise.reject(err);
+});
+
 // ==================== I18N - INTERNATIONALIZATION ====================
 var currentLang = localStorage.getItem('bf_lang') || 'en';
 
@@ -1628,6 +1663,7 @@ function statusFlow(current) {
 
 // ==================== ARCHIVE UTILITIES ====================
 async function archiveItem(entity, id, isArchived) {
+  if (logViewOnlyGuard()) return false;
   const action = isArchived ? 'restore' : 'archive';
   const msg = isArchived ? t('archive_restore_confirm') : t('archive_confirm');
   if (!confirm(msg)) return false;
@@ -2315,6 +2351,7 @@ function updateMapLegend(containerId, orders, routeColorMap, returns) {
 
 // Add order to route from map popup
 async function addOrderToRouteFromMap(orderId, orderNumber, mapContainerId, orderUnits, orderPallets) {
+  if (logViewOnlyGuard('routes')) return;
   // Close open info windows (no-op for Google Maps, handled per-window)
   // Fetch active routes
   let routes = [];
@@ -2418,6 +2455,7 @@ async function confirmAddToRoute(orderId, routeId, orderNumber, routeNumber, map
 
 // Add return to route from map popup
 async function addReturnToRouteFromMap(returnId, businessName, mapContainerId) {
+  if (logViewOnlyGuard('routes')) return;
   // Info windows auto-close
   let routes = [];
   try {
@@ -2476,6 +2514,7 @@ async function confirmAddReturnToRoute(returnId, routeId, businessName, routeNum
 
 // Remove order from its route via map popup
 async function removeOrderFromRouteOnMap(orderId, orderNumber, mapContainerId) {
+  if (logViewOnlyGuard('routes')) return;
   // Info windows auto-close
   if (!confirm(`Remove ${orderNumber} from its route? It will be unrouted and available to add to another route.`)) return;
   try {
@@ -2493,6 +2532,7 @@ async function removeOrderFromRouteOnMap(orderId, orderNumber, mapContainerId) {
 
 // Remove return from its route via map popup
 async function removeReturnFromRouteOnMap(returnId, businessName, mapContainerId) {
+  if (logViewOnlyGuard('routes')) return;
   // Info windows auto-close
   if (!confirm(`Remove return for ${businessName} from its route?`)) return;
   try {
@@ -2618,6 +2658,7 @@ async function scheduleReturn(returnId, date) {
 }
 
 async function showAddReturnToRouteModal(returnId, businessName) {
+  if (logViewOnlyGuard('returns')) return;
   const { data } = await API.get('/routes?include_archived=0');
   const routes = (data.routes || []).filter(r => r.status !== 'completed');
   const modal = document.createElement('div');
@@ -2877,6 +2918,7 @@ async function renderOrderDetail(id) {
 }
 
 async function updateOrderStatus(id, status) {
+  if (logViewOnlyGuard('orders')) return;
   try {
     await API.patch(`/orders/${id}/status`, { status });
     showToast(`Order updated to ${status}`);
@@ -2912,6 +2954,7 @@ async function showOrderBestDay(orderId, businessName, orderNumber) {
 }
 
 async function applyRecommendationFromOrder(orderId, date, orderNumber) {
+  if (logViewOnlyGuard('orders')) return;
   if (!confirm(`Schedule ${orderNumber} for ${date}?`)) return;
   try {
     await API.put(`/orders/${orderId}`, { scheduled_date: date, status: 'confirmed' });
@@ -2922,6 +2965,7 @@ async function applyRecommendationFromOrder(orderId, date, orderNumber) {
 
 // ==================== NEW ORDER MODAL ====================
 async function showNewOrderModal() {
+  if (logViewOnlyGuard('orders')) return;
   const [custData, prodData] = await Promise.all([API.get('/customers'), API.get('/products')]);
   let selectedItems = [];
 
@@ -3131,6 +3175,7 @@ function handleCustomerChange(val) {
 }
 
 async function saveInlineCustomer() {
+  if (logViewOnlyGuard('customers')) return;
   const name = document.getElementById('inlineNewCustName').value.trim();
   if (!name) { showToast('Customer name is required', 'warning'); return; }
   try {
@@ -3164,6 +3209,7 @@ function cancelInlineCustomer() {
 }
 
 async function saveInlineProduct() {
+  if (logViewOnlyGuard('products')) return;
   const name = document.getElementById('inlineNewProdName').value.trim();
   if (!name) { showToast('Product name is required', 'warning'); return; }
   const weight = parseFloat(document.getElementById('inlineNewProdWeight').value) || 50;
@@ -3635,6 +3681,7 @@ function toggleApiKeySettings() {
 }
 
 function saveApiKey() {
+  if (logViewOnlyGuard('learning')) return;
   const key = document.getElementById('ocrApiKeyInput').value.trim();
   const url = document.getElementById('ocrBaseUrlInput').value.trim();
   const model = document.getElementById('ocrModelSelect').value;
@@ -3672,6 +3719,7 @@ async function loadCustomerAddresses(custId) {
 }
 
 async function submitNewOrder() {
+  if (logViewOnlyGuard('orders')) return;
   const customer_id = document.getElementById('newOrderCustomer').value;
   if (!customer_id || customer_id === '__new__') { showToast('Please select a customer', 'warning'); return; }
   if (window._newOrderItems.length === 0) { showToast('Please add at least one item', 'warning'); return; }
@@ -4018,6 +4066,7 @@ async function showScheduleRecommendation(orderId, businessName, orderNumber) {
 }
 
 async function applyRecommendation(orderId, date, orderNumber) {
+  if (logViewOnlyGuard('schedule')) return;
   applyBestDay(orderId, date, orderNumber, 'recommendPanel');
 }
 
@@ -4429,6 +4478,7 @@ function initStopsDragDrop(routeId) {
   }
 
   async function saveDragOrder(routeId) {
+    if (logViewOnlyGuard('routes')) return;
     const newOrder = [...tbody.querySelectorAll('tr[data-stop-id]')].map(r => parseInt(r.dataset.stopId));
     try {
       await API.put(`/routes/${routeId}/reorder`, { stop_order: newOrder });
@@ -4843,6 +4893,7 @@ async function moveStop(routeId, stopId, direction) {
 
 // ==================== STOP NOTES EDITING ====================
 function editStopNote(stopId, currentNote) {
+  if (logViewOnlyGuard('routes')) return;
   const note = prompt(t('route_enter_note'), currentNote || '');
   if (note === null) return; // cancelled
   API.put(`/route-stops/${stopId}`, { notes: note })
@@ -4852,6 +4903,7 @@ function editStopNote(stopId, currentNote) {
 
 // ==================== PALLET CORRECTION ====================
 function editStopPallets(stopId, orderId, calculatedPallets, actualPallets, isCorrected, routeId) {
+  if (logViewOnlyGuard('routes')) return;
   const currentVal = isCorrected ? actualPallets : calculatedPallets;
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
@@ -4893,6 +4945,7 @@ function editStopPallets(stopId, orderId, calculatedPallets, actualPallets, isCo
 }
 
 async function submitPalletCorrection(stopId, orderId, calculatedPallets, routeId) {
+  if (logViewOnlyGuard('routes')) return;
   const actual = parseInt(document.getElementById('palletCorrectionInput')?.value || '0');
   const notes = document.getElementById('palletCorrectionNotes')?.value || '';
   if (isNaN(actual) || actual < 0) { showToast('Invalid pallet count', 'error'); return; }
@@ -4910,6 +4963,7 @@ async function submitPalletCorrection(stopId, orderId, calculatedPallets, routeI
 
 // ==================== ADD/REMOVE STOPS ====================
 async function showAddStopModal(routeId) {
+  if (logViewOnlyGuard('routes')) return;
   const [ordersRes, returnsRes] = await Promise.all([
     API.get('/orders?status=new&status=confirmed'),
     API.get('/returns/actionable').catch(() => ({ data: { returns: [] } }))
@@ -4959,6 +5013,7 @@ async function showAddStopModal(routeId) {
 }
 
 async function addStopToRoute(routeId, orderId) {
+  if (logViewOnlyGuard('routes')) return;
   try {
     await API.post(`/routes/${routeId}/stops`, { order_id: orderId });
     showToast(t('route_stop_added'));
@@ -4967,6 +5022,7 @@ async function addStopToRoute(routeId, orderId) {
 }
 
 async function addReturnStopToRoute(routeId, returnId) {
+  if (logViewOnlyGuard('routes')) return;
   try {
     await API.post(`/routes/${routeId}/return-stops`, { return_id: returnId });
     showToast('Return added to route');
@@ -4975,6 +5031,7 @@ async function addReturnStopToRoute(routeId, returnId) {
 }
 
 async function removeStopFromRoute(routeId, stopId, name) {
+  if (logViewOnlyGuard('routes')) return;
   if (!confirm(`Remove ${name} from this route?`)) return;
   try {
     await API.delete(`/routes/${routeId}/stops/${stopId}`);
@@ -4984,6 +5041,7 @@ async function removeStopFromRoute(routeId, stopId, name) {
 }
 
 async function showNewRouteModal() {
+  if (logViewOnlyGuard('routes')) return;
   const [driversRes, trucksRes, ordersRes, zonesRes, returnsRes] = await Promise.all([
     API.get('/drivers'), API.get('/trucks'),
     API.get('/orders?status=new&status=confirmed'),
@@ -5526,6 +5584,7 @@ async function confirmSmartBuild() {
 }
 
 async function submitNewRoute() {
+  if (logViewOnlyGuard('routes')) return;
   const date = document.getElementById('newRouteDate').value;
   if (!date) { showToast('Please select a date', 'warning'); return; }
   const checks = document.querySelectorAll('.route-order-check input:checked');
@@ -6070,6 +6129,7 @@ function rbToggleRouteStops(routeElId) {
 
 // Add an order or return stop from an existing route into the builder (safe — no string escaping issues)
 function rbAddRouteStop(routeId, stopId, stopType) {
+  if (logViewOnlyGuard('routes')) return;
   const route = (window._rb.activeRoutes || []).find(r => r.id === routeId);
   if (!route) { showToast('Route not found', 'error'); return; }
 
@@ -6113,6 +6173,7 @@ function rbAddRouteStop(routeId, stopId, stopType) {
 
 // Add all stops from an existing route
 function rbAddAllFromRoute(routeId) {
+  if (logViewOnlyGuard('routes')) return;
   const route = (window._rb.activeRoutes || []).find(r => r.id === routeId);
   if (!route) return;
   let added = 0;
@@ -6182,6 +6243,7 @@ function rbFilterOrders() {
 }
 
 function rbAddOrder(orderId) {
+  if (logViewOnlyGuard('routes')) return;
   const o = window._rb.orders.find(x => x.id === orderId);
   if (!o) return;
   if (window._rb.stops.find(s => s.type === 'order' && s.id === o.id)) return;
@@ -6201,6 +6263,7 @@ function rbAddOrder(orderId) {
 }
 
 function rbAddReturn(returnId) {
+  if (logViewOnlyGuard('routes')) return;
   const r = window._rb.returns.find(x => x.id === returnId);
   if (!r) return;
   if (window._rb.stops.find(s => s.type === 'return' && s.id === r.id)) return;
@@ -6223,6 +6286,7 @@ function rbAddReturn(returnId) {
 }
 
 function rbRemoveStop(idx) {
+  if (logViewOnlyGuard('routes')) return;
   window._rb.stops.splice(idx, 1);
   window._rb.directions = null;
   window._rb.stops.forEach(s => s.leg = null);
@@ -6476,6 +6540,7 @@ function rbCancelAddrEdit(idx) {
 }
 
 async function rbSaveAddress(idx) {
+  if (logViewOnlyGuard('routes')) return;
   const input = document.getElementById(`rbAddrInput${idx}`);
   if (!input) return;
   const newAddr = input.value.trim();
@@ -7238,6 +7303,7 @@ function rbRenderDirectionsSummary(data, legs) {
 }
 
 async function rbSubmitRoute() {
+  if (logViewOnlyGuard('routes')) return;
   const stops = window._rb.stops;
   if (stops.length === 0) { showToast('Add at least one stop', 'warning'); return; }
 
@@ -7503,6 +7569,7 @@ async function renderZoneDetail(id) {
 }
 
 async function showNewZoneModal() {
+  if (logViewOnlyGuard('zones')) return;
   const trucksRes = await API.get('/trucks');
   const trucks = (trucksRes.data.trucks || []).filter(t => !t.archived);
   const modal = document.createElement('div');
@@ -7581,6 +7648,7 @@ async function showNewZoneModal() {
 }
 
 async function submitNewZone() {
+  if (logViewOnlyGuard('zones')) return;
   const name = document.getElementById('zoneName').value.trim();
   if (!name) { showToast('Please enter a zone name', 'warning'); return; }
   const selectedDays = Array.from(document.querySelectorAll('.zone-day-btn.btn-primary')).map(b => b.getAttribute('data-day'));
@@ -7613,6 +7681,7 @@ async function submitNewZone() {
 }
 
 async function showEditZoneModal(id) {
+  if (logViewOnlyGuard('zones')) return;
   const [zoneRes, trucksRes] = await Promise.all([API.get(`/zones/${id}`), API.get('/trucks')]);
   const zone = zoneRes.data.zone;
   const trucks = (trucksRes.data.trucks || []).filter(t => !t.archived);
@@ -7752,6 +7821,7 @@ function updateNewZoneZipInput() {
 }
 
 async function submitEditZone(id) {
+  if (logViewOnlyGuard('zones')) return;
   const name = document.getElementById('editZoneName').value.trim();
   if (!name) { showToast('Please enter a zone name', 'warning'); return; }
   const selectedDays = Array.from(document.querySelectorAll('.edit-zone-day-btn.btn-primary')).map(b => b.getAttribute('data-day'));
@@ -7836,6 +7906,7 @@ function buildRuleJSON() { return {}; } function ruleConfigHTML() { return ''; }
 
 // ==================== PRODUCT EDIT MODAL (WITH DIMENSIONS) ====================
 async function showEditProductModal(id) {
+  if (logViewOnlyGuard('products')) return;
   const { data } = await API.get('/products');
   const p = data.products.find(pr => pr.id === id);
   if (!p) { showToast('Product not found', 'error'); return; }
@@ -7903,6 +7974,7 @@ async function showEditProductModal(id) {
 }
 
 async function submitEditProduct(id) {
+  if (logViewOnlyGuard('products')) return;
   const name = document.getElementById('editProdName').value.trim();
   if (!name) { showToast('Product name required', 'warning'); return; }
   try {
@@ -8188,6 +8260,7 @@ async function renderCustomerDetail(id) {
 }
 
 async function showNewCustomerModal() {
+  if (logViewOnlyGuard('customers')) return;
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
@@ -8227,6 +8300,7 @@ async function showNewCustomerModal() {
 }
 
 async function submitNewCustomer() {
+  if (logViewOnlyGuard('customers')) return;
   const name = document.getElementById('newCustName').value;
   if (!name) { showToast('Business name is required', 'warning'); return; }
   try {
@@ -8327,6 +8401,7 @@ async function filterProducts() {
 }
 
 async function showNewProductModal() {
+  if (logViewOnlyGuard('products')) return;
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
@@ -8383,6 +8458,7 @@ async function showNewProductModal() {
 }
 
 async function submitNewProduct() {
+  if (logViewOnlyGuard('products')) return;
   const name = document.getElementById('newProdName').value;
   if (!name) { showToast('Product name required', 'warning'); return; }
   try {
@@ -8456,6 +8532,7 @@ async function renderTrucks() {
 }
 
 async function showNewTruckModal() {
+  if (logViewOnlyGuard('trucks')) return;
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
@@ -8493,6 +8570,7 @@ async function showNewTruckModal() {
 }
 
 async function submitNewTruck() {
+  if (logViewOnlyGuard('trucks')) return;
   const name = document.getElementById('newTruckName').value;
   if (!name) { showToast('Truck name required', 'warning'); return; }
   const truckType = document.getElementById('newTruckType').value;
@@ -8514,6 +8592,7 @@ async function submitNewTruck() {
 }
 
 async function showEditTruckModal(id) {
+  if (logViewOnlyGuard('trucks')) return;
   const { data } = await API.get('/trucks');
   const tk = data.trucks.find(t => t.id === id);
   if (!tk) { showToast('Truck not found', 'error'); return; }
@@ -8554,6 +8633,7 @@ async function showEditTruckModal(id) {
 }
 
 async function submitEditTruck(id) {
+  if (logViewOnlyGuard('trucks')) return;
   const name = document.getElementById('editTruckName').value.trim();
   if (!name) { showToast('Truck name required', 'warning'); return; }
   const truckType = document.getElementById('editTruckType').value;
@@ -9885,6 +9965,7 @@ function clearProofPhoto() {
 }
 
 async function submitDeliveryProof(stopId, orderId, fallbackLat, fallbackLng) {
+  if (logViewOnlyGuard('driver_view')) return;
   if (!window._proofPhotoData) {
     showToast(t('proof_photo_required'), 'warning');
     return;
@@ -9966,6 +10047,7 @@ async function viewDeliveryProof(orderId) {
 
 // ==================== EDIT CUSTOMER / ADDRESS MODALS ====================
 async function showEditCustomerModal(custId, orderId) {
+  if (logViewOnlyGuard('customers')) return;
   const [custRes, truckRes] = await Promise.all([API.get(`/customers/${custId}`), API.get('/trucks')]);
   const c = custRes.data.customer;
   const trucks = truckRes.data.trucks || [];
@@ -10007,6 +10089,7 @@ async function showEditCustomerModal(custId, orderId) {
 }
 
 async function submitEditCustomer(custId, orderId) {
+  if (logViewOnlyGuard('customers')) return;
   try {
     const truckVal = document.getElementById('editCustTruck')?.value;
     await API.put(`/customers/${custId}`, {
@@ -10026,6 +10109,7 @@ async function submitEditCustomer(custId, orderId) {
 }
 
 async function showEditAddressModal(addrId, orderId, customerId) {
+  if (logViewOnlyGuard('customers')) return;
   const [addrRes, driversRes] = await Promise.all([
     API.get(`/addresses/${addrId}`),
     API.get('/drivers')
@@ -10136,6 +10220,7 @@ function openPinPickerInEditModal() {
 }
 
 async function submitEditAddress(addrId, orderId, customerId) {
+  if (logViewOnlyGuard('customers')) return;
   const street = document.getElementById('editAddrStreet').value.trim();
   const city = document.getElementById('editAddrCity').value.trim();
   if (!street || !city) { showToast('Street and City are required', 'warning'); return; }
@@ -10245,6 +10330,7 @@ function showPinDropModal(addrId, orderId, customerId) {
 }
 
 async function savePinDrop(addrId, orderId, customerId) {
+  if (logViewOnlyGuard('customers')) return;
   if (!window._pinDropData?.lat) { showToast('Click the map to place a pin first', 'warning'); return; }
   try {
     await API.put(`/addresses/${addrId}/coordinates`, { lat: window._pinDropData.lat, lng: window._pinDropData.lng });
@@ -10297,6 +10383,7 @@ async function showNewAddressForCustomer(custId) {
 }
 
 async function submitNewAddressForCustomer(custId) {
+  if (logViewOnlyGuard('customers')) return;
   const street = document.getElementById('newCustAddrStreet').value.trim();
   const city = document.getElementById('newCustAddrCity').value.trim();
   if (!street || !city) { showToast('Street and City are required', 'warning'); return; }
@@ -10366,6 +10453,7 @@ async function showNewAddressModal(custId, orderId) {
 }
 
 async function submitNewAddress(custId, orderId) {
+  if (logViewOnlyGuard('customers')) return;
   const street = document.getElementById('newAddrStreet').value.trim();
   if (!street) { showToast('Street is required', 'warning'); return; }
   try {
@@ -10670,6 +10758,7 @@ async function renderDriversManagement() {
 }
 
 function showNewDriverModal() {
+  if (logViewOnlyGuard('drivers_mgmt')) return;
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
@@ -10697,6 +10786,7 @@ function showNewDriverModal() {
 }
 
 async function submitNewDriver() {
+  if (logViewOnlyGuard('drivers_mgmt')) return;
   const name = document.getElementById('newDriverName').value.trim();
   const email = document.getElementById('newDriverEmail').value.trim();
   if (!name || !email) { showToast('Name and email are required', 'warning'); return; }
@@ -10715,6 +10805,7 @@ async function submitNewDriver() {
 }
 
 async function showEditDriverModal(id) {
+  if (logViewOnlyGuard('drivers_mgmt')) return;
   const { data } = await API.get('/users');
   const user = data.users.find(u => u.id === id);
   if (!user) { showToast('Driver not found', 'error'); return; }
@@ -10751,6 +10842,7 @@ async function showEditDriverModal(id) {
 }
 
 async function submitEditDriver(id) {
+  if (logViewOnlyGuard('drivers_mgmt')) return;
   const name = document.getElementById('editDriverName').value.trim();
   if (!name) { showToast('Name required', 'warning'); return; }
   const payload = {
@@ -10866,6 +10958,7 @@ async function renderMaintenance() {
 }
 
 function showNewMaintenanceModal() {
+  if (logViewOnlyGuard('maintenance')) return;
   const trucks = window._maintTrucks || [];
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
@@ -10902,6 +10995,7 @@ function showNewMaintenanceModal() {
 }
 
 async function submitNewMaintenance() {
+  if (logViewOnlyGuard('maintenance')) return;
   const desc = document.getElementById('maintDesc').value.trim();
   if (!desc) { showToast('Description required', 'warning'); return; }
   try {
@@ -10924,6 +11018,7 @@ async function submitNewMaintenance() {
 }
 
 async function showEditMaintenanceModal(id) {
+  if (logViewOnlyGuard('maintenance')) return;
   const { data } = await API.get('/fleet/maintenance');
   const m = data.maintenance.find(x => x.id === id);
   if (!m) { showToast('Record not found', 'error'); return; }
@@ -10967,6 +11062,7 @@ async function showEditMaintenanceModal(id) {
 }
 
 async function submitEditMaintenance(id) {
+  if (logViewOnlyGuard('maintenance')) return;
   try {
     await API.put(`/fleet/maintenance/${id}`, {
       truck_id: parseInt(document.getElementById('editMaintTruck').value),
@@ -11086,6 +11182,7 @@ function handleIssuePhoto(event) {
 }
 
 async function submitIssueReport() {
+  if (logViewOnlyGuard('maintenance')) return;
   const desc = document.getElementById('issueDesc').value.trim();
   if (!desc) { showToast('Description required', 'warning'); return; }
   try {
@@ -11168,6 +11265,7 @@ function handleRecordFile(event) {
 }
 
 async function submitUploadRecord() {
+  if (logViewOnlyGuard('maintenance')) return;
   if (!window._recordFileData) { showToast('Please select a file', 'warning'); return; }
   try {
     await API.post('/fleet/records', {
@@ -11506,6 +11604,7 @@ async function loadRecurringAddresses(customerId) {
 }
 
 async function submitNewRecurring() {
+  if (logViewOnlyGuard('recurring')) return;
   const customer_id = document.getElementById('recurCustomer').value;
   if (!customer_id) { showToast('Please select a customer', 'warning'); return; }
   if (window._recurItems.length === 0) { showToast('Please add at least one item', 'warning'); return; }
@@ -11535,6 +11634,7 @@ async function submitNewRecurring() {
 }
 
 async function showEditRecurringModal(id) {
+  if (logViewOnlyGuard('recurring')) return;
   const [schedData, custData, prodData] = await Promise.all([
     API.get(`/recurring-schedules/${id}`), API.get('/customers'), API.get('/products')
   ]);
@@ -11635,6 +11735,7 @@ async function showEditRecurringModal(id) {
 }
 
 async function submitEditRecurring(id) {
+  if (logViewOnlyGuard('recurring')) return;
   const freq = document.getElementById('recurFrequency').value;
   try {
     await API.put(`/recurring-schedules/${id}`, {
@@ -11687,6 +11788,7 @@ function showSkipRecurringModal(scheduleId) {
 }
 
 async function submitSkipRecurring(id) {
+  if (logViewOnlyGuard('recurring')) return;
   const reason = document.getElementById('skipReason')?.value?.trim() || '';
   try {
     await API.post(`/recurring-schedules/${id}/skip`, { reason });
@@ -11718,6 +11820,7 @@ async function generateAllDue() {
 
 // Make Recurring from existing order
 async function showMakeRecurringModal(orderId, customerId, addressId, priority, instructions) {
+  if (logViewOnlyGuard('recurring')) return;
   const { data: orderData } = await API.get(`/orders/${orderId}`);
   const items = orderData.items || [];
   const prodData = await API.get('/products');
@@ -11784,6 +11887,7 @@ async function showMakeRecurringModal(orderId, customerId, addressId, priority, 
 }
 
 async function submitMakeRecurring(orderId, customerId, addressId, priority) {
+  if (logViewOnlyGuard('recurring')) return;
   const nextDate = document.getElementById('recurNextDate').value;
   if (!nextDate) { showToast('Please set the next delivery date', 'warning'); return; }
   if (window._recurItems.length === 0) { showToast('No items in the schedule', 'warning'); return; }
@@ -11836,6 +11940,7 @@ function showHoldOrderModal(orderId, currentStatus) {
 }
 
 async function submitHoldOrder(orderId) {
+  if (logViewOnlyGuard('orders')) return;
   const reason = document.getElementById('holdReason')?.value?.trim() || '';
   try {
     await API.patch(`/orders/${orderId}/hold`, { action: 'hold', hold_reason: reason });
@@ -12011,6 +12116,7 @@ async function showAssignDriverToRoute(routeId, currentDriverId) {
 }
 
 async function submitAssignDriver(routeId) {
+  if (logViewOnlyGuard('routes')) return;
   const driverId = parseInt(document.getElementById('routeAssignDriver')?.value) || null;
   try {
     await API.put(`/routes/${routeId}`, { driver_id: driverId });
@@ -12059,6 +12165,7 @@ async function showAssignTruckToRoute(routeId, currentTruckId, currentDriverId) 
 }
 
 async function submitAssignTruck(routeId) {
+  if (logViewOnlyGuard('routes')) return;
   const truckId = parseInt(document.getElementById('routeAssignTruck')?.value) || null;
   try {
     await API.put(`/routes/${routeId}`, { truck_id: truckId });
@@ -12137,6 +12244,7 @@ function showChangeDateModal(routeId, currentDate) {
 }
 
 async function submitChangeDate(routeId) {
+  if (logViewOnlyGuard('routes')) return;
   const newDate = document.getElementById('changeDateInput')?.value;
   if (!newDate) { showToast('Please select a date', 'warning'); return; }
   try {
@@ -12148,6 +12256,7 @@ async function submitChangeDate(routeId) {
 }
 
 async function submitRenameRoute(routeId) {
+  if (logViewOnlyGuard('routes')) return;
   const name = document.getElementById('renameRouteInput')?.value?.trim();
   if (!name) { showToast('Route name cannot be empty', 'warning'); return; }
   try {
@@ -12275,6 +12384,7 @@ async function addReturnItemRow() {
 }
 
 async function submitReturn() {
+  if (logViewOnlyGuard('returns')) return;
   const customerId = parseInt(document.getElementById('returnCustomerId')?.value);
   const orderId = parseInt(document.getElementById('returnOrderId')?.value) || null;
   const routeId = parseInt(document.getElementById('returnRouteId')?.value) || null;
@@ -12311,6 +12421,7 @@ async function submitReturn() {
 
 // ==================== ENHANCED ORDER EDITING (with items) ====================
 async function showEditOrderModal(orderId) {
+  if (logViewOnlyGuard('orders')) return;
   try {
     const [orderRes, productsRes] = await Promise.all([
       API.get(`/orders/${orderId}`),
@@ -12385,6 +12496,7 @@ function addEditOrderItemRow() {
 }
 
 async function submitEditOrder(id) {
+  if (logViewOnlyGuard('orders')) return;
   try {
     // Gather items
     const rows = document.querySelectorAll('.edit-order-item-row');
@@ -12672,6 +12784,7 @@ async function showReturnDetail(returnId) {
 
 // ==================== EDIT RETURN MODAL ====================
 async function showEditReturnModal(returnId) {
+  if (logViewOnlyGuard('returns')) return;
   try {
     const [retRes, productsRes] = await Promise.all([
       API.get(`/returns/${returnId}`),
@@ -12761,6 +12874,7 @@ function addEditReturnItemRow() {
 }
 
 async function submitEditReturn(returnId) {
+  if (logViewOnlyGuard('returns')) return;
   const notes = document.getElementById('editReturnNotes')?.value || '';
   const rows = document.querySelectorAll('.edit-return-item-row');
   const items = [];
@@ -12887,6 +13001,7 @@ async function showReceiveReturnModal(returnId) {
 }
 
 async function submitReceiveReturn(returnId, alsoProcess) {
+  if (logViewOnlyGuard('returns')) return;
   const rows = document.querySelectorAll('.receive-item-row');
   const items = [];
   rows.forEach(row => {
