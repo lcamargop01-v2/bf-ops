@@ -79,28 +79,56 @@ function renderLogin() {
 var _userPermissions = 'all';
 var _canViewFinancials = true;
 
+// Sub-page → parent feature mapping
+// Detail/sub-pages inherit permissions from their parent feature
+var _featureParentMap = {
+  // CRM sub-pages
+  'orgDetail': 'organizations',
+  'contactDetail': 'contacts',
+  'oppDetail': 'pipeline',
+  // Purchasing sub-pages
+  'create': 'orders',
+  'detail': 'orders',
+  'receive': 'arriving',
+  'request_detail': 'requests'
+};
+
+function _resolveFeature(module, feature) {
+  if (!_userPermissions || _userPermissions === 'all') return feature;
+  var modulePerms = _userPermissions[module];
+  if (modulePerms && typeof modulePerms === 'object' && !Array.isArray(modulePerms)) {
+    // If feature exists directly in permissions, use it
+    if (modulePerms[feature] !== undefined) return feature;
+    // Otherwise try the parent map
+    if (_featureParentMap[feature]) return _featureParentMap[feature];
+  }
+  return feature;
+}
+
 function canAccess(module, feature) {
   if (_userPermissions === 'all') return true;
   if (!_userPermissions || !_userPermissions[module]) return false;
+  var resolved = _resolveFeature(module, feature);
   // New format: object { feature: 'view'|'edit' }
   var modulePerms = _userPermissions[module];
   if (typeof modulePerms === 'object' && !Array.isArray(modulePerms)) {
-    return !!modulePerms[feature]; // 'view' or 'edit' both count as access
+    return !!modulePerms[resolved]; // 'view' or 'edit' both count as access
   }
   // Legacy fallback: array format
-  if (Array.isArray(modulePerms)) return modulePerms.indexOf(feature) !== -1;
+  if (Array.isArray(modulePerms)) return modulePerms.indexOf(resolved) !== -1;
   return false;
 }
 
 function canEdit(module, feature) {
   if (_userPermissions === 'all') return true;
   if (!_userPermissions || !_userPermissions[module]) return false;
+  var resolved = _resolveFeature(module, feature);
   var modulePerms = _userPermissions[module];
   if (typeof modulePerms === 'object' && !Array.isArray(modulePerms)) {
-    return modulePerms[feature] === 'edit';
+    return modulePerms[resolved] === 'edit';
   }
   // Legacy fallback: array format = edit access
-  if (Array.isArray(modulePerms)) return modulePerms.indexOf(feature) !== -1;
+  if (Array.isArray(modulePerms)) return modulePerms.indexOf(resolved) !== -1;
   return false;
 }
 
