@@ -249,7 +249,9 @@ app.get('/api/crm/opportunities', async (c) => {
   const search = c.req.query('search')
 
   let q = `SELECT o.*, s.name as stage_name, s.sort_order, s.stage_type, s.win_probability,
-    org.name as org_name, c.first_name || ' ' || COALESCE(c.last_name,'') as contact_name,
+    org.name as org_name, org.phone as org_phone,
+    c.first_name || ' ' || COALESCE(c.last_name,'') as contact_name,
+    c.phone as contact_phone, c.email as contact_email,
     u.name as owner_name
     FROM crm_opportunities o
     LEFT JOIN crm_pipeline_stages s ON o.stage_id = s.id

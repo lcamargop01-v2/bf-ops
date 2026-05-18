@@ -670,6 +670,73 @@
 .crm-desktop-only { display: block; }
 .crm-mobile-only { display: none; }
 
+/* ==================== VIEW TOGGLE ==================== */
+.crm-view-toggle {
+  display: inline-flex;
+  background: #F1F5F9;
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+.crm-view-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  color: #64748B;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+.crm-view-toggle-btn:hover { color: #0F172A; background: rgba(255,255,255,0.5); }
+.crm-view-toggle-btn.active { background: white; color: #6366F1; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+/* ==================== PIPELINE TOOLBAR ==================== */
+.crm-pipeline-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.crm-select-sm {
+  padding: 6px 10px;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  font-size: 13px;
+  background: white;
+  cursor: pointer;
+  color: #334155;
+}
+.crm-select-sm:focus { border-color: #6366F1; outline: none; }
+
+/* ==================== PIPELINE TABLE VIEW ==================== */
+.crm-pipeline-table-wrap { border: 1px solid #E2E8F0; border-radius: 10px; overflow: hidden; }
+.crm-pipeline-table { font-size: 13px; }
+.crm-pipeline-table th {
+  position: sticky;
+  top: 0;
+  background: #F8FAFC;
+  z-index: 2;
+  user-select: none;
+}
+.crm-sortable { cursor: pointer; }
+.crm-sortable:hover { background: #EEF2FF; }
+
+.crm-tier-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
 /* ==================== RESPONSIVE ==================== */
 @media (max-width: 768px) {
   .crm-desktop-only { display: none !important; }
@@ -704,6 +771,11 @@
   .crm-detail-avatar { width: 44px; height: 44px; font-size: 18px; border-radius: 10px; }
   .crm-detail-header h2 { font-size: 18px; }
   .crm-detail-actions { width: 100%; justify-content: flex-end; }
+
+  .crm-pipeline-toolbar { gap: 6px; }
+  .crm-pipeline-toolbar .crm-search-box { min-width: 160px; max-width: 100% !important; flex: 1; }
+  .crm-pipeline-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .crm-pipeline-table { min-width: 800px; }
 }
 
 @media (max-width: 480px) {
