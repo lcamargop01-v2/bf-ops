@@ -62,8 +62,19 @@ app.post('/api/auth/login', async (c) => {
   // Generate simple token (same approach as logistics)
   const token = btoa(JSON.stringify({ id: user.id, email: user.email, role: user.role, exp: Date.now() + 86400000 }))
 
+  // Parse pinned_pages JSON
+  let pinnedPages = null
+  try { pinnedPages = user.pinned_pages ? JSON.parse(user.pinned_pages) : null } catch {}
+
   return c.json({
-    user: { id: user.id, name: user.name, email: user.email, role: user.role, phone: user.phone, modules: allModules },
+    user: {
+      id: user.id, name: user.name, email: user.email, role: user.role, phone: user.phone,
+      modules: allModules,
+      default_module: user.default_module || null,
+      default_page: user.default_page || null,
+      pinned_pages: pinnedPages,
+      sidebar_mode: user.sidebar_mode || 'full',
+    },
     token,
     permissions: featurePerms,
     can_view_financials: canViewFinancials
@@ -78,14 +89,17 @@ app.get('/api/auth/me', async (c) => {
     const payload = JSON.parse(atob(token))
     if (payload.exp < Date.now()) return c.json({ error: 'Token expired' }, 401)
     const db = c.env.DB
-    const user = await db.prepare('SELECT id, name, email, role, phone FROM users WHERE id = ? AND active = 1').bind(payload.id).first() as any
+    const user = await db.prepare('SELECT id, name, email, role, phone, default_module, default_page, pinned_pages, sidebar_mode FROM users WHERE id = ? AND active = 1').bind(payload.id).first() as any
     if (!user) return c.json({ error: 'User not found' }, 401)
 
     const accessRows = await db.prepare('SELECT module FROM user_module_access WHERE user_id = ?').bind(user.id).all()
     const modules = accessRows.results?.map((r: any) => r.module) || []
     const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : modules
 
-    return c.json({ user: { ...user, modules: allModules } })
+    let pinnedPages = null
+    try { pinnedPages = user.pinned_pages ? JSON.parse(user.pinned_pages) : null } catch {}
+
+    return c.json({ user: { ...user, modules: allModules, pinned_pages: pinnedPages, sidebar_mode: user.sidebar_mode || 'full' } })
   } catch { return c.json({ error: 'Invalid token' }, 401) }
 })
 
@@ -95,7 +109,7 @@ app.get('/api/admin/users', async (c) => {
   const db = c.env.DB
   const incArchived = c.req.query('include_archived') === '1'
   const users = await db.prepare(
-    `SELECT id, name, email, role, phone, preferred_language, active, created_at FROM users ${incArchived ? '' : 'WHERE active = 1'} ORDER BY role, name`
+    `SELECT id, name, email, role, phone, preferred_language, active, created_at, default_module, default_page, pinned_pages, sidebar_mode FROM users ${incArchived ? '' : 'WHERE active = 1'} ORDER BY role, name`
   ).all()
   // Get module access for all users
   const access = await db.prepare('SELECT user_id, module FROM user_module_access').all()
@@ -104,10 +118,16 @@ app.get('/api/admin/users', async (c) => {
     if (!accessMap[row.user_id]) accessMap[row.user_id] = []
     accessMap[row.user_id].push(row.module)
   }
-  const result = (users.results || []).map((u: any) => ({
-    ...u,
-    modules: u.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : (accessMap[u.id] || [])
-  }))
+  const result = (users.results || []).map((u: any) => {
+    let pinnedPages = null
+    try { pinnedPages = u.pinned_pages ? JSON.parse(u.pinned_pages) : null } catch {}
+    return {
+      ...u,
+      modules: u.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : (accessMap[u.id] || []),
+      pinned_pages: pinnedPages,
+      sidebar_mode: u.sidebar_mode || 'full',
+    }
+  })
   // Also return available roles for the edit user modal
   const rolesRes = await db.prepare('SELECT name, description, is_system FROM roles ORDER BY is_system DESC, name').all()
   return c.json({ users: result, roles: rolesRes.results || [] })
@@ -176,6 +196,53 @@ app.put('/api/admin/users/:id/modules', async (c) => {
   }
 
   return c.json({ success: true, modules })
+})
+
+// ==================== USER VIEW PREFERENCES ====================
+
+// Users can update their own preferences
+app.put('/api/user/preferences', async (c) => {
+  const auth = c.req.header('Authorization')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+  try {
+    const token = auth.replace('Bearer ', '')
+    const payload = JSON.parse(atob(token))
+    if (payload.exp < Date.now()) return c.json({ error: 'Token expired' }, 401)
+
+    const body = await c.req.json() as any
+    const db = c.env.DB
+    const fields: string[] = []
+    const vals: any[] = []
+
+    if (body.default_module !== undefined) { fields.push('default_module = ?'); vals.push(body.default_module || null) }
+    if (body.default_page !== undefined) { fields.push('default_page = ?'); vals.push(body.default_page || null) }
+    if (body.pinned_pages !== undefined) { fields.push('pinned_pages = ?'); vals.push(body.pinned_pages ? JSON.stringify(body.pinned_pages) : null) }
+    if (body.sidebar_mode !== undefined) { fields.push('sidebar_mode = ?'); vals.push(body.sidebar_mode || 'full') }
+
+    if (fields.length === 0) return c.json({ error: 'No preferences to update' }, 400)
+    vals.push(payload.id)
+    await db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run()
+    return c.json({ success: true })
+  } catch { return c.json({ error: 'Invalid token' }, 401) }
+})
+
+// Admin can set preferences for any user
+app.put('/api/admin/users/:id/preferences', async (c) => {
+  const userId = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+  const db = c.env.DB
+  const fields: string[] = []
+  const vals: any[] = []
+
+  if (body.default_module !== undefined) { fields.push('default_module = ?'); vals.push(body.default_module || null) }
+  if (body.default_page !== undefined) { fields.push('default_page = ?'); vals.push(body.default_page || null) }
+  if (body.pinned_pages !== undefined) { fields.push('pinned_pages = ?'); vals.push(body.pinned_pages ? JSON.stringify(body.pinned_pages) : null) }
+  if (body.sidebar_mode !== undefined) { fields.push('sidebar_mode = ?'); vals.push(body.sidebar_mode || 'full') }
+
+  if (fields.length === 0) return c.json({ error: 'No preferences to update' }, 400)
+  vals.push(userId)
+  await db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run()
+  return c.json({ success: true })
 })
 
 // ==================== ADMIN: INVITE SYSTEM ====================
@@ -279,6 +346,7 @@ const MODULE_FEATURES: Record<string, { id: string; label: string }[]> = {
     { id: 'packing', label: 'Packing Lists' },
     { id: 'returns', label: 'Returns' },
     { id: 'learning', label: 'AI Learning' },
+    { id: 'warehouse', label: 'Warehouse' },
     { id: 'fleet_tracking', label: 'Fleet Tracking' },
     { id: 'fleet_sync', label: 'Fleet Sync' },
   ],

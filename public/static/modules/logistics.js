@@ -1816,7 +1816,51 @@ function renderSidebarContent() {
       filteredItems.push(item);
     }
   }
-  const items2 = filteredItems;
+
+  // Get view preferences from shell's currentUser (bf_ops_user)
+  var shellUser = null;
+  try { shellUser = JSON.parse(localStorage.getItem('bf_ops_user') || 'null'); } catch(e) {}
+  var sidebarMode = (shellUser && shellUser.sidebar_mode) || 'full';
+  var pinnedPages = (shellUser && shellUser.pinned_pages && shellUser.pinned_pages.logistics) || [];
+
+  // Apply sidebar mode filtering
+  var items2;
+  if (sidebarMode === 'pinned' && pinnedPages.length > 0) {
+    // Simple mode: only show pinned pages (no section headers)
+    items2 = filteredItems.filter(function(item) {
+      return !item.section && pinnedPages.indexOf(item.id) !== -1;
+    });
+  } else if (sidebarMode === 'full' && pinnedPages.length > 0) {
+    // Full mode with pinned pages at top: pinned first, separator, then rest
+    var pinnedItems = [];
+    var remainingItems = [];
+    var currentSection = null;
+    for (var i = 0; i < filteredItems.length; i++) {
+      var fi = filteredItems[i];
+      if (fi.section) { currentSection = fi; continue; }
+      if (pinnedPages.indexOf(fi.id) !== -1) {
+        pinnedItems.push(fi);
+      } else {
+        if (currentSection) { remainingItems.push(currentSection); currentSection = null; }
+        remainingItems.push(fi);
+      }
+    }
+    // Build combined list: pinned section first, then separator, then remaining
+    items2 = [];
+    if (pinnedItems.length > 0) {
+      items2.push({ section: '<i class="fas fa-thumbtack" style="font-size:10px;margin-right:4px"></i>Pinned' });
+      items2 = items2.concat(pinnedItems);
+      if (remainingItems.length > 0) {
+        items2.push({ section: 'All Pages' });
+        items2 = items2.concat(remainingItems);
+      }
+    } else {
+      items2 = filteredItems;
+    }
+  } else {
+    items2 = filteredItems;
+  }
+
   if (currentUser?.role === 'driver') {
     return `
       <div class="sidebar-header">
@@ -1831,6 +1875,19 @@ function renderSidebarContent() {
       <div style="padding:12px 16px">${langSelectorHTML()}</div>
       ${renderSidebarUser()}`;
   }
+
+  // Render nav item helper
+  function navItemHtml(item) {
+    var isPinned = pinnedPages.indexOf(item.id) !== -1;
+    var pinIcon = isPinned ? '<i class="fas fa-thumbtack" style="font-size:8px;color:#7C3AED;margin-left:auto;opacity:0.6"></i>' : '';
+    return '<div class="nav-item ' + (currentPage===item.id?'active':'') + '" onclick="navigate(\'' + item.id + '\')">' +
+      '<i class="fas ' + item.icon + '"></i> ' + item.label +
+      (item.badge ? ' <span style="font-size:9px;background:linear-gradient(135deg,#7C3AED,#5B21B6);color:white;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700">' + item.badge + '</span>' : '') +
+      (item.dynamicBadge ? '<span class="nav-badge" id="navBadge_' + item.dynamicBadge + '" style="display:none"></span>' : '') +
+      (sidebarMode === 'full' ? pinIcon : '') +
+    '</div>';
+  }
+
   return `
     <div class="sidebar-header">
       <div class="sidebar-logo"><i class="fas fa-truck-fast"></i><h1>${t('login_title')}</h1></div>
@@ -1839,7 +1896,7 @@ function renderSidebarContent() {
     <nav class="sidebar-nav">
       ${items2.map(item => item.section
         ? `<div class="nav-section">${item.section}</div>`
-        : `<div class="nav-item ${currentPage===item.id?'active':''}" onclick="navigate('${item.id}')"><i class="fas ${item.icon}"></i> ${item.label}${item.badge ? ` <span style="font-size:9px;background:linear-gradient(135deg,#7C3AED,#5B21B6);color:white;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700">${item.badge}</span>` : ''}${item.dynamicBadge ? `<span class="nav-badge" id="navBadge_${item.dynamicBadge}" style="display:none"></span>` : ''}</div>`
+        : navItemHtml(item)
       ).join('')}
     </nav>
     <div style="padding:12px 16px">${langSelectorHTML()}</div>
@@ -14329,6 +14386,14 @@ window._logisticsInit = function() {
       currentUser = JSON.parse(savedUser);
       if (currentUser.role === 'driver') currentPage = 'driver';
     } catch (e) { clearToken(); }
+  }
+  // Consume initial page from parent shell (set by launchModule)
+  if (window._shellInitialPage) {
+    var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+    if (_ca('logistics', window._shellInitialPage)) {
+      currentPage = window._shellInitialPage;
+    }
+    window._shellInitialPage = null; // consume once
   }
   render();
   // Initialize scan queue (restores from localStorage if there are saved items)

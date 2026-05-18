@@ -36,6 +36,12 @@ window._purchasingInit = function() {
     try { poUser = JSON.parse(savedUser); } catch(e) { poUser = null; }
   }
   poPage = 'dashboard';
+  // Consume initial page from parent shell
+  if (window._shellInitialPage) {
+    var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+    if (_ca('ordering', window._shellInitialPage)) poPage = window._shellInitialPage;
+    window._shellInitialPage = null;
+  }
   Promise.all([poLoadLocations(), poLoadSuppliers()]).then(function() {
     console.log('[Purchasing] locations:', poLocations.length, 'suppliers:', poSuppliers.length);
     poRender();

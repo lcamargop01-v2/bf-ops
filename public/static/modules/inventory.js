@@ -43,6 +43,12 @@ window._inventoryInit = function() {
     try { invUser = JSON.parse(savedUser); } catch(e) { invUser = null; }
   }
   invPage = 'dashboard';
+  // Consume initial page from parent shell
+  if (window._shellInitialPage) {
+    var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+    if (_ca('inventory', window._shellInitialPage)) invPage = window._shellInitialPage;
+    window._shellInitialPage = null;
+  }
   Promise.all([invLoadLocations(), invLoadCategories()]).then(function() {
     console.log('[Inventory] locations loaded:', invLocations.length, ', categories:', invCategoryList.length, '— rendering');
     invRender();

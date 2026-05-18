@@ -157,7 +157,12 @@ async function doLogin(e) {
     window.canEdit = canEdit;
     window.canViewFinancials = canViewFinancials;
     shellToast(`Welcome, ${currentUser.name}!`);
-    renderHome();
+    // Auto-navigate to user's default landing if configured
+    if (currentUser.default_module) {
+      launchModule(currentUser.default_module, currentUser.default_page || null);
+    } else {
+      renderHome();
+    }
   } catch (err) {
     shellToast('Invalid credentials', 'error');
   }
@@ -214,6 +219,7 @@ function renderHome() {
             <div class="role">${currentUser.role}</div>
           </div>
           <div class="shell-user-avatar">${getInitials(currentUser.name)}</div>
+          <button class="shell-my-view-btn" onclick="showMyViewSettings()" title="Customize your view"><i class="fas fa-sliders-h"></i></button>
           <button class="shell-logout-btn" onclick="shellLogout()"><i class="fas fa-sign-out-alt"></i> Sign Out</button>
         </div>
       </div>
@@ -244,8 +250,10 @@ function renderHome() {
 
 // ==================== MODULE LAUNCHER ====================
 
-function launchModule(moduleId) {
-  if (moduleId === activeModule) return;
+function launchModule(moduleId, initialPage) {
+  if (moduleId === activeModule && !initialPage) return;
+  // Store initial page for module to pick up after loading
+  window._shellInitialPage = initialPage || null;
 
   // Clean up previous module
   cleanupActiveModule();
@@ -570,6 +578,8 @@ async function renderAdminPanel() {
     // Store roles globally so modals can use them
     window._adminRoles = allRoles;
     window._adminModuleFeatures = moduleFeatures;
+    // Store users globally so view config modal can look up user data
+    window._adminUsers = users;
     const allModuleIds = ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks'];
     var roleColors = { admin: '#7C3AED', dispatcher: '#3B82F6', warehouse: '#059669', driver: '#D97706', customer: '#94A3B8' };
     var langNames = { en: 'English', es: 'Español', ht: 'Kreyòl' };
@@ -609,6 +619,7 @@ async function renderAdminPanel() {
                   <td>${u.active ? '<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#ECFDF5;color:#059669;font-weight:600">Active</span>' : '<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#FEF2F2;color:#DC2626;font-weight:600">Inactive</span>'}</td>
                   <td style="display:flex;gap:4px;flex-wrap:wrap">
                     <button class="shell-save-btn" onclick="showAdminEditUserModal(${u.id})" title="Edit"><i class="fas fa-edit"></i></button>
+                    <button class="shell-save-btn" style="background:#6366F1" onclick="showAdminViewConfigModal(${u.id})" title="Configure View"><i class="fas fa-sliders-h"></i></button>
                     ${u.active ? '<button class="shell-save-btn" style="background:#7C3AED" onclick="adminGenerateInvite(' + u.id + ',this)" title="Send Invite Link"><i class="fas fa-envelope"></i></button>' : ''}
                     ${u.active ? '<button class="shell-save-btn" style="background:#DC2626" onclick="adminToggleUser(' + u.id + ',0)" title="Deactivate"><i class="fas fa-ban"></i></button>' : '<button class="shell-save-btn" style="background:#059669" onclick="adminToggleUser(' + u.id + ',1)" title="Reactivate"><i class="fas fa-check"></i></button>'}
                   </td>
@@ -1059,6 +1070,298 @@ async function deleteRole(roleName) {
   }
 }
 
+// ==================== MY VIEW SETTINGS ====================
+
+var SHELL_ALL_MODULES = [
+  { id: 'logistics', label: 'Logistics', icon: 'fa-truck-fast', color: '#2563EB' },
+  { id: 'inventory', label: 'Inventory', icon: 'fa-warehouse', color: '#059669' },
+  { id: 'ordering', label: 'Purchasing', icon: 'fa-cart-shopping', color: '#D97706' },
+  { id: 'crm', label: 'CRM', icon: 'fa-handshake', color: '#7C3AED' },
+];
+
+var SHELL_MODULE_PAGES = {
+  logistics: [
+    { id: 'dashboard', label: 'Dashboard', icon: 'fa-tachometer-alt' },
+    { id: 'orders', label: 'Orders', icon: 'fa-clipboard-list' },
+    { id: 'ticket_review', label: 'Ticket Review', icon: 'fa-rectangle-list' },
+    { id: 'schedule', label: 'Schedule', icon: 'fa-calendar-alt' },
+    { id: 'routes', label: 'Routes', icon: 'fa-route' },
+    { id: 'route_builder', label: 'Route Builder', icon: 'fa-map-location-dot' },
+    { id: 'zones', label: 'Zones', icon: 'fa-map-location-dot' },
+    { id: 'recurring', label: 'Recurring', icon: 'fa-sync-alt' },
+    { id: 'customers', label: 'Customers', icon: 'fa-users' },
+    { id: 'products', label: 'Products', icon: 'fa-box-open' },
+    { id: 'trucks', label: 'Fleet', icon: 'fa-truck' },
+    { id: 'drivers_mgmt', label: 'Drivers', icon: 'fa-id-card' },
+    { id: 'maintenance', label: 'Maintenance', icon: 'fa-wrench' },
+    { id: 'warehouse', label: 'Warehouse', icon: 'fa-warehouse' },
+    { id: 'driver', label: 'Driver View', icon: 'fa-steering-wheel' },
+    { id: 'packing', label: 'Packing Lists', icon: 'fa-list-check' },
+    { id: 'returns', label: 'Returns', icon: 'fa-rotate-left' },
+    { id: 'learning', label: 'AI Learning', icon: 'fa-brain' },
+    { id: 'fleet_tracking', label: 'Fleet Tracking', icon: 'fa-satellite-dish' },
+    { id: 'fleet_sync', label: 'Fleet Sync', icon: 'fa-arrows-rotate' },
+  ],
+  inventory: [
+    { id: 'dashboard', label: 'Dashboard', icon: 'fa-tachometer-alt' },
+    { id: 'stock', label: 'Stock', icon: 'fa-boxes-stacked' },
+    { id: 'products', label: 'Products', icon: 'fa-box-open' },
+    { id: 'count', label: 'Count', icon: 'fa-clipboard-check' },
+    { id: 'transfers', label: 'Transfers', icon: 'fa-arrows-left-right' },
+  ],
+  ordering: [
+    { id: 'dashboard', label: 'Dashboard', icon: 'fa-tachometer-alt' },
+    { id: 'orders', label: 'Orders', icon: 'fa-file-invoice' },
+    { id: 'requests', label: 'Requests', icon: 'fa-hand-paper' },
+    { id: 'arriving', label: 'Arriving', icon: 'fa-truck-ramp-box' },
+    { id: 'bills', label: 'Bills', icon: 'fa-file-invoice-dollar' },
+    { id: 'suppliers', label: 'Suppliers', icon: 'fa-industry' },
+  ],
+  crm: [
+    { id: 'dashboard', label: 'Dashboard', icon: 'fa-tachometer-alt' },
+    { id: 'pipeline', label: 'Pipeline', icon: 'fa-filter' },
+    { id: 'organizations', label: 'Organizations', icon: 'fa-building' },
+    { id: 'contacts', label: 'Contacts', icon: 'fa-address-book' },
+  ],
+};
+
+function showMyViewSettings() {
+  var dm = currentUser.default_module || '';
+  var dp = currentUser.default_page || '';
+  var sm = currentUser.sidebar_mode || 'full';
+  var pinned = currentUser.pinned_pages || {};
+  var userMods = currentUser.modules || [];
+  var isAdmin = currentUser.role === 'admin';
+
+  var overlay = document.createElement('div');
+  overlay.id = 'myViewOverlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;animation:shellFadeIn .2s';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  var availMods = SHELL_ALL_MODULES.filter(function(m) { return isAdmin || userMods.includes(m.id); });
+  var defaultPageOpts = '';
+  if (dm && SHELL_MODULE_PAGES[dm]) {
+    defaultPageOpts = SHELL_MODULE_PAGES[dm].map(function(p) {
+      return '<option value="' + p.id + '"' + (dp === p.id ? ' selected' : '') + '>' + p.label + '</option>';
+    }).join('');
+  }
+
+  overlay.innerHTML = '<div style="background:white;border-radius:16px;width:90%;max-width:500px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2)" onclick="event.stopPropagation()">' +
+    '<div style="padding:20px 24px;border-bottom:1px solid #E5E7EB;display:flex;justify-content:space-between;align-items:center">' +
+      '<h3 style="font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px;margin:0"><i class="fas fa-sliders-h" style="color:#7C3AED"></i> My View</h3>' +
+      '<button onclick="document.getElementById(\'myViewOverlay\').remove()" style="background:none;border:none;font-size:20px;color:#94A3B8;cursor:pointer;padding:4px"><i class="fas fa-times"></i></button>' +
+    '</div>' +
+    '<div style="padding:20px 24px">' +
+
+      '<div style="margin-bottom:20px">' +
+        '<label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px"><i class="fas fa-home" style="color:#2563EB;margin-right:6px"></i>Default Landing</label>' +
+        '<p style="font-size:12px;color:#9CA3AF;margin-bottom:8px">Where to go when you log in. Leave blank for the module picker.</p>' +
+        '<div style="display:flex;gap:8px">' +
+          '<select id="mvDefModule" style="flex:1;padding:10px 12px;border:1px solid #E5E7EB;border-radius:8px;font-size:14px" onchange="mvUpdatePageSelect()">' +
+            '<option value="">Module picker (default)</option>' +
+            availMods.map(function(m) { return '<option value="' + m.id + '"' + (dm === m.id ? ' selected' : '') + '>' + m.label + '</option>'; }).join('') +
+          '</select>' +
+          '<select id="mvDefPage" style="flex:1;padding:10px 12px;border:1px solid #E5E7EB;border-radius:8px;font-size:14px">' +
+            '<option value="">Dashboard</option>' +
+            defaultPageOpts +
+          '</select>' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="margin-bottom:20px">' +
+        '<label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px"><i class="fas fa-bars" style="color:#059669;margin-right:6px"></i>Sidebar Mode</label>' +
+        '<p style="font-size:12px;color:#9CA3AF;margin-bottom:8px">Control how many pages show in the sidebar.</p>' +
+        '<div style="display:flex;gap:8px">' +
+          '<label style="flex:1;display:flex;align-items:center;gap:6px;padding:10px 12px;border:2px solid ' + (sm === 'full' ? '#2563EB' : '#E5E7EB') + ';border-radius:10px;cursor:pointer;font-size:13px;background:' + (sm === 'full' ? '#EFF6FF' : 'white') + '"><input type="radio" name="mvSidebar" value="full"' + (sm === 'full' ? ' checked' : '') + '> <span><strong>Full</strong><br><span style="font-size:11px;color:#6B7280">All pages</span></span></label>' +
+          '<label style="flex:1;display:flex;align-items:center;gap:6px;padding:10px 12px;border:2px solid ' + (sm === 'pinned' ? '#2563EB' : '#E5E7EB') + ';border-radius:10px;cursor:pointer;font-size:13px;background:' + (sm === 'pinned' ? '#EFF6FF' : 'white') + '"><input type="radio" name="mvSidebar" value="pinned"' + (sm === 'pinned' ? ' checked' : '') + '> <span><strong>Simple</strong><br><span style="font-size:11px;color:#6B7280">Pinned only</span></span></label>' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="margin-bottom:20px">' +
+        '<label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px"><i class="fas fa-thumbtack" style="color:#F97316;margin-right:6px"></i>Pinned Pages</label>' +
+        '<p style="font-size:12px;color:#9CA3AF;margin-bottom:8px">Choose which pages appear when sidebar is in Simple mode. These also show at the top in Full mode.</p>' +
+        '<div id="mvPinnedContainer">' + mvRenderPinnedModules(pinned, availMods) + '</div>' +
+      '</div>' +
+
+      '<button style="width:100%;padding:12px;background:linear-gradient(135deg,#7C3AED,#5B21B6);color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer" onclick="mvSavePreferences()"><i class="fas fa-check" style="margin-right:6px"></i>Save Preferences</button>' +
+    '</div>' +
+  '</div>';
+
+  document.body.appendChild(overlay);
+}
+
+function mvRenderPinnedModules(pinned, availMods) {
+  var html = '';
+  availMods.forEach(function(mod) {
+    var pages = SHELL_MODULE_PAGES[mod.id] || [];
+    var modPins = pinned[mod.id] || [];
+    html += '<div style="margin-bottom:12px">' +
+      '<div style="font-size:12px;font-weight:600;color:' + mod.color + ';margin-bottom:6px;display:flex;align-items:center;gap:6px"><i class="fas ' + mod.icon + '"></i> ' + mod.label + '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+    pages.forEach(function(p) {
+      var isPinned = modPins.includes(p.id);
+      html += '<button class="mv-pin-btn' + (isPinned ? ' active' : '') + '" data-mod="' + mod.id + '" data-page="' + p.id + '" onclick="mvTogglePin(this)" style="display:flex;align-items:center;gap:4px;padding:5px 10px;font-size:12px;border:1px solid ' + (isPinned ? '#7C3AED' : '#E5E7EB') + ';border-radius:16px;background:' + (isPinned ? '#F5F3FF' : 'white') + ';color:' + (isPinned ? '#7C3AED' : '#6B7280') + ';cursor:pointer">' +
+        '<i class="fas ' + (isPinned ? 'fa-thumbtack' : p.icon) + '" style="font-size:10px"></i> ' + p.label + '</button>';
+    });
+    html += '</div></div>';
+  });
+  return html;
+}
+
+function mvTogglePin(btn) {
+  var isActive = btn.classList.contains('active');
+  btn.classList.toggle('active');
+  if (isActive) {
+    btn.style.borderColor = '#E5E7EB'; btn.style.background = 'white'; btn.style.color = '#6B7280';
+    var icon = btn.querySelector('i');
+    var page = SHELL_MODULE_PAGES[btn.dataset.mod]?.find(function(p){return p.id === btn.dataset.page});
+    if (icon && page) icon.className = 'fas ' + page.icon;
+  } else {
+    btn.style.borderColor = '#7C3AED'; btn.style.background = '#F5F3FF'; btn.style.color = '#7C3AED';
+    var icon = btn.querySelector('i');
+    if (icon) icon.className = 'fas fa-thumbtack';
+  }
+}
+
+function mvUpdatePageSelect() {
+  var mod = document.getElementById('mvDefModule').value;
+  var sel = document.getElementById('mvDefPage');
+  if (!mod) { sel.innerHTML = '<option value="">—</option>'; return; }
+  var pages = SHELL_MODULE_PAGES[mod] || [];
+  sel.innerHTML = '<option value="">Dashboard</option>' + pages.map(function(p) {
+    return '<option value="' + p.id + '">' + p.label + '</option>';
+  }).join('');
+}
+
+async function mvSavePreferences() {
+  var defMod = document.getElementById('mvDefModule').value || null;
+  var defPage = document.getElementById('mvDefPage').value || null;
+  var sidebarMode = document.querySelector('input[name="mvSidebar"]:checked')?.value || 'full';
+
+  // Collect pinned pages
+  var pinned = {};
+  document.querySelectorAll('.mv-pin-btn.active').forEach(function(btn) {
+    var mod = btn.dataset.mod;
+    var page = btn.dataset.page;
+    if (!pinned[mod]) pinned[mod] = [];
+    pinned[mod].push(page);
+  });
+
+  try {
+    await API.put('/user/preferences', {
+      default_module: defMod,
+      default_page: defPage,
+      pinned_pages: Object.keys(pinned).length > 0 ? pinned : null,
+      sidebar_mode: sidebarMode
+    });
+    // Update local user object
+    currentUser.default_module = defMod;
+    currentUser.default_page = defPage;
+    currentUser.pinned_pages = Object.keys(pinned).length > 0 ? pinned : null;
+    currentUser.sidebar_mode = sidebarMode;
+    localStorage.setItem('bf_ops_user', JSON.stringify(currentUser));
+    document.getElementById('myViewOverlay')?.remove();
+    shellToast('View preferences saved!');
+  } catch(e) { shellToast('Error saving preferences', 'error'); }
+}
+
+// ==================== ADMIN: USER VIEW CONFIG ====================
+
+function showAdminViewConfigModal(userId) {
+  var users = window._adminUsers || [];
+  var user = users.find(function(u) { return u.id === userId; });
+  if (!user) { shellToast('User not found', 'error'); return; }
+
+  var dm = user.default_module || '';
+  var dp = user.default_page || '';
+  var sm = user.sidebar_mode || 'full';
+  var pinned = user.pinned_pages || {};
+  if (typeof pinned === 'string') { try { pinned = JSON.parse(pinned); } catch(e) { pinned = {}; } }
+  var userMods = user.modules || [];
+  var isAdminUser = user.role === 'admin';
+  var availMods = SHELL_ALL_MODULES.filter(function(m) { return isAdminUser || userMods.includes(m.id); });
+
+  var defaultPageOpts = '';
+  if (dm && SHELL_MODULE_PAGES[dm]) {
+    defaultPageOpts = SHELL_MODULE_PAGES[dm].map(function(p) {
+      return '<option value="' + p.id + '"' + (dp === p.id ? ' selected' : '') + '>' + p.label + '</option>';
+    }).join('');
+  }
+
+  var overlay = document.createElement('div');
+  overlay.id = 'adminViewOverlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  overlay.innerHTML = '<div style="background:white;border-radius:16px;width:90%;max-width:500px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2)" onclick="event.stopPropagation()">' +
+    '<div style="padding:16px 20px;border-bottom:1px solid #E5E7EB;display:flex;justify-content:space-between;align-items:center">' +
+      '<h3 style="font-size:16px;font-weight:700;margin:0"><i class="fas fa-sliders-h" style="color:#7C3AED;margin-right:6px"></i>View Config: ' + user.name + '</h3>' +
+      '<button onclick="document.getElementById(\'adminViewOverlay\').remove()" style="background:none;border:none;font-size:18px;color:#94A3B8;cursor:pointer"><i class="fas fa-times"></i></button>' +
+    '</div>' +
+    '<div style="padding:16px 20px">' +
+
+      '<div style="margin-bottom:16px">' +
+        '<label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px">Default Landing</label>' +
+        '<div style="display:flex;gap:6px">' +
+          '<select id="avDefModule" style="flex:1;padding:8px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px" onchange="mvUpdatePageSelect2()">' +
+            '<option value="">Module picker</option>' +
+            availMods.map(function(m) { return '<option value="' + m.id + '"' + (dm === m.id ? ' selected' : '') + '>' + m.label + '</option>'; }).join('') +
+          '</select>' +
+          '<select id="avDefPage" style="flex:1;padding:8px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px"><option value="">Dashboard</option>' + defaultPageOpts + '</select>' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="margin-bottom:16px">' +
+        '<label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px">Sidebar</label>' +
+        '<div style="display:flex;gap:6px">' +
+          '<label style="flex:1;padding:8px;border:2px solid ' + (sm==='full'?'#2563EB':'#E5E7EB') + ';border-radius:8px;cursor:pointer;font-size:12px;background:' + (sm==='full'?'#EFF6FF':'white') + ';text-align:center"><input type="radio" name="avSidebar" value="full"' + (sm==='full'?' checked':'') + '> Full</label>' +
+          '<label style="flex:1;padding:8px;border:2px solid ' + (sm==='pinned'?'#2563EB':'#E5E7EB') + ';border-radius:8px;cursor:pointer;font-size:12px;background:' + (sm==='pinned'?'#EFF6FF':'white') + ';text-align:center"><input type="radio" name="avSidebar" value="pinned"' + (sm==='pinned'?' checked':'') + '> Simple</label>' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="margin-bottom:16px">' +
+        '<label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px">Pinned Pages</label>' +
+        '<div id="avPinnedContainer">' + mvRenderPinnedModules(pinned, availMods) + '</div>' +
+      '</div>' +
+
+      '<button style="width:100%;padding:10px;background:#7C3AED;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer" onclick="avSavePreferences(' + userId + ')"><i class="fas fa-check"></i> Save</button>' +
+    '</div></div>';
+
+  document.body.appendChild(overlay);
+}
+
+function mvUpdatePageSelect2() {
+  var mod = document.getElementById('avDefModule').value;
+  var sel = document.getElementById('avDefPage');
+  if (!mod) { sel.innerHTML = '<option value="">—</option>'; return; }
+  var pages = SHELL_MODULE_PAGES[mod] || [];
+  sel.innerHTML = '<option value="">Dashboard</option>' + pages.map(function(p) {
+    return '<option value="' + p.id + '">' + p.label + '</option>';
+  }).join('');
+}
+
+async function avSavePreferences(userId) {
+  var defMod = document.getElementById('avDefModule').value || null;
+  var defPage = document.getElementById('avDefPage').value || null;
+  var sidebarMode = document.querySelector('input[name="avSidebar"]:checked')?.value || 'full';
+  var pinned = {};
+  document.querySelectorAll('#adminViewOverlay .mv-pin-btn.active').forEach(function(btn) {
+    var mod = btn.dataset.mod;
+    var page = btn.dataset.page;
+    if (!pinned[mod]) pinned[mod] = [];
+    pinned[mod].push(page);
+  });
+  try {
+    await API.put('/admin/users/' + userId + '/preferences', {
+      default_module: defMod, default_page: defPage,
+      pinned_pages: Object.keys(pinned).length > 0 ? pinned : null,
+      sidebar_mode: sidebarMode
+    });
+    shellToast('View config saved for user');
+    document.getElementById('adminViewOverlay')?.remove();
+  } catch(e) { shellToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
 // ==================== INIT ====================
 
 (function init() {
@@ -1086,7 +1389,12 @@ async function deleteRole(roleName) {
         _canViewFinancials = JSON.parse(savedFin);
         window._canViewFinancials = _canViewFinancials;
       }
-      renderHome();
+      // Auto-navigate to default landing if configured
+      if (currentUser.default_module) {
+        launchModule(currentUser.default_module, currentUser.default_page || null);
+      } else {
+        renderHome();
+      }
     } catch(e) {
       setToken(null);
       renderLogin();

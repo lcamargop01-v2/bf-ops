@@ -85,6 +85,12 @@ window._crmInit = function() {
   var savedUser = localStorage.getItem('bf_ops_user') || localStorage.getItem('bf_user');
   if (savedUser) { try { crmUser = JSON.parse(savedUser); } catch(e) { crmUser = null; } }
   crmPage = 'dashboard';
+  // Consume initial page from parent shell
+  if (window._shellInitialPage) {
+    var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+    if (_ca('crm', window._shellInitialPage)) crmPage = window._shellInitialPage;
+    window._shellInitialPage = null;
+  }
   crmLoadPipelines().then(function() { crmRender(); });
 };
 
