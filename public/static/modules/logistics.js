@@ -10603,7 +10603,6 @@ async function renderDriversManagement() {
     const users = usersRes.data.users || [];
     const allAssignments = assignmentsRes.data.assignments || [];
     const drivers = users.filter(u => u.role === 'driver');
-    const others = users.filter(u => u.role !== 'driver');
     const langNames = { en: 'English', es: 'Español', ht: 'Kreyòl' };
 
     function driverTruckPills(driverId) {
@@ -10619,8 +10618,11 @@ async function renderDriversManagement() {
         ${archiveToggleBtn(showArchived, "toggleArchive('users','renderDriversManagement')")}
         <button class="btn btn-primary" onclick="showNewDriverModal()"><i class="fas fa-plus"></i> ${t('drivers_new')}</button>
       </div>
-      <div class="card" style="margin-bottom:20px">
-        <div class="card-header"><h3 class="card-title"><i class="fas fa-id-card" style="color:var(--navy-light);margin-right:8px"></i> Drivers</h3></div>
+      <div class="card">
+        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+          <h3 class="card-title"><i class="fas fa-id-card" style="color:var(--navy-light);margin-right:8px"></i> Drivers</h3>
+          <span style="font-size:11px;color:var(--gray-400)"><i class="fas fa-info-circle"></i> Other staff managed in Admin panel</span>
+        </div>
         <div class="table-container">
           <table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Language</th><th>${t('assign_trucks')}</th><th>Verizon</th><th>Status</th><th></th></tr></thead>
           <tbody>
@@ -10642,25 +10644,9 @@ async function renderDriversManagement() {
               </tr>`).join('')}
           </tbody></table>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-header"><h3 class="card-title"><i class="fas fa-users" style="color:var(--gray-400);margin-right:8px"></i> Other Staff (Dispatch, Admin, Warehouse)</h3></div>
-        <div class="table-container">
-          <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Phone</th><th>Language</th><th></th></tr></thead>
-          <tbody>
-            ${others.map(u => `<tr ${!u.active?'style="opacity:0.5"':''}>
-              <td><strong>${u.name}</strong>${!u.active?archiveBadge():''}</td>
-              <td>${u.email||'-'}</td>
-              <td>${statusBadge(u.role)}</td>
-              <td>${u.phone||'-'}</td>
-              <td>${langNames[u.preferred_language]||u.preferred_language||'English'}</td>
-              <td style="display:flex;gap:4px"><button class="btn btn-outline btn-sm" onclick="showEditDriverModal(${u.id})"><i class="fas fa-edit"></i></button>${archiveActionBtn('users', u.id, !u.active, 'renderDriversManagement')}</td>
-            </tr>`).join('')}
-          </tbody></table>
-        </div>
       </div>`;
   } catch (err) {
-    pc.innerHTML = `<div class="card" style="padding:40px;text-align:center"><i class="fas fa-exclamation-triangle" style="font-size:32px;color:var(--orange);margin-bottom:12px"></i><h3>Failed to load users</h3><button class="btn btn-primary" onclick="renderDriversManagement()"><i class="fas fa-redo"></i> Retry</button></div>`;
+    pc.innerHTML = `<div class="card" style="padding:40px;text-align:center"><i class="fas fa-exclamation-triangle" style="font-size:32px;color:var(--orange);margin-bottom:12px"></i><h3>Failed to load drivers</h3><button class="btn btn-primary" onclick="renderDriversManagement()"><i class="fas fa-redo"></i> Retry</button></div>`;
   }
 }
 
@@ -10675,11 +10661,8 @@ function showNewDriverModal() {
         <div class="form-group"><label class="form-label">Name *</label><input class="form-input" id="newDriverName" placeholder="Full name"></div>
         <div class="form-group"><label class="form-label">Email *</label><input class="form-input" type="email" id="newDriverEmail" placeholder="email@britishfeed.com"></div>
       </div>
-      <div class="form-row-3">
+      <div class="form-row">
         <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="newDriverPhone" placeholder="561-555-1234"></div>
-        <div class="form-group"><label class="form-label">Role</label>
-          <select class="form-select" id="newDriverRole"><option value="driver">Driver</option><option value="dispatcher">Dispatcher</option><option value="warehouse">Warehouse</option><option value="admin">Admin</option></select>
-        </div>
         <div class="form-group"><label class="form-label">${t('drivers_preferred_lang')}</label>
           <select class="form-select" id="newDriverLang"><option value="en">English</option><option value="es">Español</option><option value="ht">Kreyòl</option></select>
         </div>
@@ -10702,7 +10685,7 @@ async function submitNewDriver() {
     await API.post('/users', {
       name, email,
       phone: document.getElementById('newDriverPhone').value.trim() || null,
-      role: document.getElementById('newDriverRole').value,
+      role: 'driver',
       preferred_language: document.getElementById('newDriverLang').value,
       password: document.getElementById('newDriverPassword').value || 'driver123',
     });
@@ -10715,22 +10698,20 @@ async function submitNewDriver() {
 async function showEditDriverModal(id) {
   const { data } = await API.get('/users');
   const user = data.users.find(u => u.id === id);
-  if (!user) { showToast('User not found', 'error'); return; }
+  if (!user) { showToast('Driver not found', 'error'); return; }
+  if (user.role !== 'driver') { showToast('Non-driver users are managed in the Admin panel', 'warning'); return; }
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
   modal.innerHTML = `<div class="modal" style="max-width:550px">
-    <div class="modal-header"><h3 class="modal-title"><i class="fas fa-user-edit" style="color:var(--navy-light)"></i> Edit User</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">&times;</button></div>
+    <div class="modal-header"><h3 class="modal-title"><i class="fas fa-user-edit" style="color:var(--navy-light)"></i> Edit Driver</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">&times;</button></div>
     <div class="modal-body">
       <div class="form-row">
         <div class="form-group"><label class="form-label">Name *</label><input class="form-input" id="editDriverName" value="${user.name}"></div>
         <div class="form-group"><label class="form-label">Email</label><input class="form-input" type="email" id="editDriverEmail" value="${user.email||''}"></div>
       </div>
-      <div class="form-row-3">
+      <div class="form-row">
         <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="editDriverPhone" value="${user.phone||''}"></div>
-        <div class="form-group"><label class="form-label">Role</label>
-          <select class="form-select" id="editDriverRole">${['admin','dispatcher','warehouse','driver','customer'].map(r=>`<option value="${r}" ${user.role===r?'selected':''}>${r}</option>`).join('')}</select>
-        </div>
         <div class="form-group"><label class="form-label">${t('drivers_preferred_lang')}</label>
           <select class="form-select" id="editDriverLang">${[['en','English'],['es','Español'],['ht','Kreyòl']].map(([v,l])=>`<option value="${v}" ${user.preferred_language===v?'selected':''}>${l}</option>`).join('')}</select>
         </div>
@@ -10757,7 +10738,7 @@ async function submitEditDriver(id) {
     name,
     email: document.getElementById('editDriverEmail').value.trim() || null,
     phone: document.getElementById('editDriverPhone').value.trim() || null,
-    role: document.getElementById('editDriverRole').value,
+    role: 'driver',
     preferred_language: document.getElementById('editDriverLang').value,
     active: parseInt(document.getElementById('editDriverActive').value),
   };
@@ -10766,9 +10747,9 @@ async function submitEditDriver(id) {
   try {
     await API.put(`/users/${id}`, payload);
     document.querySelector('.modal-overlay')?.remove();
-    showToast('User updated!');
+    showToast('Driver updated!');
     renderDriversManagement();
-  } catch (err) { showToast('Failed to update user', 'error'); }
+  } catch (err) { showToast('Failed to update driver', 'error'); }
 }
 
 // ==================== FLEET MAINTENANCE PAGE ====================

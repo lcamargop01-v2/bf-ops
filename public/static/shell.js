@@ -466,25 +466,111 @@ function loadCRMModule() {
 
 // ==================== ADMIN PANEL ==
 
+var _adminShowArchived = false;
+
 async function renderAdminPanel() {
   const frame = document.getElementById('moduleFrame');
   frame.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%"><i class="fas fa-spinner fa-spin fa-2x" style="color:#94A3B8"></i></div>';
 
   try {
     const [usersRes, locationsRes] = await Promise.all([
-      API.get('/admin/users'),
+      API.get('/admin/users' + (_adminShowArchived ? '?include_archived=1' : '')),
       API.get('/locations')
     ]);
     const users = usersRes.data.users || [];
     const locations = locationsRes.data.locations || [];
     const allModuleIds = ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks'];
+    var roleColors = { admin: '#7C3AED', dispatcher: '#3B82F6', warehouse: '#059669', driver: '#D97706', customer: '#94A3B8' };
+    var langNames = { en: 'English', es: 'Español', ht: 'Kreyòl' };
 
     frame.innerHTML = `
       <div class="shell-admin-panel">
         <h2 style="font-size:22px;font-weight:800;color:#1E293B;margin-bottom:20px"><i class="fas fa-cog" style="margin-right:8px;color:#64748B"></i>Administration</h2>
 
-        <!-- Locations -->
+        <!-- User Management -->
         <div class="shell-admin-card" style="margin-bottom:20px">
+          <div class="shell-admin-card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h3><i class="fas fa-users" style="color:#7C3AED;margin-right:8px"></i>User Management</h3>
+            <div style="display:flex;gap:8px;align-items:center">
+              <label style="font-size:12px;color:#64748B;display:flex;align-items:center;gap:4px;cursor:pointer">
+                <input type="checkbox" ${_adminShowArchived ? 'checked' : ''} onchange="_adminShowArchived=this.checked;renderAdminPanel()"> Show inactive
+              </label>
+              <button class="shell-save-btn" style="background:#10B981" onclick="showAdminNewUserModal()"><i class="fas fa-plus"></i> New User</button>
+            </div>
+          </div>
+          <table class="shell-admin-table">
+            <thead><tr><th>User</th><th>Role</th><th>Phone</th><th>Language</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              ${users.map(u => `
+                <tr ${!u.active ? 'style="opacity:0.5"' : ''}>
+                  <td>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,${roleColors[u.role]||'#64748B'},${roleColors[u.role]||'#64748B'}dd);display:flex;align-items:center;justify-content:center;color:white;font-size:11px;font-weight:700">${getInitials(u.name)}</div>
+                      <div>
+                        <div style="font-weight:600">${u.name}</div>
+                        <div style="font-size:11px;color:#94A3B8">${u.email}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span style="font-size:11px;padding:2px 8px;border-radius:12px;background:${roleColors[u.role]||'#F1F5F9'}22;color:${roleColors[u.role]||'#475569'};font-weight:600;border:1px solid ${roleColors[u.role]||'#E2E8F0'}">${u.role}</span></td>
+                  <td style="font-size:12px">${u.phone || '—'}</td>
+                  <td style="font-size:12px">${langNames[u.preferred_language] || u.preferred_language || 'English'}</td>
+                  <td>${u.active ? '<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#ECFDF5;color:#059669;font-weight:600">Active</span>' : '<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#FEF2F2;color:#DC2626;font-weight:600">Inactive</span>'}</td>
+                  <td style="display:flex;gap:4px">
+                    <button class="shell-save-btn" onclick="showAdminEditUserModal(${u.id})" title="Edit"><i class="fas fa-edit"></i></button>
+                    ${u.active ? '<button class="shell-save-btn" style="background:#DC2626" onclick="adminToggleUser(' + u.id + ',0)" title="Deactivate"><i class="fas fa-ban"></i></button>' : '<button class="shell-save-btn" style="background:#059669" onclick="adminToggleUser(' + u.id + ',1)" title="Reactivate"><i class="fas fa-check"></i></button>'}
+                  </td>
+                </tr>
+              `).join('')}
+              ${users.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:#94A3B8;padding:24px">No users found</td></tr>' : ''}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- User Module Access -->
+        <div class="shell-admin-card" style="margin-bottom:20px">
+          <div class="shell-admin-card-header">
+            <h3><i class="fas fa-users-cog" style="color:#6366F1;margin-right:8px"></i>Module Access</h3>
+          </div>
+          <table class="shell-admin-table">
+            <thead>
+              <tr>
+                <th>User</th><th>Role</th>
+                ${allModuleIds.map(m => '<th style="text-align:center">' + m.charAt(0).toUpperCase() + m.slice(1) + '</th>').join('')}
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${users.filter(u => u.active).map(u => `
+                <tr data-user-id="${u.id}">
+                  <td>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,${roleColors[u.role]||'#64748B'},${roleColors[u.role]||'#64748B'}dd);display:flex;align-items:center;justify-content:center;color:white;font-size:11px;font-weight:700">${getInitials(u.name)}</div>
+                      <div>
+                        <div style="font-weight:600">${u.name}</div>
+                        <div style="font-size:11px;color:#94A3B8">${u.email}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#F1F5F9;color:#475569;font-weight:600">${u.role}</span></td>
+                  ${allModuleIds.map(m => `
+                    <td style="text-align:center">
+                      ${u.role === 'admin'
+                        ? '<i class="fas fa-check-circle" style="color:#10B981;font-size:16px" title="Admin has all access"></i>'
+                        : '<input type="checkbox" class="shell-module-toggle" data-user="' + u.id + '" data-module="' + m + '" ' + (u.modules && u.modules.includes(m) ? 'checked' : '') + '>'}
+                    </td>
+                  `).join('')}
+                  <td>
+                    ${u.role !== 'admin' ? '<button class="shell-save-btn" onclick="saveUserModules(' + u.id + ')"><i class="fas fa-save"></i> Save</button>' : ''}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Locations -->
+        <div class="shell-admin-card">
           <div class="shell-admin-card-header">
             <h3><i class="fas fa-map-marker-alt" style="color:#3B82F6;margin-right:8px"></i>Locations</h3>
           </div>
@@ -504,62 +590,158 @@ async function renderAdminPanel() {
             </tbody>
           </table>
         </div>
-
-        <!-- User Module Access -->
-        <div class="shell-admin-card">
-          <div class="shell-admin-card-header">
-            <h3><i class="fas fa-users-cog" style="color:#7C3AED;margin-right:8px"></i>User Module Access</h3>
-          </div>
-          <table class="shell-admin-table">
-            <thead>
-              <tr>
-                <th>User</th><th>Role</th>
-                ${allModuleIds.map(m => `<th style="text-align:center">${m.charAt(0).toUpperCase() + m.slice(1)}</th>`).join('')}
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${users.map(u => `
-                <tr data-user-id="${u.id}">
-                  <td>
-                    <div style="display:flex;align-items:center;gap:8px">
-                      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#3B82F6,#7C3AED);display:flex;align-items:center;justify-content:center;color:white;font-size:11px;font-weight:700">${getInitials(u.name)}</div>
-                      <div>
-                        <div style="font-weight:600">${u.name}</div>
-                        <div style="font-size:11px;color:#94A3B8">${u.email}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td><span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#F1F5F9;color:#475569;font-weight:600">${u.role}</span></td>
-                  ${allModuleIds.map(m => `
-                    <td style="text-align:center">
-                      ${u.role === 'admin'
-                        ? '<i class="fas fa-check-circle" style="color:#10B981;font-size:16px" title="Admin has all access"></i>'
-                        : `<input type="checkbox" class="shell-module-toggle" data-user="${u.id}" data-module="${m}" ${u.modules?.includes(m) ? 'checked' : ''}>`}
-                    </td>
-                  `).join('')}
-                  <td>
-                    ${u.role !== 'admin' ? `<button class="shell-save-btn" onclick="saveUserModules(${u.id})"><i class="fas fa-save"></i> Save</button>` : ''}
-                  </td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
       </div>`;
   } catch(err) {
-    frame.innerHTML = `<div style="padding:40px;text-align:center"><p style="color:#DC2626">Error loading admin panel: ${err.message}</p></div>`;
+    frame.innerHTML = '<div style="padding:40px;text-align:center"><p style="color:#DC2626">Error loading admin panel: ' + err.message + '</p><button class="shell-save-btn" onclick="renderAdminPanel()"><i class="fas fa-redo"></i> Retry</button></div>';
+  }
+}
+
+function showAdminNewUserModal() {
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div style="background:white;border-radius:12px;width:500px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+      <div style="padding:16px 20px;border-bottom:1px solid #E2E8F0;display:flex;justify-content:space-between;align-items:center">
+        <h3 style="font-size:16px;font-weight:700;color:#1E293B"><i class="fas fa-user-plus" style="color:#10B981;margin-right:8px"></i>New User</h3>
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#94A3B8">&times;</button>
+      </div>
+      <div style="padding:20px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;gap:12px">
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Name *</label><input id="adminNewName" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" placeholder="Full name"></div>
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Email *</label><input id="adminNewEmail" type="email" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" placeholder="email@britishfeed.com"></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Role</label>
+            <select id="adminNewRole" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px"><option value="dispatcher">Dispatcher</option><option value="warehouse">Warehouse</option><option value="driver">Driver</option><option value="admin">Admin</option></select>
+          </div>
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Phone</label><input id="adminNewPhone" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" placeholder="561-555-1234"></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Language</label>
+            <select id="adminNewLang" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px"><option value="en">English</option><option value="es">Español</option><option value="ht">Kreyòl</option></select>
+          </div>
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Password</label><input id="adminNewPassword" type="password" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" value="changeme123" placeholder="Initial password"></div>
+        </div>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end;gap:8px">
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="padding:8px 16px;border:1px solid #E2E8F0;border-radius:6px;background:white;cursor:pointer;font-size:13px">Cancel</button>
+        <button onclick="submitAdminNewUser()" style="padding:8px 16px;border:none;border-radius:6px;background:#10B981;color:white;cursor:pointer;font-size:13px;font-weight:600"><i class="fas fa-check"></i> Create User</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function submitAdminNewUser() {
+  var name = document.getElementById('adminNewName').value.trim();
+  var email = document.getElementById('adminNewEmail').value.trim();
+  if (!name || !email) { shellToast('Name and email are required', 'error'); return; }
+  try {
+    await API.post('/admin/users', {
+      name: name,
+      email: email,
+      role: document.getElementById('adminNewRole').value,
+      phone: document.getElementById('adminNewPhone').value.trim() || null,
+      preferred_language: document.getElementById('adminNewLang').value,
+      password: document.getElementById('adminNewPassword').value || 'changeme123'
+    });
+    document.querySelector('div[style*="fixed"][style*="inset"]').remove();
+    shellToast('User created!');
+    renderAdminPanel();
+  } catch(err) {
+    shellToast('Failed to create user: ' + (err.response ? err.response.data.error : err.message), 'error');
+  }
+}
+
+async function showAdminEditUserModal(userId) {
+  try {
+    var resp = await API.get('/admin/users?include_archived=1');
+    var user = (resp.data.users || []).find(function(u) { return u.id === userId; });
+    if (!user) { shellToast('User not found', 'error'); return; }
+  } catch(err) { shellToast('Failed to load user', 'error'); return; }
+
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  var roles = ['admin','dispatcher','warehouse','driver','customer'];
+  var langs = [['en','English'],['es','Español'],['ht','Kreyòl']];
+  overlay.innerHTML = `
+    <div style="background:white;border-radius:12px;width:500px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+      <div style="padding:16px 20px;border-bottom:1px solid #E2E8F0;display:flex;justify-content:space-between;align-items:center">
+        <h3 style="font-size:16px;font-weight:700;color:#1E293B"><i class="fas fa-user-edit" style="color:#3B82F6;margin-right:8px"></i>Edit User</h3>
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#94A3B8">&times;</button>
+      </div>
+      <div style="padding:20px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;gap:12px">
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Name *</label><input id="adminEditName" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" value="${user.name}"></div>
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Email</label><input id="adminEditEmail" type="email" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" value="${user.email || ''}"></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Role</label>
+            <select id="adminEditRole" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px">${roles.map(function(r) { return '<option value="' + r + '"' + (user.role === r ? ' selected' : '') + '>' + r + '</option>'; }).join('')}</select>
+          </div>
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Phone</label><input id="adminEditPhone" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" value="${user.phone || ''}"></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Language</label>
+            <select id="adminEditLang" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px">${langs.map(function(l) { return '<option value="' + l[0] + '"' + (user.preferred_language === l[0] ? ' selected' : '') + '>' + l[1] + '</option>'; }).join('')}</select>
+          </div>
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Active</label>
+            <select id="adminEditActive" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px"><option value="1" ${user.active ? 'selected' : ''}>Yes</option><option value="0" ${!user.active ? 'selected' : ''}>No</option></select>
+          </div>
+        </div>
+        <div><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">New Password (leave blank to keep current)</label><input id="adminEditPassword" type="password" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" placeholder="Leave blank to keep current"></div>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end;gap:8px">
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="padding:8px 16px;border:1px solid #E2E8F0;border-radius:6px;background:white;cursor:pointer;font-size:13px">Cancel</button>
+        <button onclick="submitAdminEditUser(${userId})" style="padding:8px 16px;border:none;border-radius:6px;background:#3B82F6;color:white;cursor:pointer;font-size:13px;font-weight:600"><i class="fas fa-save"></i> Save Changes</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function submitAdminEditUser(userId) {
+  var name = document.getElementById('adminEditName').value.trim();
+  if (!name) { shellToast('Name is required', 'error'); return; }
+  var payload = {
+    name: name,
+    email: document.getElementById('adminEditEmail').value.trim() || null,
+    role: document.getElementById('adminEditRole').value,
+    phone: document.getElementById('adminEditPhone').value.trim() || null,
+    preferred_language: document.getElementById('adminEditLang').value,
+    active: parseInt(document.getElementById('adminEditActive').value)
+  };
+  var pw = document.getElementById('adminEditPassword').value;
+  if (pw) payload.password = pw;
+  try {
+    await API.put('/admin/users/' + userId, payload);
+    document.querySelector('div[style*="fixed"][style*="inset"]').remove();
+    shellToast('User updated!');
+    renderAdminPanel();
+  } catch(err) {
+    shellToast('Failed to update user: ' + (err.response ? err.response.data.error : err.message), 'error');
+  }
+}
+
+async function adminToggleUser(userId, active) {
+  if (!confirm(active ? 'Reactivate this user?' : 'Deactivate this user?')) return;
+  try {
+    await API.put('/admin/users/' + userId, { active: active });
+    shellToast(active ? 'User reactivated' : 'User deactivated');
+    renderAdminPanel();
+  } catch(err) {
+    shellToast('Failed: ' + err.message, 'error');
   }
 }
 
 async function saveUserModules(userId) {
-  const row = document.querySelector(`tr[data-user-id="${userId}"]`);
+  var row = document.querySelector('tr[data-user-id="' + userId + '"]');
   if (!row) return;
-  const checkboxes = row.querySelectorAll('.shell-module-toggle');
-  const modules = [];
-  checkboxes.forEach(cb => { if (cb.checked) modules.push(cb.dataset.module); });
+  var checkboxes = row.querySelectorAll('.shell-module-toggle');
+  var modules = [];
+  checkboxes.forEach(function(cb) { if (cb.checked) modules.push(cb.dataset.module); });
   try {
-    await API.put(`/admin/users/${userId}/modules`, { modules });
+    await API.put('/admin/users/' + userId + '/modules', { modules: modules });
     shellToast('Module access updated');
   } catch(err) {
     shellToast('Failed to update: ' + err.message, 'error');

@@ -71,11 +71,14 @@ app.get('/api/auth/me', async (c) => {
   } catch { return c.json({ error: 'Invalid token' }, 401) }
 })
 
-// ==================== ADMIN: USER MODULE ACCESS ====================
+// ==================== ADMIN: USER MANAGEMENT ====================
 
 app.get('/api/admin/users', async (c) => {
   const db = c.env.DB
-  const users = await db.prepare('SELECT id, name, email, role, phone, active FROM users ORDER BY name').all()
+  const incArchived = c.req.query('include_archived') === '1'
+  const users = await db.prepare(
+    `SELECT id, name, email, role, phone, preferred_language, active, created_at FROM users ${incArchived ? '' : 'WHERE active = 1'} ORDER BY role, name`
+  ).all()
   // Get module access for all users
   const access = await db.prepare('SELECT user_id, module FROM user_module_access').all()
   const accessMap: Record<number, string[]> = {}
@@ -88,6 +91,47 @@ app.get('/api/admin/users', async (c) => {
     modules: u.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : (accessMap[u.id] || [])
   }))
   return c.json({ users: result })
+})
+
+app.post('/api/admin/users', async (c) => {
+  const body = await c.req.json() as any
+  const db = c.env.DB
+  if (!body.name || !body.email) return c.json({ error: 'Name and email are required' }, 400)
+  // Hash password
+  const pw = body.password || 'changeme123'
+  const encoder = new TextEncoder()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(pw))
+  const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
+  try {
+    const res = await db.prepare(
+      'INSERT INTO users (email, name, role, phone, preferred_language, password_hash, active) VALUES (?,?,?,?,?,?,?)'
+    ).bind(body.email, body.name, body.role || 'dispatcher', body.phone || null, body.preferred_language || 'en', hashHex, 1).run()
+    return c.json({ id: res.meta.last_row_id }, 201)
+  } catch (err: any) {
+    if (err.message?.includes('UNIQUE')) return c.json({ error: 'Email already exists' }, 409)
+    throw err
+  }
+})
+
+app.put('/api/admin/users/:id', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+  const db = c.env.DB
+  const fields: string[] = []
+  const vals: any[] = []
+  for (const key of ['name', 'email', 'phone', 'role', 'preferred_language', 'active']) {
+    if (body[key] !== undefined) { fields.push(`${key} = ?`); vals.push(body[key]) }
+  }
+  if (body.password) {
+    const encoder = new TextEncoder()
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(body.password))
+    const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
+    fields.push('password_hash = ?'); vals.push(hashHex)
+  }
+  if (fields.length === 0) return c.json({ error: 'No fields to update' }, 400)
+  vals.push(id)
+  await db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run()
+  return c.json({ success: true })
 })
 
 app.put('/api/admin/users/:id/modules', async (c) => {
