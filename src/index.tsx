@@ -549,12 +549,12 @@ app.get('/invite/:token', (c) => {
           '<div class="email" style="margin-top:2px;padding-left:26px">' + email + '</div>' +
         '</div>' +
         '<div id="inviteMsg" class="invite-msg"></div>' +
-        '<form onsubmit="setupPassword(event)" style="display:flex;flex-direction:column;gap:16px">' +
+        '<form id="inviteForm" style="display:flex;flex-direction:column;gap:16px">' +
           '<div>' +
             '<label class="invite-label">Create Password</label>' +
             '<div style="position:relative">' +
-              '<input class="invite-input" type="password" id="invPw1" placeholder="At least 6 characters" required minlength="6" oninput="checkStrength(this.value)">' +
-              '<button type="button" class="pw-toggle" onclick="togglePw(\'invPw1\',this)"><i class="fas fa-eye"></i></button>' +
+              '<input class="invite-input" type="password" id="invPw1" placeholder="At least 6 characters" required minlength="6">' +
+              '<button type="button" class="pw-toggle" id="togglePw1"><i class="fas fa-eye"></i></button>' +
             '</div>' +
             '<div class="pw-strength" id="pwStrength"></div>' +
           '</div>' +
@@ -562,11 +562,16 @@ app.get('/invite/:token', (c) => {
             '<label class="invite-label">Confirm Password</label>' +
             '<div style="position:relative">' +
               '<input class="invite-input" type="password" id="invPw2" placeholder="Re-enter your password" required minlength="6">' +
-              '<button type="button" class="pw-toggle" onclick="togglePw(\'invPw2\',this)"><i class="fas fa-eye"></i></button>' +
+              '<button type="button" class="pw-toggle" id="togglePw2"><i class="fas fa-eye"></i></button>' +
             '</div>' +
           '</div>' +
-          '<button type="submit" class="invite-btn" id="inviteSubmitBtn"><i class="fas fa-check-circle"></i> Set Password & Activate</button>' +
+          '<button type="submit" class="invite-btn" id="inviteSubmitBtn"><i class="fas fa-check-circle"></i> Set Password &amp; Activate</button>' +
         '</form>';
+      // Bind events after DOM is set
+      document.getElementById('invPw1').addEventListener('input', function() { checkStrength(this.value); });
+      document.getElementById('togglePw1').addEventListener('click', function() { togglePw('invPw1', this); });
+      document.getElementById('togglePw2').addEventListener('click', function() { togglePw('invPw2', this); });
+      document.getElementById('inviteForm').addEventListener('submit', function(e) { setupPassword(e); });
     }
 
     function togglePw(id, btn) {
@@ -618,7 +623,7 @@ app.get('/invite/:token', (c) => {
         document.getElementById('inviteBody').innerHTML =
           '<div style="text-align:center;padding:30px 0">' +
             '<i class="fas fa-check-circle" style="font-size:48px;color:#10B981;margin-bottom:16px"></i>' +
-            '<h3 style="font-size:18px;font-weight:700;color:#1E293B;margin-bottom:8px">You\\\'re All Set!</h3>' +
+            '<h3 style="font-size:18px;font-weight:700;color:#1E293B;margin-bottom:8px">You&apos;re All Set!</h3>' +
             '<p style="color:#64748B;font-size:13px;margin-bottom:4px">Your password has been set successfully.</p>' +
             '<p style="color:#64748B;font-size:13px;margin-bottom:24px">Sign in with: <strong>' + d.email + '</strong></p>' +
             '<a href="/app" style="display:inline-block;padding:12px 28px;background:linear-gradient(135deg,#10B981,#059669);color:white;border-radius:10px;text-decoration:none;font-size:14px;font-weight:700;box-shadow:0 4px 15px rgba(16,185,129,.3)"><i class="fas fa-sign-in-alt" style="margin-right:6px"></i> Sign In Now</a>' +
