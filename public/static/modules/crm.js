@@ -151,6 +151,9 @@ function crmRender() {
     { id: 'organizations', icon: 'fa-building', label: 'Organizations' },
     { id: 'contacts', icon: 'fa-address-book', label: 'Contacts' }
   ];
+  // Filter by role permissions
+  var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+  pages = pages.filter(function(p) { return _ca('crm', p.id); });
 
   root.innerHTML =
     '<div class="crm-nav">' +

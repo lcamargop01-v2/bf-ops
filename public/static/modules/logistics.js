@@ -1670,6 +1670,9 @@ var _archiveToggles = {};
 
 // ==================== ROUTING ====================
 function navigate(page, params = {}) {
+  // Check permission before navigating
+  var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+  if (!_ca('logistics', page)) { showToast('You don\'t have access to this page', 'warning'); return; }
   // Cleanup all maps before navigation to prevent stale state
   cleanupAllMaps();
   currentPage = page;
@@ -1750,6 +1753,18 @@ function renderSidebarContent() {
     { id: 'fleet_tracking', icon: 'fa-satellite-dish', label: 'Fleet Tracking', badge: 'LIVE' },
     { id: 'fleet_sync', icon: 'fa-arrows-rotate', label: 'Fleet Sync', badge: 'SYNC' },
   ];
+  // Filter items by role permissions (window.canAccess set by shell)
+  const _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+  const filteredItems = [];
+  let lastSection = null;
+  for (const item of items) {
+    if (item.section) { lastSection = item; continue; }
+    if (_ca('logistics', item.id)) {
+      if (lastSection) { filteredItems.push(lastSection); lastSection = null; }
+      filteredItems.push(item);
+    }
+  }
+  const items2 = filteredItems;
   if (currentUser?.role === 'driver') {
     return `
       <div class="sidebar-header">
@@ -1770,7 +1785,7 @@ function renderSidebarContent() {
       <div class="sidebar-subtitle">${t('sidebar_subtitle')}</div>
     </div>
     <nav class="sidebar-nav">
-      ${items.map(item => item.section
+      ${items2.map(item => item.section
         ? `<div class="nav-section">${item.section}</div>`
         : `<div class="nav-item ${currentPage===item.id?'active':''}" onclick="navigate('${item.id}')"><i class="fas ${item.icon}"></i> ${item.label}${item.badge ? ` <span style="font-size:9px;background:linear-gradient(135deg,#7C3AED,#5B21B6);color:white;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700">${item.badge}</span>` : ''}${item.dynamicBadge ? `<span class="nav-badge" id="navBadge_${item.dynamicBadge}" style="display:none"></span>` : ''}</div>`
       ).join('')}

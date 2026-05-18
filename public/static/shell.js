@@ -72,6 +72,15 @@ function renderLogin() {
     </div>`;
 }
 
+// Global permissions object: { logistics: ['dashboard','orders',...], ... } or 'all' for admin
+var _userPermissions = 'all';
+
+function canAccess(module, feature) {
+  if (_userPermissions === 'all') return true;
+  if (!_userPermissions || !_userPermissions[module]) return false;
+  return _userPermissions[module].indexOf(feature) !== -1;
+}
+
 async function doLogin(e) {
   if (e) e.preventDefault();
   const email = document.getElementById('shellLoginEmail').value;
@@ -81,6 +90,11 @@ async function doLogin(e) {
     currentUser = data.user;
     setToken(data.token);
     localStorage.setItem('bf_ops_user', JSON.stringify(data.user));
+    // Store permissions
+    _userPermissions = data.permissions || 'all';
+    localStorage.setItem('bf_ops_permissions', JSON.stringify(_userPermissions));
+    window._userPermissions = _userPermissions;
+    window.canAccess = canAccess;
     shellToast(`Welcome, ${currentUser.name}!`);
     renderHome();
   } catch (err) {
@@ -100,6 +114,9 @@ function shellLogout() {
   setToken(null);
   localStorage.removeItem('bf_ops_user');
   localStorage.removeItem('bf_ops_token');
+  localStorage.removeItem('bf_ops_permissions');
+  _userPermissions = 'all';
+  window._userPermissions = 'all';
   // Also clean up logistics module's auth keys
   localStorage.removeItem('bf_user');
   localStorage.removeItem('bf_token');
@@ -473,12 +490,18 @@ async function renderAdminPanel() {
   frame.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%"><i class="fas fa-spinner fa-spin fa-2x" style="color:#94A3B8"></i></div>';
 
   try {
-    const [usersRes, locationsRes] = await Promise.all([
+    const [usersRes, locationsRes, rolesRes] = await Promise.all([
       API.get('/admin/users' + (_adminShowArchived ? '?include_archived=1' : '')),
-      API.get('/locations')
+      API.get('/locations'),
+      API.get('/admin/roles')
     ]);
     const users = usersRes.data.users || [];
     const locations = locationsRes.data.locations || [];
+    const allRoles = rolesRes.data.roles || [];
+    const moduleFeatures = rolesRes.data.features || {};
+    // Store roles globally so modals can use them
+    window._adminRoles = allRoles;
+    window._adminModuleFeatures = moduleFeatures;
     const allModuleIds = ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks'];
     var roleColors = { admin: '#7C3AED', dispatcher: '#3B82F6', warehouse: '#059669', driver: '#D97706', customer: '#94A3B8' };
     var langNames = { en: 'English', es: 'Español', ht: 'Kreyòl' };
@@ -569,6 +592,53 @@ async function renderAdminPanel() {
           </table>
         </div>
 
+        <!-- Roles & Permissions -->
+        <div class="shell-admin-card" style="margin-bottom:20px">
+          <div class="shell-admin-card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h3><i class="fas fa-shield-halved" style="color:#D97706;margin-right:8px"></i>Roles & Feature Permissions</h3>
+            <button class="shell-save-btn" style="background:#D97706" onclick="showNewRoleModal()"><i class="fas fa-plus"></i> New Role</button>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="shell-admin-table" style="font-size:12px">
+              <thead>
+                <tr>
+                  <th style="min-width:120px">Role</th>
+                  <th style="min-width:150px">Description</th>
+                  ${Object.keys(moduleFeatures).map(function(mod) { return '<th colspan="' + moduleFeatures[mod].length + '" style="text-align:center;background:#F8FAFC;border-left:2px solid #E2E8F0">' + mod.charAt(0).toUpperCase() + mod.slice(1) + '</th>'; }).join('')}
+                  <th></th>
+                </tr>
+                <tr>
+                  <th></th><th></th>
+                  ${Object.keys(moduleFeatures).map(function(mod) { return moduleFeatures[mod].map(function(f,i) { return '<th style="text-align:center;font-size:10px;font-weight:500;color:#64748B;writing-mode:vertical-lr;padding:4px 2px;min-width:28px' + (i===0?';border-left:2px solid #E2E8F0':'') + '">' + f.label + '</th>'; }).join(''); }).join('')}
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${allRoles.map(function(role) {
+                  var perms = role.permissions || [];
+                  var permSet = {};
+                  perms.forEach(function(p) { permSet[p.module + ':' + p.feature] = true; });
+                  return '<tr data-role="' + role.name + '">' +
+                    '<td><strong>' + role.name + '</strong>' + (role.is_system ? ' <span style="font-size:9px;background:#F1F5F9;color:#64748B;padding:1px 4px;border-radius:4px">system</span>' : '') + '</td>' +
+                    '<td style="font-size:11px;color:#64748B">' + (role.description || '—') + '</td>' +
+                    Object.keys(moduleFeatures).map(function(mod) {
+                      return moduleFeatures[mod].map(function(f,i) {
+                        var key = mod + ':' + f.id;
+                        if (role.name === 'admin') return '<td style="text-align:center' + (i===0?';border-left:2px solid #E2E8F0':'') + '"><i class="fas fa-check-circle" style="color:#10B981;font-size:12px"></i></td>';
+                        return '<td style="text-align:center' + (i===0?';border-left:2px solid #E2E8F0':'') + '"><input type="checkbox" class="role-perm-cb" data-role="' + role.name + '" data-module="' + mod + '" data-feature="' + f.id + '"' + (permSet[key] ? ' checked' : '') + '></td>';
+                      }).join('');
+                    }).join('') +
+                    '<td style="display:flex;gap:4px">' +
+                      (role.name !== 'admin' ? '<button class="shell-save-btn" onclick="saveRolePermissions(\'' + role.name + '\')"><i class="fas fa-save"></i></button>' : '') +
+                      (!role.is_system ? '<button class="shell-save-btn" style="background:#DC2626" onclick="deleteRole(\'' + role.name + '\')"><i class="fas fa-trash"></i></button>' : '') +
+                    '</td></tr>';
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div style="padding:8px 12px;font-size:11px;color:#94A3B8;border-top:1px solid #F1F5F9"><i class="fas fa-info-circle"></i> Check features each role can see. Admin always has full access. Click Save to apply changes per role.</div>
+        </div>
+
         <!-- Locations -->
         <div class="shell-admin-card">
           <div class="shell-admin-card-header">
@@ -613,7 +683,7 @@ function showAdminNewUserModal() {
         </div>
         <div style="display:flex;gap:12px">
           <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Role</label>
-            <select id="adminNewRole" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px"><option value="dispatcher">Dispatcher</option><option value="warehouse">Warehouse</option><option value="driver">Driver</option><option value="admin">Admin</option></select>
+            <select id="adminNewRole" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px">${(window._adminRoles||[]).map(function(r){return '<option value="'+r.name+'">'+r.name+'</option>';}).join('')}</select>
           </div>
           <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Phone</label><input id="adminNewPhone" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" placeholder="561-555-1234"></div>
         </div>
@@ -663,7 +733,8 @@ async function showAdminEditUserModal(userId) {
   var overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999';
   overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
-  var roles = ['admin','dispatcher','warehouse','driver','customer'];
+  var roles = (window._adminRoles||[]).map(function(r){return r.name;});
+  if (roles.length === 0) roles = ['admin','dispatcher','warehouse','driver','customer'];
   var langs = [['en','English'],['es','Español'],['ht','Kreyòl']];
   overlay.innerHTML = `
     <div style="background:white;border-radius:12px;width:500px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.3)">
@@ -748,15 +819,82 @@ async function saveUserModules(userId) {
   }
 }
 
+// ==================== ROLES MANAGEMENT ====================
+
+function showNewRoleModal() {
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = '<div style="background:white;border-radius:12px;width:400px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.3)">' +
+    '<div style="padding:16px 20px;border-bottom:1px solid #E2E8F0"><h3 style="font-size:16px;font-weight:700;color:#1E293B"><i class="fas fa-shield-halved" style="color:#D97706;margin-right:8px"></i>New Role</h3></div>' +
+    '<div style="padding:20px;display:flex;flex-direction:column;gap:12px">' +
+      '<div><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Role Name *</label><input id="newRoleName" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" placeholder="e.g. sales rep, route planner"></div>' +
+      '<div><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Description</label><input id="newRoleDesc" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" placeholder="What this role does"></div>' +
+    '</div>' +
+    '<div style="padding:12px 20px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end;gap:8px">' +
+      '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="padding:8px 16px;border:1px solid #E2E8F0;border-radius:6px;background:white;cursor:pointer;font-size:13px">Cancel</button>' +
+      '<button onclick="submitNewRole()" style="padding:8px 16px;border:none;border-radius:6px;background:#D97706;color:white;cursor:pointer;font-size:13px;font-weight:600"><i class="fas fa-check"></i> Create Role</button>' +
+    '</div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function submitNewRole() {
+  var name = document.getElementById('newRoleName').value.trim();
+  if (!name) { shellToast('Role name is required', 'error'); return; }
+  try {
+    await API.post('/admin/roles', { name: name, description: document.getElementById('newRoleDesc').value.trim() || null });
+    document.querySelector('div[style*="fixed"][style*="inset"]').remove();
+    shellToast('Role created! Set its permissions below.');
+    renderAdminPanel();
+  } catch(err) {
+    shellToast('Failed: ' + (err.response ? err.response.data.error : err.message), 'error');
+  }
+}
+
+async function saveRolePermissions(roleName) {
+  var checkboxes = document.querySelectorAll('input.role-perm-cb[data-role="' + roleName + '"]');
+  var permissions = [];
+  checkboxes.forEach(function(cb) {
+    if (cb.checked) permissions.push({ module: cb.dataset.module, feature: cb.dataset.feature });
+  });
+  try {
+    await API.put('/admin/roles/' + roleName + '/permissions', { permissions: permissions });
+    shellToast('Permissions saved for ' + roleName);
+  } catch(err) {
+    shellToast('Failed: ' + err.message, 'error');
+  }
+}
+
+async function deleteRole(roleName) {
+  if (!confirm('Delete role "' + roleName + '"? This cannot be undone.')) return;
+  try {
+    await API.delete('/admin/roles/' + roleName);
+    shellToast('Role deleted');
+    renderAdminPanel();
+  } catch(err) {
+    shellToast('Failed: ' + (err.response ? err.response.data.error : err.message), 'error');
+  }
+}
+
 // ==================== INIT ====================
 
 (function init() {
+  // Expose permission helpers globally for modules
+  window._userPermissions = _userPermissions;
+  window.canAccess = canAccess;
+
   const savedUser = localStorage.getItem('bf_ops_user');
   const savedToken = localStorage.getItem('bf_ops_token');
   if (savedUser && savedToken) {
     try {
       currentUser = JSON.parse(savedUser);
       setToken(savedToken);
+      // Restore permissions from localStorage
+      var savedPerms = localStorage.getItem('bf_ops_permissions');
+      if (savedPerms) {
+        _userPermissions = JSON.parse(savedPerms);
+        window._userPermissions = _userPermissions;
+      }
       renderHome();
     } catch(e) {
       setToken(null);

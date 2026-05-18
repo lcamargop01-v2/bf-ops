@@ -163,6 +163,9 @@ function poRenderNav() {
     { id: 'bills', icon: 'fa-file-invoice-dollar', label: 'Bills' },
     { id: 'suppliers', icon: 'fa-building', label: 'Suppliers' }
   ];
+  // Filter by role permissions
+  var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+  pages = pages.filter(function(p) { return _ca('ordering', p.id); });
 
   var locOpts = '<option value="">All Locations</option>';
   poLocations.forEach(function(l) {

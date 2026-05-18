@@ -43,12 +43,25 @@ app.post('/api/auth/login', async (c) => {
   // Admins get all modules
   const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : modules
 
+  // Get role-based feature permissions
+  let featurePerms: Record<string, string[]> | string = 'all'
+  if (user.role !== 'admin') {
+    const perms = await db.prepare('SELECT module, feature FROM role_permissions WHERE role_name = ?').bind(user.role).all()
+    const permMap: Record<string, string[]> = {}
+    for (const p of (perms.results || []) as any[]) {
+      if (!permMap[p.module]) permMap[p.module] = []
+      permMap[p.module].push(p.feature)
+    }
+    featurePerms = permMap
+  }
+
   // Generate simple token (same approach as logistics)
   const token = btoa(JSON.stringify({ id: user.id, email: user.email, role: user.role, exp: Date.now() + 86400000 }))
 
   return c.json({
     user: { id: user.id, name: user.name, email: user.email, role: user.role, phone: user.phone, modules: allModules },
-    token
+    token,
+    permissions: featurePerms
   })
 })
 
@@ -90,7 +103,9 @@ app.get('/api/admin/users', async (c) => {
     ...u,
     modules: u.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : (accessMap[u.id] || [])
   }))
-  return c.json({ users: result })
+  // Also return available roles for the edit user modal
+  const rolesRes = await db.prepare('SELECT name, description, is_system FROM roles ORDER BY is_system DESC, name').all()
+  return c.json({ users: result, roles: rolesRes.results || [] })
 })
 
 app.post('/api/admin/users', async (c) => {
@@ -148,6 +163,160 @@ app.put('/api/admin/users/:id/modules', async (c) => {
   }
 
   return c.json({ success: true, modules })
+})
+
+// ==================== ADMIN: ROLES & PERMISSIONS ====================
+
+// All features available per module (used by frontend for rendering toggles)
+const MODULE_FEATURES: Record<string, { id: string; label: string }[]> = {
+  logistics: [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'orders', label: 'Orders' },
+    { id: 'ticket_review', label: 'Ticket Review' },
+    { id: 'schedule', label: 'Schedule' },
+    { id: 'routes', label: 'Routes' },
+    { id: 'route_builder', label: 'Route Builder' },
+    { id: 'zones', label: 'Zones' },
+    { id: 'recurring', label: 'Recurring' },
+    { id: 'customers', label: 'Customers' },
+    { id: 'products', label: 'Products' },
+    { id: 'trucks', label: 'Fleet' },
+    { id: 'drivers_mgmt', label: 'Drivers' },
+    { id: 'maintenance', label: 'Maintenance' },
+    { id: 'driver', label: 'Driver View' },
+    { id: 'packing', label: 'Packing Lists' },
+    { id: 'returns', label: 'Returns' },
+    { id: 'learning', label: 'AI Learning' },
+    { id: 'fleet_tracking', label: 'Fleet Tracking' },
+    { id: 'fleet_sync', label: 'Fleet Sync' },
+  ],
+  inventory: [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'stock', label: 'Stock' },
+    { id: 'products', label: 'Products' },
+    { id: 'count', label: 'Count' },
+    { id: 'transfers', label: 'Transfers' },
+    { id: 'batches', label: 'Batches' },
+    { id: 'losses', label: 'Losses' },
+    { id: 'holds', label: 'Holds' },
+    { id: 'reservations', label: 'Reserved' },
+    { id: 'audit', label: 'Audit Log' },
+  ],
+  ordering: [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'orders', label: 'Orders' },
+    { id: 'requests', label: 'Requests' },
+    { id: 'arriving', label: 'Arriving' },
+    { id: 'bills', label: 'Bills' },
+    { id: 'suppliers', label: 'Suppliers' },
+  ],
+  crm: [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'pipeline', label: 'Pipeline' },
+    { id: 'organizations', label: 'Organizations' },
+    { id: 'contacts', label: 'Contacts' },
+  ],
+}
+
+app.get('/api/admin/module-features', (c) => {
+  return c.json({ features: MODULE_FEATURES })
+})
+
+app.get('/api/admin/roles', async (c) => {
+  const db = c.env.DB
+  const roles = await db.prepare('SELECT * FROM roles ORDER BY is_system DESC, name').all()
+  // Get permissions for all roles
+  const perms = await db.prepare('SELECT * FROM role_permissions ORDER BY role_name, module, feature').all()
+  const permMap: Record<string, { module: string; feature: string }[]> = {}
+  for (const p of (perms.results || []) as any[]) {
+    if (!permMap[p.role_name]) permMap[p.role_name] = []
+    permMap[p.role_name].push({ module: p.module, feature: p.feature })
+  }
+  const result = (roles.results || []).map((r: any) => ({
+    ...r,
+    permissions: permMap[r.name] || []
+  }))
+  return c.json({ roles: result, features: MODULE_FEATURES })
+})
+
+app.post('/api/admin/roles', async (c) => {
+  const body = await c.req.json() as any
+  const db = c.env.DB
+  if (!body.name) return c.json({ error: 'Role name is required' }, 400)
+  const safeName = body.name.toLowerCase().replace(/[^a-z0-9_\- ]/g, '').trim()
+  if (!safeName) return c.json({ error: 'Invalid role name' }, 400)
+  try {
+    await db.prepare('INSERT INTO roles (name, description, is_system) VALUES (?, ?, 0)')
+      .bind(safeName, body.description || null).run()
+    return c.json({ success: true, name: safeName }, 201)
+  } catch (err: any) {
+    if (err.message?.includes('UNIQUE')) return c.json({ error: 'Role already exists' }, 409)
+    throw err
+  }
+})
+
+app.put('/api/admin/roles/:name', async (c) => {
+  const name = c.req.param('name')
+  const body = await c.req.json() as any
+  const db = c.env.DB
+  if (body.description !== undefined) {
+    await db.prepare('UPDATE roles SET description = ? WHERE name = ?').bind(body.description, name).run()
+  }
+  return c.json({ success: true })
+})
+
+app.delete('/api/admin/roles/:name', async (c) => {
+  const name = c.req.param('name')
+  const db = c.env.DB
+  // Don't allow deleting system roles
+  const role = await db.prepare('SELECT is_system FROM roles WHERE name = ?').bind(name).first() as any
+  if (!role) return c.json({ error: 'Role not found' }, 404)
+  if (role.is_system) return c.json({ error: 'Cannot delete system roles' }, 403)
+  // Check if any users have this role
+  const users = await db.prepare('SELECT COUNT(*) as cnt FROM users WHERE role = ?').bind(name).first() as any
+  if (users.cnt > 0) return c.json({ error: `Cannot delete role — ${users.cnt} user(s) still have this role` }, 409)
+  await db.prepare('DELETE FROM role_permissions WHERE role_name = ?').bind(name).run()
+  await db.prepare('DELETE FROM roles WHERE name = ?').bind(name).run()
+  return c.json({ success: true })
+})
+
+// Save all permissions for a role (bulk replace)
+app.put('/api/admin/roles/:name/permissions', async (c) => {
+  const name = c.req.param('name')
+  const body = await c.req.json() as { permissions: { module: string; feature: string }[] }
+  const db = c.env.DB
+  // Delete existing
+  await db.prepare('DELETE FROM role_permissions WHERE role_name = ?').bind(name).run()
+  // Insert new
+  for (const p of (body.permissions || [])) {
+    await db.prepare('INSERT INTO role_permissions (role_name, module, feature) VALUES (?, ?, ?)')
+      .bind(name, p.module, p.feature).run()
+  }
+  return c.json({ success: true })
+})
+
+// Get permissions for a specific user (used by frontend on login/module load)
+app.get('/api/permissions/me', async (c) => {
+  const auth = c.req.header('Authorization')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+  try {
+    const token = auth.replace('Bearer ', '')
+    const payload = JSON.parse(atob(token))
+    if (payload.exp < Date.now()) return c.json({ error: 'Token expired' }, 401)
+    const db = c.env.DB
+    const user = await db.prepare('SELECT id, role FROM users WHERE id = ? AND active = 1').bind(payload.id).first() as any
+    if (!user) return c.json({ error: 'User not found' }, 401)
+    // Admin gets everything
+    if (user.role === 'admin') return c.json({ role: 'admin', permissions: 'all' })
+    // Get role permissions
+    const perms = await db.prepare('SELECT module, feature FROM role_permissions WHERE role_name = ?').bind(user.role).all()
+    const permMap: Record<string, string[]> = {}
+    for (const p of (perms.results || []) as any[]) {
+      if (!permMap[p.module]) permMap[p.module] = []
+      permMap[p.module].push(p.feature)
+    }
+    return c.json({ role: user.role, permissions: permMap })
+  } catch { return c.json({ error: 'Invalid token' }, 401) }
 })
 
 // ==================== ADMIN: LOCATIONS ====================

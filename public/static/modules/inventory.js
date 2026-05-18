@@ -181,6 +181,9 @@ function invRenderNav() {
     { id: 'reservations', icon: 'fa-bookmark', label: 'Reserved' },
     { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' }
   ];
+  // Filter by role permissions
+  var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+  pages = pages.filter(function(p) { return _ca('inventory', p.id); });
 
   var locOpts = '<option value="">All Locations</option>';
   invLocations.forEach(function(l) {
