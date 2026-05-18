@@ -247,12 +247,36 @@ function cleanupActiveModule() {
   }
   // Remove module-specific stylesheets
   document.querySelectorAll('link[data-module]').forEach(el => el.remove());
-  // Remove module-injected scripts (but keep cached references)
-  // Reset module globals
+  // Restore shell globals that logistics.js may have overwritten
+  // (API, setToken, doLogin, currentUser)
+  _restoreShellGlobals();
   window._logisticsActive = false;
 }
 
 // ==================== LOGISTICS MODULE LOADER ====================
+
+// ---- Shell globals that logistics.js will overwrite ----
+// We save them before loading logistics and restore when leaving the module.
+var _shellSaved = {};
+
+function _saveShellGlobals() {
+  _shellSaved.API = window.API;
+  _shellSaved.setToken = window.setToken;
+  _shellSaved.doLogin = window.doLogin;
+  // currentUser is read from localStorage on re-entry, so we just save the ref
+  _shellSaved.currentUser = currentUser;
+}
+
+function _restoreShellGlobals() {
+  if (_shellSaved.API) window.API = _shellSaved.API;
+  if (_shellSaved.setToken) window.setToken = _shellSaved.setToken;
+  if (_shellSaved.doLogin) window.doLogin = _shellSaved.doLogin;
+  // Restore currentUser from localStorage (logistics may have cleared/changed it)
+  try {
+    var su = localStorage.getItem('bf_ops_user');
+    if (su) currentUser = JSON.parse(su);
+  } catch(e) {}
+}
 
 function loadLogisticsModule() {
   var frame = document.getElementById('moduleFrame');
@@ -315,6 +339,8 @@ function loadLogisticsModule() {
   // Helper: load the logistics JS module (returns a promise)
   function ensureLogisticsScript() {
     if (loadedModuleScripts.logistics) return Promise.resolve();
+    // Save shell globals BEFORE logistics.js loads (it will overwrite them)
+    _saveShellGlobals();
     return new Promise(function(resolve) {
       var script = document.createElement('script');
       script.src = '/static/modules/logistics.js?v=' + Date.now();
@@ -332,12 +358,9 @@ function loadLogisticsModule() {
 }
 
 function initLogisticsInShell() {
-  // The logistics module looks for a saved user in localStorage under 'bf_user'
-  // We bridge the parent auth to what logistics expects.
-  //
-  // IMPORTANT: We read from bf_ops_user (shell's storage key) instead of the
-  // global currentUser variable because logistics.js declares its own
-  // `var currentUser = null` at load time which overwrites the shell's global.
+  // Bridge the parent shell's auth to what logistics expects.
+  // We read from localStorage (bf_ops_user) because logistics.js overwrites
+  // the global currentUser variable when it loads.
   var shellUser = localStorage.getItem('bf_ops_user');
   var parentToken = localStorage.getItem('bf_ops_token');
   if (shellUser && parentToken) {
@@ -346,8 +369,6 @@ function initLogisticsInShell() {
   }
 
   // Trigger logistics init — the module reads bf_user from localStorage
-  // and calls render(). Since we've already loaded the script once, we need to
-  // manually trigger re-initialization.
   if (typeof window._logisticsInit === 'function') {
     window._logisticsInit();
   }
