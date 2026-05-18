@@ -43,16 +43,20 @@ app.post('/api/auth/login', async (c) => {
   // Admins get all modules
   const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : modules
 
-  // Get role-based feature permissions
-  let featurePerms: Record<string, string[]> | string = 'all'
+  // Get role-based feature permissions with access levels
+  let featurePerms: any = 'all'
+  let canViewFinancials = true
   if (user.role !== 'admin') {
-    const perms = await db.prepare('SELECT module, feature FROM role_permissions WHERE role_name = ?').bind(user.role).all()
-    const permMap: Record<string, string[]> = {}
+    const perms = await db.prepare('SELECT module, feature, access_level FROM role_permissions WHERE role_name = ?').bind(user.role).all()
+    const permMap: Record<string, Record<string, string>> = {}
     for (const p of (perms.results || []) as any[]) {
-      if (!permMap[p.module]) permMap[p.module] = []
-      permMap[p.module].push(p.feature)
+      if (!permMap[p.module]) permMap[p.module] = {}
+      permMap[p.module][p.feature] = p.access_level || 'edit'
     }
     featurePerms = permMap
+    // Get financial visibility
+    const roleRow = await db.prepare('SELECT can_view_financials FROM roles WHERE name = ?').bind(user.role).first() as any
+    canViewFinancials = roleRow ? !!roleRow.can_view_financials : true
   }
 
   // Generate simple token (same approach as logistics)
@@ -61,7 +65,8 @@ app.post('/api/auth/login', async (c) => {
   return c.json({
     user: { id: user.id, name: user.name, email: user.email, role: user.role, phone: user.phone, modules: allModules },
     token,
-    permissions: featurePerms
+    permissions: featurePerms,
+    can_view_financials: canViewFinancials
   })
 })
 
@@ -225,12 +230,12 @@ app.get('/api/admin/module-features', (c) => {
 app.get('/api/admin/roles', async (c) => {
   const db = c.env.DB
   const roles = await db.prepare('SELECT * FROM roles ORDER BY is_system DESC, name').all()
-  // Get permissions for all roles
+  // Get permissions for all roles (include access_level)
   const perms = await db.prepare('SELECT * FROM role_permissions ORDER BY role_name, module, feature').all()
-  const permMap: Record<string, { module: string; feature: string }[]> = {}
+  const permMap: Record<string, { module: string; feature: string; access_level: string }[]> = {}
   for (const p of (perms.results || []) as any[]) {
     if (!permMap[p.role_name]) permMap[p.role_name] = []
-    permMap[p.role_name].push({ module: p.module, feature: p.feature })
+    permMap[p.role_name].push({ module: p.module, feature: p.feature, access_level: p.access_level || 'edit' })
   }
   const result = (roles.results || []).map((r: any) => ({
     ...r,
@@ -262,6 +267,9 @@ app.put('/api/admin/roles/:name', async (c) => {
   if (body.description !== undefined) {
     await db.prepare('UPDATE roles SET description = ? WHERE name = ?').bind(body.description, name).run()
   }
+  if (body.can_view_financials !== undefined) {
+    await db.prepare('UPDATE roles SET can_view_financials = ? WHERE name = ?').bind(body.can_view_financials ? 1 : 0, name).run()
+  }
   return c.json({ success: true })
 })
 
@@ -280,17 +288,22 @@ app.delete('/api/admin/roles/:name', async (c) => {
   return c.json({ success: true })
 })
 
-// Save all permissions for a role (bulk replace)
+// Save all permissions for a role (bulk replace) — now includes access_level and can_view_financials
 app.put('/api/admin/roles/:name/permissions', async (c) => {
   const name = c.req.param('name')
-  const body = await c.req.json() as { permissions: { module: string; feature: string }[] }
+  const body = await c.req.json() as { permissions: { module: string; feature: string; access_level?: string }[]; can_view_financials?: boolean }
   const db = c.env.DB
-  // Delete existing
+  // Delete existing permissions
   await db.prepare('DELETE FROM role_permissions WHERE role_name = ?').bind(name).run()
-  // Insert new
+  // Insert new permissions with access_level
   for (const p of (body.permissions || [])) {
-    await db.prepare('INSERT INTO role_permissions (role_name, module, feature) VALUES (?, ?, ?)')
-      .bind(name, p.module, p.feature).run()
+    await db.prepare('INSERT INTO role_permissions (role_name, module, feature, access_level) VALUES (?, ?, ?, ?)')
+      .bind(name, p.module, p.feature, p.access_level || 'edit').run()
+  }
+  // Update can_view_financials if provided
+  if (body.can_view_financials !== undefined) {
+    await db.prepare('UPDATE roles SET can_view_financials = ? WHERE name = ?')
+      .bind(body.can_view_financials ? 1 : 0, name).run()
   }
   return c.json({ success: true })
 })
@@ -307,15 +320,18 @@ app.get('/api/permissions/me', async (c) => {
     const user = await db.prepare('SELECT id, role FROM users WHERE id = ? AND active = 1').bind(payload.id).first() as any
     if (!user) return c.json({ error: 'User not found' }, 401)
     // Admin gets everything
-    if (user.role === 'admin') return c.json({ role: 'admin', permissions: 'all' })
-    // Get role permissions
-    const perms = await db.prepare('SELECT module, feature FROM role_permissions WHERE role_name = ?').bind(user.role).all()
-    const permMap: Record<string, string[]> = {}
+    if (user.role === 'admin') return c.json({ role: 'admin', permissions: 'all', can_view_financials: true })
+    // Get role permissions with access_level
+    const perms = await db.prepare('SELECT module, feature, access_level FROM role_permissions WHERE role_name = ?').bind(user.role).all()
+    const permMap: Record<string, Record<string, string>> = {}
     for (const p of (perms.results || []) as any[]) {
-      if (!permMap[p.module]) permMap[p.module] = []
-      permMap[p.module].push(p.feature)
+      if (!permMap[p.module]) permMap[p.module] = {}
+      permMap[p.module][p.feature] = p.access_level || 'edit'
     }
-    return c.json({ role: user.role, permissions: permMap })
+    // Get financial visibility
+    const roleRow = await db.prepare('SELECT can_view_financials FROM roles WHERE name = ?').bind(user.role).first() as any
+    const canViewFin = roleRow ? !!roleRow.can_view_financials : true
+    return c.json({ role: user.role, permissions: permMap, can_view_financials: canViewFin })
   } catch { return c.json({ error: 'Invalid token' }, 401) }
 })
 

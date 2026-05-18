@@ -974,3 +974,35 @@
   .inv-edit-form .inv-form-row { flex-direction: column; gap: 8px; }
   .inv-product-info-card { grid-template-columns: 1fr 1fr; }
 }
+
+/* ==================== VIEW-ONLY MODE ==================== */
+.inv-view-only .inv-btn-primary,
+.inv-view-only .inv-btn-danger,
+.inv-view-only .inv-btn-request,
+.inv-view-only button[onclick*="invShow"],
+.inv-view-only button[onclick*="invSubmit"],
+.inv-view-only button[onclick*="invInit"],
+.inv-view-only button[onclick*="invSave"],
+.inv-view-only button[onclick*="invDelete"],
+.inv-view-only button[onclick*="invReport"],
+.inv-view-only button[onclick*="invCreate"],
+.inv-view-only button[onclick*="invEdit"],
+.inv-view-only button[onclick*="Adjust"],
+.inv-view-only button[onclick*="invRelease"],
+.inv-view-only button[onclick*="invCancel"],
+.inv-view-only .inv-action-btn {
+  display: none !important;
+}
+/* Keep export and filter buttons visible */
+.inv-view-only button[onclick*="Export"],
+.inv-view-only button[onclick*="export"],
+.inv-view-only button[onclick*="invNav"],
+.inv-view-only button[onclick*="invFilter"],
+.inv-view-only .inv-nav-btn {
+  display: inline-flex !important;
+}
+/* Disable inline editing inputs */
+.inv-view-only .inv-input:not([id*="Search"]):not([id*="search"]):not([id*="Filter"]):not([id*="filter"]) {
+  pointer-events: none;
+  opacity: 0.7;
+}

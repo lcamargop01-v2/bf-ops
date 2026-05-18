@@ -14,6 +14,12 @@ var poBills = [];
 var poRequests = [];
 var poRequestSummary = {};
 
+// Permission helpers
+function poCanEdit(feature) {
+  var fn = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
+  return fn('ordering', feature || poPage);
+}
+
 // ==================== AUTH BRIDGE ====================
 function poGetToken() {
   return localStorage.getItem('bf_ops_token') || localStorage.getItem('bf_token') || '';
@@ -84,6 +90,11 @@ function poNav(page, data) {
 async function poRender() {
   var root = document.getElementById('purchasing-app');
   if (!root) { console.warn('[Purchasing] #purchasing-app not found'); return; }
+
+  // Set view-only mode class based on permissions
+  var _ce = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
+  var _editMode = _ce('ordering', poPage);
+  root.classList.toggle('po-view-only', !_editMode);
 
   root.innerHTML = '<div class="po-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
 
@@ -183,7 +194,8 @@ function poRenderNav() {
     '<i class="fas fa-location-dot"></i>' +
     '<select onchange="poSelectedLocation=this.value||null;poRender()">' + locOpts + '</select>' +
     '</div>' +
-    '</div>';
+    '</div>' +
+    (!(typeof window.canEdit === 'function' ? window.canEdit : function(){return true;})('ordering', poPage) ? '<div style="background:#FEF3C7;color:#92400E;padding:6px 16px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;border-bottom:1px solid #FDE68A"><i class="fas fa-eye"></i> View Only</div>' : '');
 }
 
 // ==================== DASHBOARD ====================
@@ -313,7 +325,7 @@ function poRenderDashboard() {
     html += '<i class="fas fa-cart-shopping" style="font-size:48px;color:#CBD5E1"></i>';
     html += '<h3>No Purchase Orders Yet</h3>';
     html += '<p>Create your first purchase order to start tracking.</p>';
-    html += '<button class="po-btn po-btn-primary" onclick="poNav(\'create\')"><i class="fas fa-plus"></i> Create Purchase Order</button>';
+    if (poCanEdit('orders')) html += '<button class="po-btn po-btn-primary" onclick="poNav(\'create\')"><i class="fas fa-plus"></i> Create Purchase Order</button>';
     html += '</div>';
   }
 
@@ -338,7 +350,7 @@ function poRenderOrderList() {
     '<option value="feed">Feed</option>' +
     '<option value="shelf_goods">Shelf Goods</option>' +
     '</select>';
-  html += '<button class="po-btn po-btn-primary" onclick="poNav(\'create\')"><i class="fas fa-plus"></i> New Order</button>';
+  if (poCanEdit('orders')) html += '<button class="po-btn po-btn-primary" onclick="poNav(\'create\')"><i class="fas fa-plus"></i> New Order</button>';
   html += '</div>';
 
   html += '<div class="po-stock-count">' + poOrders.length + ' order' + (poOrders.length !== 1 ? 's' : '') + '</div>';
@@ -968,7 +980,8 @@ async function poMarkBillPaid(billId) {
 function poRenderSuppliers() {
   var html = '<div class="po-suppliers-page">';
   html += '<div class="po-section-header"><h2><i class="fas fa-building"></i> Suppliers</h2>';
-  html += '<button class="po-btn po-btn-primary" onclick="poShowAddSupplier()"><i class="fas fa-plus"></i> Add Supplier</button></div>';
+  if (poCanEdit('suppliers')) html += '<button class="po-btn po-btn-primary" onclick="poShowAddSupplier()"><i class="fas fa-plus"></i> Add Supplier</button>';
+  html += '</div>';
 
   if (poSuppliers.length === 0) {
     html += '<div class="po-empty"><i class="fas fa-building" style="font-size:48px;color:#CBD5E1"></i>';
@@ -1316,7 +1329,7 @@ function poRenderRequests() {
     '<option value="">All Urgency</option>' +
     '<option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option>' +
     '</select>';
-  html += '<button class="po-btn po-btn-primary" onclick="poShowNewRequest()"><i class="fas fa-plus"></i> New Request</button>';
+  if (poCanEdit('requests')) html += '<button class="po-btn po-btn-primary" onclick="poShowNewRequest()"><i class="fas fa-plus"></i> New Request</button>';
   html += '</div>';
 
   html += '<div class="po-stock-count">' + poRequests.length + ' request' + (poRequests.length !== 1 ? 's' : '') + '</div>';

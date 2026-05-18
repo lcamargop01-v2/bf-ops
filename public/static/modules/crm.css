@@ -785,3 +785,26 @@
   .crm-stat-value { font-size: 15px; }
   .crm-stat-label { font-size: 10px; }
 }
+
+/* ==================== VIEW-ONLY MODE ==================== */
+.crm-view-only .crm-btn-primary,
+.crm-view-only .crm-btn-success,
+.crm-view-only .crm-btn-danger,
+.crm-view-only button[onclick*="crmShow"],
+.crm-view-only button[onclick*="crmSubmit"],
+.crm-view-only button[onclick*="crmCreate"],
+.crm-view-only button[onclick*="crmSave"],
+.crm-view-only button[onclick*="crmDelete"],
+.crm-view-only button[onclick*="crmEdit"],
+.crm-view-only button[onclick*="crmNew"],
+.crm-view-only button[onclick*="crmUpdate"],
+.crm-view-only button[onclick*="crmMove"],
+.crm-view-only button[onclick*="crmAdd"],
+.crm-view-only .crm-action-btn {
+  display: none !important;
+}
+.crm-view-only button[onclick*="crmGoPage"],
+.crm-view-only button[onclick*="Export"],
+.crm-view-only .crm-nav-btn {
+  display: inline-flex !important;
+}

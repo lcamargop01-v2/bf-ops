@@ -1180,3 +1180,27 @@
 
 /* Danger text color */
 .po-danger { color: #DC2626; font-weight: 600; }
+
+/* ==================== VIEW-ONLY MODE ==================== */
+.po-view-only .po-btn-primary,
+.po-view-only .po-btn-success,
+.po-view-only .po-btn-danger,
+.po-view-only button[onclick*="poShow"],
+.po-view-only button[onclick*="poSubmit"],
+.po-view-only button[onclick*="poCreate"],
+.po-view-only button[onclick*="poSave"],
+.po-view-only button[onclick*="poDelete"],
+.po-view-only button[onclick*="poApprove"],
+.po-view-only button[onclick*="poReject"],
+.po-view-only button[onclick*="poConvert"],
+.po-view-only button[onclick*="poReceive"],
+.po-view-only button[onclick*="poCancel"],
+.po-view-only button[onclick*="poUpdate"],
+.po-view-only .po-action-btn {
+  display: none !important;
+}
+.po-view-only button[onclick*="poNav"],
+.po-view-only button[onclick*="Export"],
+.po-view-only .po-nav-btn {
+  display: inline-flex !important;
+}

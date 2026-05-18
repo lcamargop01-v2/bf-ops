@@ -1708,8 +1708,11 @@ function updateSidebar() {
 function render() {
   const app = document.getElementById('app');
   if (!currentUser) { renderLogin(app); return; }
+  // Determine if user has edit access for current page
+  var _ce = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
+  var _editMode = _ce('logistics', currentPage);
   app.innerHTML = `
-    <div class="layout">
+    <div class="layout${_editMode ? '' : ' view-only-mode'}" data-edit-mode="${_editMode ? 'edit' : 'view'}">
       <aside class="sidebar ${sidebarOpen ? 'open' : ''}" id="sidebar">
         ${renderSidebarContent()}
       </aside>
@@ -1718,6 +1721,7 @@ function render() {
           <div class="topbar-left">
             <button class="menu-toggle" onclick="sidebarOpen=!sidebarOpen;updateSidebar()"><i class="fas fa-bars"></i></button>
             <h2 class="topbar-title" id="pageTitle"></h2>
+            ${!_editMode ? '<span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 8px;border-radius:12px;margin-left:8px;font-weight:600"><i class="fas fa-eye" style="margin-right:4px"></i>View Only</span>' : ''}
           </div>
           <div class="topbar-breadcrumb">${dayjs().format('dddd, MMMM D, YYYY')}</div>
         </header>

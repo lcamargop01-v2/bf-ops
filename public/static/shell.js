@@ -72,13 +72,41 @@ function renderLogin() {
     </div>`;
 }
 
-// Global permissions object: { logistics: ['dashboard','orders',...], ... } or 'all' for admin
+// Global permissions object:
+//   'all' for admin (full access to everything)
+//   { module: { feature: 'view'|'edit' } } for non-admin roles
+// Also stores can_view_financials (boolean) — controls financial data visibility in Inventory
 var _userPermissions = 'all';
+var _canViewFinancials = true;
 
 function canAccess(module, feature) {
   if (_userPermissions === 'all') return true;
   if (!_userPermissions || !_userPermissions[module]) return false;
-  return _userPermissions[module].indexOf(feature) !== -1;
+  // New format: object { feature: 'view'|'edit' }
+  var modulePerms = _userPermissions[module];
+  if (typeof modulePerms === 'object' && !Array.isArray(modulePerms)) {
+    return !!modulePerms[feature]; // 'view' or 'edit' both count as access
+  }
+  // Legacy fallback: array format
+  if (Array.isArray(modulePerms)) return modulePerms.indexOf(feature) !== -1;
+  return false;
+}
+
+function canEdit(module, feature) {
+  if (_userPermissions === 'all') return true;
+  if (!_userPermissions || !_userPermissions[module]) return false;
+  var modulePerms = _userPermissions[module];
+  if (typeof modulePerms === 'object' && !Array.isArray(modulePerms)) {
+    return modulePerms[feature] === 'edit';
+  }
+  // Legacy fallback: array format = edit access
+  if (Array.isArray(modulePerms)) return modulePerms.indexOf(feature) !== -1;
+  return false;
+}
+
+function canViewFinancials() {
+  if (_userPermissions === 'all') return true;
+  return !!_canViewFinancials;
 }
 
 async function doLogin(e) {
@@ -90,11 +118,16 @@ async function doLogin(e) {
     currentUser = data.user;
     setToken(data.token);
     localStorage.setItem('bf_ops_user', JSON.stringify(data.user));
-    // Store permissions
+    // Store permissions (new format: { module: { feature: access_level } })
     _userPermissions = data.permissions || 'all';
+    _canViewFinancials = data.can_view_financials !== undefined ? !!data.can_view_financials : true;
     localStorage.setItem('bf_ops_permissions', JSON.stringify(_userPermissions));
+    localStorage.setItem('bf_ops_can_view_financials', JSON.stringify(_canViewFinancials));
     window._userPermissions = _userPermissions;
+    window._canViewFinancials = _canViewFinancials;
     window.canAccess = canAccess;
+    window.canEdit = canEdit;
+    window.canViewFinancials = canViewFinancials;
     shellToast(`Welcome, ${currentUser.name}!`);
     renderHome();
   } catch (err) {
@@ -115,8 +148,11 @@ function shellLogout() {
   localStorage.removeItem('bf_ops_user');
   localStorage.removeItem('bf_ops_token');
   localStorage.removeItem('bf_ops_permissions');
+  localStorage.removeItem('bf_ops_can_view_financials');
   _userPermissions = 'all';
+  _canViewFinancials = true;
   window._userPermissions = 'all';
+  window._canViewFinancials = true;
   // Also clean up logistics module's auth keys
   localStorage.removeItem('bf_user');
   localStorage.removeItem('bf_token');
@@ -603,29 +639,35 @@ async function renderAdminPanel() {
               <thead>
                 <tr>
                   <th style="min-width:120px">Role</th>
-                  <th style="min-width:150px">Description</th>
+                  <th style="min-width:100px">Options</th>
                   ${Object.keys(moduleFeatures).map(function(mod) { return '<th colspan="' + moduleFeatures[mod].length + '" style="text-align:center;background:#F8FAFC;border-left:2px solid #E2E8F0">' + mod.charAt(0).toUpperCase() + mod.slice(1) + '</th>'; }).join('')}
                   <th></th>
                 </tr>
                 <tr>
                   <th></th><th></th>
-                  ${Object.keys(moduleFeatures).map(function(mod) { return moduleFeatures[mod].map(function(f,i) { return '<th style="text-align:center;font-size:10px;font-weight:500;color:#64748B;writing-mode:vertical-lr;padding:4px 2px;min-width:28px' + (i===0?';border-left:2px solid #E2E8F0':'') + '">' + f.label + '</th>'; }).join(''); }).join('')}
+                  ${Object.keys(moduleFeatures).map(function(mod) { return moduleFeatures[mod].map(function(f,i) { return '<th style="text-align:center;font-size:10px;font-weight:500;color:#64748B;writing-mode:vertical-lr;padding:4px 2px;min-width:32px' + (i===0?';border-left:2px solid #E2E8F0':'') + '">' + f.label + '</th>'; }).join(''); }).join('')}
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 ${allRoles.map(function(role) {
                   var perms = role.permissions || [];
-                  var permSet = {};
-                  perms.forEach(function(p) { permSet[p.module + ':' + p.feature] = true; });
+                  var permMap = {};
+                  perms.forEach(function(p) { permMap[p.module + ':' + p.feature] = p.access_level || 'edit'; });
+                  var hasFinancials = role.can_view_financials !== undefined ? !!role.can_view_financials : true;
                   return '<tr data-role="' + role.name + '">' +
-                    '<td><strong>' + role.name + '</strong>' + (role.is_system ? ' <span style="font-size:9px;background:#F1F5F9;color:#64748B;padding:1px 4px;border-radius:4px">system</span>' : '') + '</td>' +
-                    '<td style="font-size:11px;color:#64748B">' + (role.description || '—') + '</td>' +
+                    '<td><strong>' + role.name + '</strong>' + (role.is_system ? ' <span style="font-size:9px;background:#F1F5F9;color:#64748B;padding:1px 4px;border-radius:4px">system</span>' : '') + '<br><span style="font-size:10px;color:#94A3B8">' + (role.description || '') + '</span></td>' +
+                    '<td>' + (role.name !== 'admin' ? '<label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap"><input type="checkbox" class="role-financials-cb" data-role="' + role.name + '"' + (hasFinancials ? ' checked' : '') + '> <i class="fas fa-dollar-sign" style="color:#7C3AED;font-size:10px"></i> Financials</label>' : '<span style="font-size:11px;color:#10B981"><i class="fas fa-check"></i> All</span>') + '</td>' +
                     Object.keys(moduleFeatures).map(function(mod) {
                       return moduleFeatures[mod].map(function(f,i) {
                         var key = mod + ':' + f.id;
-                        if (role.name === 'admin') return '<td style="text-align:center' + (i===0?';border-left:2px solid #E2E8F0':'') + '"><i class="fas fa-check-circle" style="color:#10B981;font-size:12px"></i></td>';
-                        return '<td style="text-align:center' + (i===0?';border-left:2px solid #E2E8F0':'') + '"><input type="checkbox" class="role-perm-cb" data-role="' + role.name + '" data-module="' + mod + '" data-feature="' + f.id + '"' + (permSet[key] ? ' checked' : '') + '></td>';
+                        var level = permMap[key] || 'none';
+                        if (role.name === 'admin') return '<td style="text-align:center' + (i===0?';border-left:2px solid #E2E8F0':'') + '"><i class="fas fa-pen" style="color:#10B981;font-size:10px" title="Full edit"></i></td>';
+                        return '<td style="text-align:center;padding:2px' + (i===0?';border-left:2px solid #E2E8F0':'') + '"><select class="role-perm-sel" data-role="' + role.name + '" data-module="' + mod + '" data-feature="' + f.id + '" style="font-size:10px;padding:1px 2px;border:1px solid #E2E8F0;border-radius:3px;width:44px;background:' + (level==='edit'?'#ECFDF5':level==='view'?'#EFF6FF':'#F9FAFB') + ';color:' + (level==='edit'?'#059669':level==='view'?'#2563EB':'#94A3B8') + '" onchange="this.style.background=this.value===\'edit\'?\'#ECFDF5\':this.value===\'view\'?\'#EFF6FF\':\'#F9FAFB\';this.style.color=this.value===\'edit\'?\'#059669\':this.value===\'view\'?\'#2563EB\':\'#94A3B8\'">' +
+                          '<option value="none"' + (level==='none'?' selected':'') + '>\u2014</option>' +
+                          '<option value="view"' + (level==='view'?' selected':'') + '>\ud83d\udc41</option>' +
+                          '<option value="edit"' + (level==='edit'?' selected':'') + '>\u270f\ufe0f</option>' +
+                        '</select></td>';
                       }).join('');
                     }).join('') +
                     '<td style="display:flex;gap:4px">' +
@@ -636,7 +678,7 @@ async function renderAdminPanel() {
               </tbody>
             </table>
           </div>
-          <div style="padding:8px 12px;font-size:11px;color:#94A3B8;border-top:1px solid #F1F5F9"><i class="fas fa-info-circle"></i> Check features each role can see. Admin always has full access. Click Save to apply changes per role.</div>
+          <div style="padding:8px 12px;font-size:11px;color:#94A3B8;border-top:1px solid #F1F5F9"><i class="fas fa-info-circle"></i> Set each feature to: <strong>\u2014</strong> (no access), <strong>\ud83d\udc41</strong> (view only), or <strong>\u270f\ufe0f</strong> (full edit). <strong><i class="fas fa-dollar-sign" style="font-size:10px"></i> Financials</strong> controls cost/price/margin visibility in Inventory. Admin always has full access.</div>
         </div>
 
         <!-- Locations -->
@@ -852,13 +894,18 @@ async function submitNewRole() {
 }
 
 async function saveRolePermissions(roleName) {
-  var checkboxes = document.querySelectorAll('input.role-perm-cb[data-role="' + roleName + '"]');
+  var selects = document.querySelectorAll('select.role-perm-sel[data-role="' + roleName + '"]');
   var permissions = [];
-  checkboxes.forEach(function(cb) {
-    if (cb.checked) permissions.push({ module: cb.dataset.module, feature: cb.dataset.feature });
+  selects.forEach(function(sel) {
+    if (sel.value !== 'none') {
+      permissions.push({ module: sel.dataset.module, feature: sel.dataset.feature, access_level: sel.value });
+    }
   });
+  // Get can_view_financials checkbox
+  var finCb = document.querySelector('input.role-financials-cb[data-role="' + roleName + '"]');
+  var canViewFin = finCb ? finCb.checked : true;
   try {
-    await API.put('/admin/roles/' + roleName + '/permissions', { permissions: permissions });
+    await API.put('/admin/roles/' + roleName + '/permissions', { permissions: permissions, can_view_financials: canViewFin });
     shellToast('Permissions saved for ' + roleName);
   } catch(err) {
     shellToast('Failed: ' + err.message, 'error');
@@ -881,7 +928,10 @@ async function deleteRole(roleName) {
 (function init() {
   // Expose permission helpers globally for modules
   window._userPermissions = _userPermissions;
+  window._canViewFinancials = _canViewFinancials;
   window.canAccess = canAccess;
+  window.canEdit = canEdit;
+  window.canViewFinancials = canViewFinancials;
 
   const savedUser = localStorage.getItem('bf_ops_user');
   const savedToken = localStorage.getItem('bf_ops_token');
@@ -894,6 +944,11 @@ async function deleteRole(roleName) {
       if (savedPerms) {
         _userPermissions = JSON.parse(savedPerms);
         window._userPermissions = _userPermissions;
+      }
+      var savedFin = localStorage.getItem('bf_ops_can_view_financials');
+      if (savedFin !== null) {
+        _canViewFinancials = JSON.parse(savedFin);
+        window._canViewFinancials = _canViewFinancials;
       }
       renderHome();
     } catch(e) {

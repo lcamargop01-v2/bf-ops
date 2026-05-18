@@ -841,6 +841,49 @@ tr[draggable="true"]:hover .drag-handle { color: var(--navy); }
   .scan-queue-dock.collapsed { width: 220px; }
 }
 
+/* ==================== VIEW-ONLY MODE ==================== */
+/* When user has view-only access, hide all create/edit/delete action buttons */
+.view-only-mode .btn-primary,
+.view-only-mode .btn-success,
+.view-only-mode .btn-danger,
+.view-only-mode .btn-warning,
+.view-only-mode .btn-icon,
+.view-only-mode button[onclick*="showNew"],
+.view-only-mode button[onclick*="showEdit"],
+.view-only-mode button[onclick*="showCreate"],
+.view-only-mode button[onclick*="submit"],
+.view-only-mode button[onclick*="delete"],
+.view-only-mode button[onclick*="doArchive"],
+.view-only-mode button[onclick*="Archive("],
+.view-only-mode button[onclick*="updateOrderStatus"],
+.view-only-mode button[onclick*="showMakeRecurring"],
+.view-only-mode button[onclick*="saveApiKey"],
+.view-only-mode button[onclick*="saveInline"],
+.view-only-mode button[onclick*="Adjust"],
+.view-only-mode button[onclick*="addOrderToRoute"],
+.view-only-mode button[onclick*="removeOrderFromRoute"],
+.view-only-mode button[onclick*="addReturnToRoute"],
+.view-only-mode button[onclick*="removeReturnFromRoute"] {
+  display: none !important;
+}
+/* Keep navigation, view and filter buttons visible */
+.view-only-mode .btn-outline:not([onclick*="Edit"]):not([onclick*="delete"]):not([onclick*="Archive"]),
+.view-only-mode button[onclick*="navigate"],
+.view-only-mode button[onclick*="Nav"],
+.view-only-mode .menu-toggle,
+.view-only-mode button[onclick*="Export"],
+.view-only-mode button[onclick*="export"],
+.view-only-mode button[onclick*="filter"],
+.view-only-mode button[onclick*="toggle"],
+.view-only-mode button[onclick*="sidebar"] {
+  display: inline-flex !important;
+}
+/* Disable form inputs in view-only mode */
+.view-only-mode .form-input:not([id*="Search"]):not([id*="search"]):not([id*="Filter"]):not([id*="filter"]) {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
 /* Print */
 @media print {
   .sidebar, .topbar, .no-print, .scan-queue-dock { display: none !important; }

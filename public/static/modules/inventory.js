@@ -15,6 +15,12 @@ var invProductsPageData = [];
 var invProductsTotal = 0;
 var invProductsOffset = 0;
 
+// Permission helper for edit access (view-only enforcement)
+function invCanEdit(feature) {
+  var fn = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
+  return fn('inventory', feature || invPage);
+}
+
 // ==================== AUTH BRIDGE ====================
 function invGetToken() {
   return localStorage.getItem('bf_ops_token') || localStorage.getItem('bf_token') || '';
@@ -116,6 +122,11 @@ async function invRender() {
   var root = document.getElementById('inventory-app');
   if (!root) { console.warn('[Inventory] #inventory-app not found, aborting render'); return; }
 
+  // Set view-only mode class based on permissions
+  var _ce = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
+  var _editMode = _ce('inventory', invPage);
+  root.classList.toggle('inv-view-only', !_editMode);
+
   root.innerHTML = '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
   console.log('[Inventory] rendering page:', invPage);
 
@@ -201,22 +212,25 @@ function invRenderNav() {
     '<i class="fas fa-location-dot"></i>' +
     '<select onchange="invSelectedLocation=this.value||null;invRender()">' + locOpts + '</select>' +
     '</div>' +
-    '</div>';
+    '</div>' +
+    (!(typeof window.canEdit === 'function' ? window.canEdit : function(){return true;})('inventory', invPage) ? '<div style="background:#FEF3C7;color:#92400E;padding:6px 16px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;border-bottom:1px solid #FDE68A"><i class="fas fa-eye"></i> View Only — You don\'t have edit access to this page</div>' : '');
 }
 
 // ==================== DASHBOARD ====================
 function invRenderDashboard() {
   var s = invSummary;
+  var _showFin = invCanViewFin();
   var cards = [
     { icon: 'fa-boxes-stacked', label: 'Total Products', value: s.total_products || 0, color: '#059669' },
     { icon: 'fa-cubes', label: 'Total Units', value: (s.total_units || 0).toLocaleString(), color: '#2563EB' },
-    { icon: 'fa-dollar-sign', label: 'Total Value', value: '$' + (s.total_value || 0).toLocaleString(undefined, {minimumFractionDigits:2}), color: '#7C3AED' },
+    { icon: 'fa-dollar-sign', label: 'Total Value', value: _showFin ? '$' + (s.total_value || 0).toLocaleString(undefined, {minimumFractionDigits:2}) : '—', color: '#7C3AED', hidden: !_showFin },
     { icon: 'fa-triangle-exclamation', label: 'Low Stock', value: s.low_stock || 0, color: s.low_stock > 0 ? '#DC2626' : '#6B7280' },
     { icon: 'fa-lock', label: 'On Hold', value: (s.on_hold || 0).toLocaleString(), color: '#D97706' },
     { icon: 'fa-bookmark', label: 'Reserved', value: (s.reserved || 0).toLocaleString(), color: '#0891B2' },
     { icon: 'fa-truck-ramp-box', label: 'Active Transfers', value: s.active_transfers || 0, color: '#4F46E5' },
     { icon: 'fa-chart-line-down', label: 'Losses (30d)', value: s.losses_30d || 0, color: s.losses_30d > 0 ? '#DC2626' : '#6B7280' }
   ];
+  cards = cards.filter(function(c) { return !c.hidden; });
 
   var html = '<div class="inv-dashboard">';
   html += '<div class="inv-cards-grid">';
@@ -233,17 +247,19 @@ function invRenderDashboard() {
   });
   html += '</div>';
 
-  // Quick actions
-  html += '<div class="inv-section">';
-  html += '<h3 class="inv-section-title"><i class="fas fa-bolt"></i> Quick Actions</h3>';
-  html += '<div class="inv-quick-actions">';
-  html += '<button class="inv-action-btn inv-action-count" onclick="invNav(\'count\')"><i class="fas fa-calculator"></i> Quick Count</button>';
-  html += '<button class="inv-action-btn inv-action-transfer" onclick="invShowNewTransfer()"><i class="fas fa-truck-ramp-box"></i> New Transfer</button>';
-  html += '<button class="inv-action-btn inv-action-loss" onclick="invShowReportLoss()"><i class="fas fa-triangle-exclamation"></i> Report Loss</button>';
-  html += '<button class="inv-action-btn inv-action-adjust" onclick="invShowQuickAdjust()"><i class="fas fa-sliders"></i> Adjust Stock</button>';
-  html += '<button class="inv-action-btn inv-action-request" onclick="invShowRequestOrder()"><i class="fas fa-hand"></i> Request Order</button>';
-  html += '</div>';
-  html += '</div>';
+  // Quick actions — only show if user has edit access to dashboard
+  if (invCanEdit('dashboard')) {
+    html += '<div class="inv-section">';
+    html += '<h3 class="inv-section-title"><i class="fas fa-bolt"></i> Quick Actions</h3>';
+    html += '<div class="inv-quick-actions">';
+    html += '<button class="inv-action-btn inv-action-count" onclick="invNav(\'count\')"><i class="fas fa-calculator"></i> Quick Count</button>';
+    html += '<button class="inv-action-btn inv-action-transfer" onclick="invShowNewTransfer()"><i class="fas fa-truck-ramp-box"></i> New Transfer</button>';
+    html += '<button class="inv-action-btn inv-action-loss" onclick="invShowReportLoss()"><i class="fas fa-triangle-exclamation"></i> Report Loss</button>';
+    html += '<button class="inv-action-btn inv-action-adjust" onclick="invShowQuickAdjust()"><i class="fas fa-sliders"></i> Adjust Stock</button>';
+    html += '<button class="inv-action-btn inv-action-request" onclick="invShowRequestOrder()"><i class="fas fa-hand"></i> Request Order</button>';
+    html += '</div>';
+    html += '</div>';
+  }
 
   // Stock by location summary
   if (!invSelectedLocation && invStockData.length > 0) {
@@ -264,7 +280,7 @@ function invRenderDashboard() {
         '<div class="inv-loc-card-stats">' +
         '<div><strong>' + l.products + '</strong> products</div>' +
         '<div><strong>' + l.units.toLocaleString() + '</strong> units</div>' +
-        '<div><strong>$' + l.value.toLocaleString(undefined, {minimumFractionDigits:2}) + '</strong></div>' +
+        (_showFin ? '<div><strong>$' + l.value.toLocaleString(undefined, {minimumFractionDigits:2}) + '</strong></div>' : '') +
         '</div></div>';
     });
     html += '</div></div>';
@@ -276,7 +292,7 @@ function invRenderDashboard() {
     html += '<div class="inv-section">';
     html += '<h3 class="inv-section-title"><i class="fas fa-ranking-star"></i> Top Stock Items</h3>';
     html += '<div class="inv-table-wrap"><table class="inv-table">';
-    html += '<thead><tr><th>Product</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Available</th><th class="text-right">Value</th></tr></thead><tbody>';
+    html += '<thead><tr><th>Product</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Available</th>' + (_showFin ? '<th class="text-right">Value</th>' : '') + '</tr></thead><tbody>';
     sorted.slice(0, 15).forEach(function(s) {
       var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
       html += '<tr onclick="invShowProductDetail(' + s.product_id + ')" class="inv-clickable">' +
@@ -284,7 +300,7 @@ function invRenderDashboard() {
         '<td><span class="inv-loc-badge">' + escH(s.location_code) + '</span></td>' +
         '<td class="text-right">' + (s.qty_on_hand || 0).toLocaleString() + ' <span class="inv-muted">' + escH(s.unit_type || '') + '</span></td>' +
         '<td class="text-right' + (avail <= 0 ? ' inv-danger' : '') + '">' + avail.toLocaleString() + '</td>' +
-        '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' +
+        (_showFin ? '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' : '') +
         '</tr>';
     });
     html += '</tbody></table></div></div>';
@@ -326,8 +342,10 @@ function invRenderStockList() {
   html += '<div class="inv-stock-count">' + invStockData.length + ' items</div>';
 
   // Stock table (desktop) / cards (mobile)
+  var _sf = invCanViewFin();
+  var _se = invCanEdit('stock');
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
-  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th><th class="text-right">Sell</th><th class="text-right">Cost</th><th class="text-right">Value</th><th></th></tr></thead><tbody>';
+  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th>' + (_sf ? '<th class="text-right">Sell</th><th class="text-right">Cost</th><th class="text-right">Value</th>' : '') + (_se ? '<th></th>' : '') + '</tr></thead><tbody>';
 
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
@@ -340,11 +358,11 @@ function invRenderStockList() {
       '<td class="text-right"><strong>' + (s.qty_on_hand || 0).toLocaleString() + '</strong></td>' +
       '<td class="text-right">' + (s.qty_on_hold || 0 ? '<span class="inv-hold-badge">' + s.qty_on_hold + '</span>' : '—') + '</td>' +
       '<td class="text-right' + (avail <= 0 ? ' inv-danger' : lowStock ? ' inv-warning' : '') + '"><strong>' + avail.toLocaleString() + '</strong></td>' +
-      '<td class="text-right">$' + (s.price || 0).toFixed(2) + '</td>' +
+      (_sf ? '<td class="text-right">$' + (s.price || 0).toFixed(2) + '</td>' +
       '<td class="text-right inv-muted">$' + (s.cost || 0).toFixed(2) + '</td>' +
-      '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' +
-      '<td><button class="inv-btn inv-btn-xs" onclick="invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i></button>' +
-      '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + escH(s.product_name).replace(/'/g, "\\'") + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i></button></td>' +
+      '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' : '') +
+      (_se ? '<td><button class="inv-btn inv-btn-xs" onclick="invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i></button>' +
+      '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + escH(s.product_name).replace(/'/g, "\\'") + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i></button></td>' : '') +
       '</tr>';
   });
   html += '</tbody></table></div>';
@@ -362,13 +380,13 @@ function invRenderStockList() {
       '<div class="inv-stock-card-nums">' +
       '<div><span class="inv-muted">On Hand</span><strong>' + (s.qty_on_hand || 0) + '</strong></div>' +
       '<div><span class="inv-muted">Available</span><strong class="' + (avail <= 0 ? 'inv-danger' : '') + '">' + avail + '</strong></div>' +
-      '<div><span class="inv-muted">Sell</span><span>$' + (s.price || 0).toFixed(2) + '</span></div>' +
-      '<div><span class="inv-muted">Cost</span><span>$' + (s.cost || 0).toFixed(2) + '</span></div>' +
+      (_sf ? '<div><span class="inv-muted">Sell</span><span>$' + (s.price || 0).toFixed(2) + '</span></div>' +
+      '<div><span class="inv-muted">Cost</span><span>$' + (s.cost || 0).toFixed(2) + '</span></div>' : '') +
       '</div>' +
-      '<div class="inv-stock-card-actions">' +
+      (_se ? '<div class="inv-stock-card-actions">' +
       '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i> Adjust</button>' +
       '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="event.stopPropagation();invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + escH(s.product_name).replace(/'/g, "\\'") + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i> Request</button>' +
-      '</div>' +
+      '</div>' : '') +
       '</div>';
   });
   html += '</div>';
@@ -396,7 +414,7 @@ function invRenderQuickCount() {
   html += '<p>Tap quantities to update. Changes are highlighted. Submit when done.</p>';
   html += '<div class="inv-count-toolbar">';
   html += '<input id="invCountSearch" type="text" placeholder="Search products..." class="inv-count-search" oninput="invFilterCountList()">';
-  html += '<button class="inv-btn inv-btn-primary" onclick="invSubmitBulkCount()"><i class="fas fa-check"></i> Submit Count</button>';
+  if (invCanEdit('count')) html += '<button class="inv-btn inv-btn-primary" onclick="invSubmitBulkCount()"><i class="fas fa-check"></i> Submit Count</button>';
   html += '</div>';
   html += '</div>';
 
@@ -482,7 +500,8 @@ async function invRenderTransfers() {
 
   var html = '<div class="inv-section">';
   html += '<div class="inv-section-header"><h2><i class="fas fa-truck-ramp-box"></i> Transfers</h2>';
-  html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewTransfer()"><i class="fas fa-plus"></i> New Transfer</button></div>';
+  if (invCanEdit('transfers')) html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewTransfer()"><i class="fas fa-plus"></i> New Transfer</button>';
+  html += '</div>';
 
   if (transfers.length === 0) {
     html += '<div class="inv-empty"><p>No transfers yet.</p></div>';
@@ -556,7 +575,8 @@ async function invRenderBatches() {
 
   var html = '<div class="inv-section">';
   html += '<div class="inv-section-header"><h2><i class="fas fa-layer-group"></i> Batches</h2>';
-  html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewBatch()"><i class="fas fa-plus"></i> New Batch</button></div>';
+  if (invCanEdit('batches')) html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewBatch()"><i class="fas fa-plus"></i> New Batch</button>';
+  html += '</div>';
   html += '<p class="inv-muted">Track condition-based lots. Split batches when hay or product quality varies.</p>';
 
   if (batches.length === 0) {
@@ -625,7 +645,8 @@ async function invRenderLosses() {
 
   var html = '<div class="inv-section">';
   html += '<div class="inv-section-header"><h2><i class="fas fa-triangle-exclamation"></i> Losses</h2>';
-  html += '<button class="inv-btn inv-btn-danger" onclick="invShowReportLoss()"><i class="fas fa-plus"></i> Report Loss</button></div>';
+  if (invCanEdit('losses')) html += '<button class="inv-btn inv-btn-danger" onclick="invShowReportLoss()"><i class="fas fa-plus"></i> Report Loss</button>';
+  html += '</div>';
 
   if (losses.length === 0) {
     html += '<div class="inv-empty"><p>No losses recorded.</p></div>';
@@ -669,7 +690,8 @@ async function invRenderHolds() {
 
   var html = '<div class="inv-section">';
   html += '<div class="inv-section-header"><h2><i class="fas fa-lock"></i> Active Holds</h2>';
-  html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewHold()"><i class="fas fa-plus"></i> Place Hold</button></div>';
+  if (invCanEdit('holds')) html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewHold()"><i class="fas fa-plus"></i> Place Hold</button>';
+  html += '</div>';
 
   if (holds.length === 0) {
     html += '<div class="inv-empty"><p>No active holds.</p></div>';
@@ -710,7 +732,8 @@ async function invRenderReservations() {
 
   var html = '<div class="inv-section">';
   html += '<div class="inv-section-header"><h2><i class="fas fa-bookmark"></i> Active Reservations</h2>';
-  html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewReservation()"><i class="fas fa-plus"></i> Reserve</button></div>';
+  if (invCanEdit('reservations')) html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewReservation()"><i class="fas fa-plus"></i> Reserve</button>';
+  html += '</div>';
 
   if (reservations.length === 0) {
     html += '<div class="inv-empty"><p>No active reservations.</p></div>';
@@ -1464,9 +1487,11 @@ async function invShowProductDetail(productId) {
       body += '<div class="inv-product-info-row"><span class="inv-muted">SKU</span><strong>' + escH(product.sku || '—') + '</strong></div>';
       body += '<div class="inv-product-info-row"><span class="inv-muted">Category</span><span class="inv-cat-badge inv-cat-' + (product.category || 'other') + '">' + escH(product.category || 'other') + '</span></div>';
       body += '<div class="inv-product-info-row"><span class="inv-muted">Unit</span><span>' + escH(product.unit_type || 'each') + '</span></div>';
-      body += '<div class="inv-product-info-row"><span class="inv-muted">Sell Price</span><strong style="color:#059669">$' + (product.price || 0).toFixed(2) + '</strong></div>';
-      body += '<div class="inv-product-info-row"><span class="inv-muted">Cost</span><strong style="color:#DC2626">$' + (product.cost || 0).toFixed(2) + '</strong></div>';
-      body += '<div class="inv-product-info-row"><span class="inv-muted">Margin</span><span>' + margin + '%</span></div>';
+      if (invCanViewFin()) {
+        body += '<div class="inv-product-info-row"><span class="inv-muted">Sell Price</span><strong style="color:#059669">$' + (product.price || 0).toFixed(2) + '</strong></div>';
+        body += '<div class="inv-product-info-row"><span class="inv-muted">Cost</span><strong style="color:#DC2626">$' + (product.cost || 0).toFixed(2) + '</strong></div>';
+        body += '<div class="inv-product-info-row"><span class="inv-muted">Margin</span><span>' + margin + '%</span></div>';
+      }
       body += '<div class="inv-product-info-row"><span class="inv-muted">Tax Rate</span><span>' + ((product.tax_rate || 0) * 100).toFixed(1) + '%</span></div>';
       body += '<div class="inv-product-info-row"><span class="inv-muted">Status</span><span class="inv-cat-badge ' + (product.active ? 'inv-cat-supplement' : 'inv-cat-other') + '">' + (product.active ? 'Active' : 'Inactive') + '</span></div>';
       body += '</div>';
@@ -1514,7 +1539,7 @@ async function invShowProductDetail(productId) {
       });
     }
 
-    var footer = '<button class="inv-btn inv-btn-primary" onclick="invCloseModal();invShowEditProduct(' + productId + ')"><i class="fas fa-pen"></i> Edit Product</button>';
+    var footer = invCanEdit('products') ? '<button class="inv-btn inv-btn-primary" onclick="invCloseModal();invShowEditProduct(' + productId + ')"><i class="fas fa-pen"></i> Edit Product</button>' : '';
     invShowModal('<i class="fas fa-box"></i> ' + escH(pName), body, footer);
 
   } catch(e) { invToast('Failed to load product detail', 'error'); }
@@ -1532,12 +1557,13 @@ async function invInitStock(locationId) {
 
 // ==================== EXPORT ====================
 function invExportStock() {
-  var csv = 'Product,SKU,Category,Location,On Hand,On Hold,Reserved,Available,Sell Price,Cost,Value\n';
+  var _sf = invCanViewFin();
+  var csv = 'Product,SKU,Category,Location,On Hand,On Hold,Reserved,Available' + (_sf ? ',Sell Price,Cost,Value' : '') + '\n';
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
     csv += '"' + (s.product_name || '') + '","' + (s.sku || '') + '","' + (s.category || '') + '","' + (s.location_name || '') + '",' +
-      (s.qty_on_hand || 0) + ',' + (s.qty_on_hold || 0) + ',' + (s.qty_reserved || 0) + ',' + avail + ',' +
-      (s.price || 0) + ',' + (s.cost || 0) + ',' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toFixed(2) + '\n';
+      (s.qty_on_hand || 0) + ',' + (s.qty_on_hold || 0) + ',' + (s.qty_reserved || 0) + ',' + avail +
+      (_sf ? ',' + (s.price || 0) + ',' + (s.cost || 0) + ',' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toFixed(2) : '') + '\n';
   });
   var blob = new Blob([csv], { type: 'text/csv' });
   var url = URL.createObjectURL(blob);
@@ -1612,14 +1638,16 @@ async function invRenderProductsPage() {
     html += '<option value="' + c + '"' + (cat === c ? ' selected' : '') + '>' + label + '</option>';
   });
   html += '</select>';
-  html += '<button class="inv-btn inv-btn-primary inv-btn-sm" onclick="invShowNewProduct()"><i class="fas fa-plus"></i> New Product</button>';
+  if (invCanEdit('products')) html += '<button class="inv-btn inv-btn-primary inv-btn-sm" onclick="invShowNewProduct()"><i class="fas fa-plus"></i> New Product</button>';
   html += '</div>';
 
   html += '<div class="inv-stock-count">' + invProductsTotal + ' products (showing ' + invProductsPageData.length + ')</div>';
 
   // Products table (desktop)
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
-  html += '<thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Unit</th><th class="text-right">Sell Price</th><th class="text-right">Cost</th><th class="text-right">Margin</th><th>Status</th><th></th></tr></thead><tbody>';
+  var _pf = invCanViewFin();
+  var _pe = invCanEdit('products');
+  html += '<thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Unit</th>' + (_pf ? '<th class="text-right">Sell Price</th><th class="text-right">Cost</th><th class="text-right">Margin</th>' : '') + '<th>Status</th>' + (_pe ? '<th></th>' : '') + '</tr></thead><tbody>';
 
   invProductsPageData.forEach(function(p) {
     var margin = p.price && p.cost ? (((p.price - p.cost) / p.price) * 100).toFixed(1) + '%' : '—';
@@ -1628,11 +1656,11 @@ async function invRenderProductsPage() {
       '<td class="inv-muted">' + escH(p.sku || '—') + '</td>' +
       '<td><span class="inv-cat-badge inv-cat-' + (p.category || 'other') + '">' + escH(p.category || 'other') + '</span></td>' +
       '<td>' + escH(p.unit_type || 'each') + '</td>' +
-      '<td class="text-right">$' + (p.price || 0).toFixed(2) + '</td>' +
+      (_pf ? '<td class="text-right">$' + (p.price || 0).toFixed(2) + '</td>' +
       '<td class="text-right inv-muted">$' + (p.cost || 0).toFixed(2) + '</td>' +
-      '<td class="text-right">' + margin + '</td>' +
+      '<td class="text-right">' + margin + '</td>' : '') +
       '<td>' + (p.active ? '<span class="inv-cat-badge inv-cat-supplement">Active</span>' : '<span class="inv-cat-badge inv-cat-other">Inactive</span>') + '</td>' +
-      '<td><button class="inv-btn inv-btn-xs" onclick="invShowEditProduct(' + p.id + ')" title="Edit"><i class="fas fa-pen"></i></button></td>' +
+      (_pe ? '<td><button class="inv-btn inv-btn-xs" onclick="invShowEditProduct(' + p.id + ')" title="Edit"><i class="fas fa-pen"></i></button></td>' : '') +
       '</tr>';
   });
   html += '</tbody></table></div>';
@@ -1647,14 +1675,14 @@ async function invRenderProductsPage() {
       (p.active ? '' : '<span class="inv-cat-badge inv-cat-other">Inactive</span>') +
       '</div>' +
       '<div class="inv-stock-card-nums">' +
-      '<div><span class="inv-muted">Sell</span><strong>$' + (p.price || 0).toFixed(2) + '</strong></div>' +
+      (_pf ? '<div><span class="inv-muted">Sell</span><strong>$' + (p.price || 0).toFixed(2) + '</strong></div>' +
       '<div><span class="inv-muted">Cost</span><span>$' + (p.cost || 0).toFixed(2) + '</span></div>' +
-      '<div><span class="inv-muted">Margin</span><span>' + margin + '</span></div>' +
+      '<div><span class="inv-muted">Margin</span><span>' + margin + '</span></div>' : '') +
       '<div><span class="inv-muted">Unit</span><span>' + escH(p.unit_type || 'each') + '</span></div>' +
       '</div>' +
-      '<div class="inv-stock-card-actions">' +
+      (_pe ? '<div class="inv-stock-card-actions">' +
       '<button class="inv-btn inv-btn-xs inv-btn-primary" onclick="event.stopPropagation();invShowEditProduct(' + p.id + ')"><i class="fas fa-pen"></i> Edit</button>' +
-      '</div></div>';
+      '</div>' : '') + '</div>';
   });
   html += '</div>';
 
@@ -1708,19 +1736,25 @@ async function invShowEditProduct(productId) {
     body += '<div class="inv-form-group"><label>Status</label><select class="inv-select" id="invEditActive"><option value="1"' + (p.active ? ' selected' : '') + '>Active</option><option value="0"' + (!p.active ? ' selected' : '') + '>Inactive</option></select></div>';
     body += '</div>';
 
-    body += '<div class="inv-form-row">';
-    body += '<div class="inv-form-group"><label>Sell Price ($)</label><input type="number" step="0.01" class="inv-input" id="invEditPrice" value="' + (p.price || 0) + '"></div>';
-    body += '<div class="inv-form-group"><label>Cost ($)</label><input type="number" step="0.01" class="inv-input" id="invEditCost" value="' + (p.cost || 0) + '"></div>';
-    body += '<div class="inv-form-group"><label>Tax Rate</label><input type="number" step="0.01" class="inv-input" id="invEditTaxRate" value="' + (p.tax_rate || 0) + '" placeholder="e.g. 0.07 = 7%"></div>';
-    body += '</div>';
+    if (invCanViewFin()) {
+      body += '<div class="inv-form-row">';
+      body += '<div class="inv-form-group"><label>Sell Price ($)</label><input type="number" step="0.01" class="inv-input" id="invEditPrice" value="' + (p.price || 0) + '"></div>';
+      body += '<div class="inv-form-group"><label>Cost ($)</label><input type="number" step="0.01" class="inv-input" id="invEditCost" value="' + (p.cost || 0) + '"></div>';
+      body += '<div class="inv-form-group"><label>Tax Rate</label><input type="number" step="0.01" class="inv-input" id="invEditTaxRate" value="' + (p.tax_rate || 0) + '" placeholder="e.g. 0.07 = 7%"></div>';
+      body += '</div>';
 
-    // Margin preview
-    if (p.price && p.cost) {
-      var marginPct = (((p.price - p.cost) / p.price) * 100).toFixed(1);
-      var marginAmt = (p.price - p.cost).toFixed(2);
-      body += '<div class="inv-margin-preview" id="invMarginPreview"><i class="fas fa-chart-pie"></i> Margin: $' + marginAmt + ' (' + marginPct + '%)</div>';
+      // Margin preview
+      if (p.price && p.cost) {
+        var marginPct = (((p.price - p.cost) / p.price) * 100).toFixed(1);
+        var marginAmt = (p.price - p.cost).toFixed(2);
+        body += '<div class="inv-margin-preview" id="invMarginPreview"><i class="fas fa-chart-pie"></i> Margin: $' + marginAmt + ' (' + marginPct + '%)</div>';
+      } else {
+        body += '<div class="inv-margin-preview" id="invMarginPreview"><i class="fas fa-chart-pie"></i> Margin: —</div>';
+      }
     } else {
-      body += '<div class="inv-margin-preview" id="invMarginPreview"><i class="fas fa-chart-pie"></i> Margin: —</div>';
+      body += '<input type="hidden" id="invEditPrice" value="' + (p.price || 0) + '">';
+      body += '<input type="hidden" id="invEditCost" value="' + (p.cost || 0) + '">';
+      body += '<input type="hidden" id="invEditTaxRate" value="' + (p.tax_rate || 0) + '">';
     }
 
     body += '<div class="inv-form-row">';
@@ -1805,11 +1839,15 @@ function invShowNewProduct() {
   body += '<div class="inv-form-group"><label>Category</label><select class="inv-select" id="invNewCategory">' + catOpts + '</select></div>';
   body += '<div class="inv-form-group"><label>Unit Type</label><select class="inv-select" id="invNewUnit">' + unitOpts + '</select></div>';
   body += '</div>';
-  body += '<div class="inv-form-row">';
-  body += '<div class="inv-form-group"><label>Sell Price ($)</label><input type="number" step="0.01" class="inv-input" id="invNewPrice" value="0"></div>';
-  body += '<div class="inv-form-group"><label>Cost ($)</label><input type="number" step="0.01" class="inv-input" id="invNewCost" value="0"></div>';
-  body += '<div class="inv-form-group"><label>Tax Rate</label><input type="number" step="0.01" class="inv-input" id="invNewTaxRate" value="0" placeholder="e.g. 0.07"></div>';
-  body += '</div>';
+  if (invCanViewFin()) {
+    body += '<div class="inv-form-row">';
+    body += '<div class="inv-form-group"><label>Sell Price ($)</label><input type="number" step="0.01" class="inv-input" id="invNewPrice" value="0"></div>';
+    body += '<div class="inv-form-group"><label>Cost ($)</label><input type="number" step="0.01" class="inv-input" id="invNewCost" value="0"></div>';
+    body += '<div class="inv-form-group"><label>Tax Rate</label><input type="number" step="0.01" class="inv-input" id="invNewTaxRate" value="0" placeholder="e.g. 0.07"></div>';
+    body += '</div>';
+  } else {
+    body += '<input type="hidden" id="invNewPrice" value="0"><input type="hidden" id="invNewCost" value="0"><input type="hidden" id="invNewTaxRate" value="0">';
+  }
   body += '<div class="inv-form-row">';
   body += '<div class="inv-form-group"><label>Weight per Unit (lbs)</label><input type="number" step="0.1" class="inv-input" id="invNewWeight" value="0"></div>';
   body += '<div class="inv-form-group"><label>Pallet Qty</label><input type="number" class="inv-input" id="invNewPalletQty" value="0"></div>';

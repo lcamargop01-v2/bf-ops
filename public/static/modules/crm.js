@@ -24,6 +24,12 @@ var crmTableTagFilter = '';
 var crmKanbanLimit = 25;
 var _crmSearchTimer = null; // debounce timer for search
 
+// Permission helpers
+function crmCanEdit(feature) {
+  var fn = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
+  return fn('crm', feature || crmPage);
+}
+
 // ==================== AUTH BRIDGE ====================
 function crmGetToken() { return localStorage.getItem('bf_ops_token') || localStorage.getItem('bf_token') || ''; }
 function crmHeaders() { return { Authorization: 'Bearer ' + crmGetToken() }; }
@@ -145,6 +151,11 @@ function crmRender() {
   var root = document.getElementById('crm-app');
   if (!root) return;
 
+  // Set view-only mode class based on permissions
+  var _ce = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
+  var _editMode = _ce('crm', crmPage);
+  root.classList.toggle('crm-view-only', !_editMode);
+
   var pages = [
     { id: 'dashboard', icon: 'fa-chart-line', label: 'Dashboard' },
     { id: 'pipeline', icon: 'fa-columns', label: 'Pipeline' },
@@ -164,6 +175,7 @@ function crmRender() {
         }).join('') +
       '</div>' +
     '</div>' +
+    (!_editMode ? '<div style="background:#FEF3C7;color:#92400E;padding:6px 16px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;border-bottom:1px solid #FDE68A"><i class="fas fa-eye"></i> View Only</div>' : '') +
     '<div id="crmContent"><div class="crm-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div></div>';
 
   if (crmPage === 'dashboard') { crmRenderDashboard(); }
