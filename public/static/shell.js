@@ -575,8 +575,9 @@ async function renderAdminPanel() {
                   <td style="font-size:12px">${u.phone || '—'}</td>
                   <td style="font-size:12px">${langNames[u.preferred_language] || u.preferred_language || 'English'}</td>
                   <td>${u.active ? '<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#ECFDF5;color:#059669;font-weight:600">Active</span>' : '<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#FEF2F2;color:#DC2626;font-weight:600">Inactive</span>'}</td>
-                  <td style="display:flex;gap:4px">
+                  <td style="display:flex;gap:4px;flex-wrap:wrap">
                     <button class="shell-save-btn" onclick="showAdminEditUserModal(${u.id})" title="Edit"><i class="fas fa-edit"></i></button>
+                    ${u.active ? '<button class="shell-save-btn" style="background:#7C3AED" onclick="adminGenerateInvite(' + u.id + ',this)" title="Send Invite Link"><i class="fas fa-envelope"></i></button>' : ''}
                     ${u.active ? '<button class="shell-save-btn" style="background:#DC2626" onclick="adminToggleUser(' + u.id + ',0)" title="Deactivate"><i class="fas fa-ban"></i></button>' : '<button class="shell-save-btn" style="background:#059669" onclick="adminToggleUser(' + u.id + ',1)" title="Reactivate"><i class="fas fa-check"></i></button>'}
                   </td>
                 </tr>
@@ -733,7 +734,14 @@ function showAdminNewUserModal() {
           <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Language</label>
             <select id="adminNewLang" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px"><option value="en">English</option><option value="es">Español</option><option value="ht">Kreyòl</option></select>
           </div>
-          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Password</label><input id="adminNewPassword" type="password" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" value="changeme123" placeholder="Initial password"></div>
+          <div style="flex:1" id="adminNewPwContainer"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">Password</label><input id="adminNewPassword" type="password" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" value="changeme123" placeholder="Initial password"></div>
+        </div>
+        <div style="background:#F5F3FF;border:1px solid #DDD6FE;border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px">
+          <input type="checkbox" id="adminNewSendInvite" style="width:16px;height:16px;cursor:pointer" onchange="document.getElementById('adminNewPwContainer').style.opacity=this.checked?'.4':'1';document.getElementById('adminNewPassword').disabled=this.checked;">
+          <div>
+            <label for="adminNewSendInvite" style="font-size:13px;font-weight:600;color:#5B21B6;cursor:pointer"><i class="fas fa-envelope" style="margin-right:4px"></i> Send invite link instead</label>
+            <div style="font-size:11px;color:#7C3AED;margin-top:2px">User will set their own password via a secure link</div>
+          </div>
         </div>
       </div>
       <div style="padding:12px 20px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end;gap:8px">
@@ -748,17 +756,53 @@ async function submitAdminNewUser() {
   var name = document.getElementById('adminNewName').value.trim();
   var email = document.getElementById('adminNewEmail').value.trim();
   if (!name || !email) { shellToast('Name and email are required', 'error'); return; }
+  var sendInvite = document.getElementById('adminNewSendInvite').checked;
   try {
-    await API.post('/admin/users', {
+    var resp = await API.post('/admin/users', {
       name: name,
       email: email,
       role: document.getElementById('adminNewRole').value,
       phone: document.getElementById('adminNewPhone').value.trim() || null,
       preferred_language: document.getElementById('adminNewLang').value,
-      password: document.getElementById('adminNewPassword').value || 'changeme123'
+      password: sendInvite ? ('temp_' + Math.random().toString(36).slice(2)) : (document.getElementById('adminNewPassword').value || 'changeme123')
     });
+    var newUserId = resp.data.id;
     document.querySelector('div[style*="fixed"][style*="inset"]').remove();
     shellToast('User created!');
+
+    if (sendInvite && newUserId) {
+      // Auto-generate invite for the new user
+      try {
+        var invResp = await API.post('/admin/users/' + newUserId + '/invite');
+        var d = invResp.data;
+        // Show invite link modal
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+        overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+        overlay.innerHTML =
+          '<div style="background:white;border-radius:12px;width:520px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,.3)">' +
+            '<div style="padding:16px 20px;border-bottom:1px solid #E2E8F0;display:flex;justify-content:space-between;align-items:center">' +
+              '<h3 style="font-size:16px;font-weight:700;color:#1E293B"><i class="fas fa-envelope" style="color:#7C3AED;margin-right:8px"></i>Invite Link for ' + name + '</h3>' +
+              '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#94A3B8">&times;</button>' +
+            '</div>' +
+            '<div style="padding:20px">' +
+              '<div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#059669"><i class="fas fa-check-circle" style="margin-right:6px"></i>User created! Share this invite link so they can set their password.</div>' +
+              '<label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:6px">Invite Link (expires in 7 days)</label>' +
+              '<div style="display:flex;gap:8px">' +
+                '<input id="inviteLinkInput" readonly value="' + d.invite_url + '" style="flex:1;padding:10px 12px;border:2px solid #E2E8F0;border-radius:8px;font-size:12px;font-family:monospace;background:#F8FAFC;color:#334155" onclick="this.select()">' +
+                '<button id="inviteCopyBtn" onclick="copyInviteLink()" style="padding:10px 16px;border:none;border-radius:8px;background:#7C3AED;color:white;cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap"><i class="fas fa-copy"></i> Copy</button>' +
+              '</div>' +
+              '<p style="font-size:11px;color:#94A3B8;margin-top:10px"><i class="fas fa-info-circle"></i> The user will set their own password when they open this link.</p>' +
+            '</div>' +
+            '<div style="padding:12px 20px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end">' +
+              '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="padding:8px 20px;border:none;border-radius:6px;background:#10B981;color:white;cursor:pointer;font-size:13px;font-weight:600">Done</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(overlay);
+      } catch(invErr) {
+        shellToast('User created, but invite generation failed: ' + (invErr.response ? invErr.response.data.error : invErr.message), 'error');
+      }
+    }
     renderAdminPanel();
   } catch(err) {
     shellToast('Failed to create user: ' + (err.response ? err.response.data.error : err.message), 'error');
@@ -845,6 +889,66 @@ async function adminToggleUser(userId, active) {
   } catch(err) {
     shellToast('Failed: ' + err.message, 'error');
   }
+}
+
+async function adminGenerateInvite(userId, btn) {
+  var origHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+  try {
+    var resp = await API.post('/admin/users/' + userId + '/invite');
+    var d = resp.data;
+    // Show modal with invite link
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML =
+      '<div style="background:white;border-radius:12px;width:520px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,.3)">' +
+        '<div style="padding:16px 20px;border-bottom:1px solid #E2E8F0;display:flex;justify-content:space-between;align-items:center">' +
+          '<h3 style="font-size:16px;font-weight:700;color:#1E293B"><i class="fas fa-envelope" style="color:#7C3AED;margin-right:8px"></i>Invite Link Generated</h3>' +
+          '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#94A3B8">&times;</button>' +
+        '</div>' +
+        '<div style="padding:20px">' +
+          '<div style="background:#F8FAFC;border-radius:10px;padding:14px;margin-bottom:16px">' +
+            '<div style="font-weight:600;color:#1E293B"><i class="fas fa-user" style="color:#7C3AED;margin-right:6px"></i>' + d.user_name + '</div>' +
+            '<div style="font-size:12px;color:#64748B;margin-top:2px;padding-left:22px">' + d.user_email + '</div>' +
+          '</div>' +
+          '<label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:6px">Invite Link (expires in 7 days)</label>' +
+          '<div style="display:flex;gap:8px">' +
+            '<input id="inviteLinkInput" readonly value="' + d.invite_url + '" style="flex:1;padding:10px 12px;border:2px solid #E2E8F0;border-radius:8px;font-size:12px;font-family:monospace;background:#F8FAFC;color:#334155" onclick="this.select()">' +
+            '<button id="inviteCopyBtn" onclick="copyInviteLink()" style="padding:10px 16px;border:none;border-radius:8px;background:#7C3AED;color:white;cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap"><i class="fas fa-copy"></i> Copy</button>' +
+          '</div>' +
+          '<p style="font-size:11px;color:#94A3B8;margin-top:10px"><i class="fas fa-info-circle"></i> Share this link with the user. They\'ll set their own password when they open it.</p>' +
+        '</div>' +
+        '<div style="padding:12px 20px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end">' +
+          '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="padding:8px 20px;border:none;border-radius:6px;background:#10B981;color:white;cursor:pointer;font-size:13px;font-weight:600">Done</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    shellToast('Invite link generated for ' + d.user_name);
+  } catch(err) {
+    shellToast('Failed to generate invite: ' + (err.response ? err.response.data.error : err.message), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+  }
+}
+
+function copyInviteLink() {
+  var input = document.getElementById('inviteLinkInput');
+  var btn = document.getElementById('inviteCopyBtn');
+  input.select();
+  navigator.clipboard.writeText(input.value).then(function() {
+    btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+    btn.style.background = '#059669';
+    setTimeout(function() { btn.innerHTML = '<i class="fas fa-copy"></i> Copy'; btn.style.background = '#7C3AED'; }, 2000);
+  }).catch(function() {
+    // Fallback
+    document.execCommand('copy');
+    btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+    btn.style.background = '#059669';
+    setTimeout(function() { btn.innerHTML = '<i class="fas fa-copy"></i> Copy'; btn.style.background = '#7C3AED'; }, 2000);
+  });
 }
 
 async function saveUserModules(userId) {

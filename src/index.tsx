@@ -178,6 +178,85 @@ app.put('/api/admin/users/:id/modules', async (c) => {
   return c.json({ success: true, modules })
 })
 
+// ==================== ADMIN: INVITE SYSTEM ====================
+
+// Generate a random invite token (32 hex characters)
+async function generateInviteToken(): Promise<string> {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+// Generate invite for an existing user
+app.post('/api/admin/users/:id/invite', async (c) => {
+  const userId = parseInt(c.req.param('id'))
+  const db = c.env.DB
+
+  // Verify user exists
+  const user = await db.prepare('SELECT id, name, email, active FROM users WHERE id = ?').bind(userId).first() as any
+  if (!user) return c.json({ error: 'User not found' }, 404)
+  if (!user.active) return c.json({ error: 'Cannot invite inactive user' }, 400)
+
+  // Generate token, expires in 7 days
+  const token = await generateInviteToken()
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+
+  await db.prepare('UPDATE users SET invite_token = ?, invite_expires_at = ? WHERE id = ?')
+    .bind(token, expiresAt, userId).run()
+
+  // Build the invite URL
+  const host = new URL(c.req.url).origin
+  const inviteUrl = `${host}/invite/${token}`
+
+  return c.json({ success: true, invite_url: inviteUrl, token, expires_at: expiresAt, user_name: user.name, user_email: user.email })
+})
+
+// Validate invite token (public — no auth required)
+app.get('/api/invite/:token', async (c) => {
+  const token = c.req.param('token')
+  const db = c.env.DB
+
+  const user = await db.prepare('SELECT id, name, email, invite_expires_at FROM users WHERE invite_token = ? AND active = 1').bind(token).first() as any
+  if (!user) return c.json({ error: 'Invalid or expired invite link' }, 404)
+
+  // Check expiry
+  if (user.invite_expires_at && new Date(user.invite_expires_at) < new Date()) {
+    return c.json({ error: 'This invite link has expired. Please ask your administrator for a new one.' }, 410)
+  }
+
+  return c.json({ valid: true, name: user.name, email: user.email })
+})
+
+// Complete invite — set password (public — no auth required)
+app.post('/api/invite/:token/setup', async (c) => {
+  const token = c.req.param('token')
+  const { password } = await c.req.json() as { password: string }
+  const db = c.env.DB
+
+  if (!password || password.length < 6) {
+    return c.json({ error: 'Password must be at least 6 characters' }, 400)
+  }
+
+  const user = await db.prepare('SELECT id, name, email, invite_expires_at FROM users WHERE invite_token = ? AND active = 1').bind(token).first() as any
+  if (!user) return c.json({ error: 'Invalid or expired invite link' }, 404)
+
+  // Check expiry
+  if (user.invite_expires_at && new Date(user.invite_expires_at) < new Date()) {
+    return c.json({ error: 'This invite link has expired. Please ask your administrator for a new one.' }, 410)
+  }
+
+  // Hash the new password
+  const encoder = new TextEncoder()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(password))
+  const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
+
+  // Update password and clear invite token
+  await db.prepare('UPDATE users SET password_hash = ?, invite_token = NULL, invite_expires_at = NULL, password_set = 1 WHERE id = ?')
+    .bind(hashHex, user.id).run()
+
+  return c.json({ success: true, message: 'Password set successfully! You can now sign in.', email: user.email })
+})
+
 // ==================== ADMIN: ROLES & PERMISSIONS ====================
 
 // All features available per module (used by frontend for rendering toggles)
@@ -382,6 +461,185 @@ app.route('/', crmApp)
 
 // Logistics module: /api/orders, /api/routes, /api/customers, etc.
 app.route('/', logisticsApp)
+
+// ==================== SERVE INVITE PAGE (PUBLIC — NO AUTH) ====================
+app.get('/invite/:token', (c) => {
+  const token = c.req.param('token')
+  return c.html(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Set Up Your Account — BF Operations</title>
+  <meta name="theme-color" content="#0F172A">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #0F172A 0%, #1E293B 50%, #334155 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .invite-card { background: white; border-radius: 16px; width: 440px; max-width: 92vw; box-shadow: 0 25px 80px rgba(0,0,0,.4); overflow: hidden; }
+    .invite-header { background: linear-gradient(135deg, #10B981, #059669); padding: 32px; text-align: center; color: white; }
+    .invite-header i { font-size: 40px; margin-bottom: 12px; }
+    .invite-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .invite-header p { font-size: 13px; opacity: 0.9; }
+    .invite-body { padding: 28px; }
+    .invite-label { font-size: 12px; font-weight: 600; color: #475569; display: block; margin-bottom: 6px; }
+    .invite-input { width: 100%; padding: 12px 14px; border: 2px solid #E2E8F0; border-radius: 10px; font-size: 14px; font-family: inherit; transition: border-color .2s; outline: none; }
+    .invite-input:focus { border-color: #10B981; }
+    .invite-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; transition: transform .1s, box-shadow .2s; }
+    .invite-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(16,185,129,.4); }
+    .invite-btn:active { transform: translateY(0); }
+    .invite-btn:disabled { opacity: .6; cursor: not-allowed; transform: none; }
+    .invite-msg { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; display: none; }
+    .invite-msg.error { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; display: block; }
+    .invite-msg.success { background: #ECFDF5; color: #059669; border: 1px solid #A7F3D0; display: block; }
+    .invite-info { background: #F8FAFC; border-radius: 10px; padding: 14px; margin-bottom: 20px; }
+    .invite-info .name { font-size: 15px; font-weight: 700; color: #1E293B; }
+    .invite-info .email { font-size: 13px; color: #64748B; }
+    .pw-strength { height: 4px; border-radius: 2px; margin-top: 6px; transition: all .3s; background: #E2E8F0; }
+    .pw-strength.weak { background: #EF4444; width: 33%; }
+    .pw-strength.medium { background: #F59E0B; width: 66%; }
+    .pw-strength.strong { background: #10B981; width: 100%; }
+    .pw-toggle { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #94A3B8; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="invite-card" id="inviteCard">
+    <div class="invite-header">
+      <i class="fas fa-user-shield"></i>
+      <h1>Set Up Your Account</h1>
+      <p>BF Operations Portal</p>
+    </div>
+    <div class="invite-body" id="inviteBody">
+      <div style="text-align:center;padding:40px 0">
+        <i class="fas fa-spinner fa-spin" style="font-size:28px;color:#10B981"></i>
+        <p style="margin-top:12px;color:#64748B;font-size:14px">Validating your invite...</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/axios@1.7.0/dist/axios.min.js"></script>
+  <script>
+    var INVITE_TOKEN = '${token}';
+
+    // Validate the token on page load
+    (async function() {
+      var body = document.getElementById('inviteBody');
+      try {
+        var resp = await axios.get('/api/invite/' + INVITE_TOKEN);
+        var d = resp.data;
+        renderSetupForm(d.name, d.email);
+      } catch(err) {
+        var msg = (err.response && err.response.data && err.response.data.error) || 'Invalid or expired invite link';
+        body.innerHTML = '<div style="text-align:center;padding:30px 0">' +
+          '<i class="fas fa-exclamation-triangle" style="font-size:36px;color:#F59E0B;margin-bottom:12px"></i>' +
+          '<h3 style="font-size:16px;font-weight:700;color:#1E293B;margin-bottom:8px">Invite Not Valid</h3>' +
+          '<p style="color:#64748B;font-size:13px;line-height:1.5;max-width:320px;margin:0 auto">' + msg + '</p>' +
+          '<a href="/app" style="display:inline-block;margin-top:20px;padding:10px 20px;background:#3B82F6;color:white;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600"><i class="fas fa-sign-in-alt"></i> Go to Login</a>' +
+          '</div>';
+      }
+    })();
+
+    function renderSetupForm(name, email) {
+      var body = document.getElementById('inviteBody');
+      body.innerHTML =
+        '<div class="invite-info">' +
+          '<div class="name"><i class="fas fa-user" style="color:#10B981;margin-right:8px"></i>' + name + '</div>' +
+          '<div class="email" style="margin-top:2px;padding-left:26px">' + email + '</div>' +
+        '</div>' +
+        '<div id="inviteMsg" class="invite-msg"></div>' +
+        '<form onsubmit="setupPassword(event)" style="display:flex;flex-direction:column;gap:16px">' +
+          '<div>' +
+            '<label class="invite-label">Create Password</label>' +
+            '<div style="position:relative">' +
+              '<input class="invite-input" type="password" id="invPw1" placeholder="At least 6 characters" required minlength="6" oninput="checkStrength(this.value)">' +
+              '<button type="button" class="pw-toggle" onclick="togglePw(\'invPw1\',this)"><i class="fas fa-eye"></i></button>' +
+            '</div>' +
+            '<div class="pw-strength" id="pwStrength"></div>' +
+          '</div>' +
+          '<div>' +
+            '<label class="invite-label">Confirm Password</label>' +
+            '<div style="position:relative">' +
+              '<input class="invite-input" type="password" id="invPw2" placeholder="Re-enter your password" required minlength="6">' +
+              '<button type="button" class="pw-toggle" onclick="togglePw(\'invPw2\',this)"><i class="fas fa-eye"></i></button>' +
+            '</div>' +
+          '</div>' +
+          '<button type="submit" class="invite-btn" id="inviteSubmitBtn"><i class="fas fa-check-circle"></i> Set Password & Activate</button>' +
+        '</form>';
+    }
+
+    function togglePw(id, btn) {
+      var inp = document.getElementById(id);
+      if (inp.type === 'password') { inp.type = 'text'; btn.innerHTML = '<i class="fas fa-eye-slash"></i>'; }
+      else { inp.type = 'password'; btn.innerHTML = '<i class="fas fa-eye"></i>'; }
+    }
+
+    function checkStrength(pw) {
+      var bar = document.getElementById('pwStrength');
+      if (!pw) { bar.className = 'pw-strength'; return; }
+      var score = 0;
+      if (pw.length >= 6) score++;
+      if (pw.length >= 10) score++;
+      if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
+      if (/[0-9]/.test(pw)) score++;
+      if (/[^A-Za-z0-9]/.test(pw)) score++;
+      if (score <= 2) bar.className = 'pw-strength weak';
+      else if (score <= 3) bar.className = 'pw-strength medium';
+      else bar.className = 'pw-strength strong';
+    }
+
+    async function setupPassword(e) {
+      e.preventDefault();
+      var pw1 = document.getElementById('invPw1').value;
+      var pw2 = document.getElementById('invPw2').value;
+      var msgEl = document.getElementById('inviteMsg');
+      var btn = document.getElementById('inviteSubmitBtn');
+
+      if (pw1 !== pw2) {
+        msgEl.className = 'invite-msg error';
+        msgEl.textContent = 'Passwords do not match.';
+        return;
+      }
+      if (pw1.length < 6) {
+        msgEl.className = 'invite-msg error';
+        msgEl.textContent = 'Password must be at least 6 characters.';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Setting up...';
+      msgEl.style.display = 'none';
+
+      try {
+        var resp = await axios.post('/api/invite/' + INVITE_TOKEN + '/setup', { password: pw1 });
+        var d = resp.data;
+        // Show success
+        document.getElementById('inviteBody').innerHTML =
+          '<div style="text-align:center;padding:30px 0">' +
+            '<i class="fas fa-check-circle" style="font-size:48px;color:#10B981;margin-bottom:16px"></i>' +
+            '<h3 style="font-size:18px;font-weight:700;color:#1E293B;margin-bottom:8px">You\\\'re All Set!</h3>' +
+            '<p style="color:#64748B;font-size:13px;margin-bottom:4px">Your password has been set successfully.</p>' +
+            '<p style="color:#64748B;font-size:13px;margin-bottom:24px">Sign in with: <strong>' + d.email + '</strong></p>' +
+            '<a href="/app" style="display:inline-block;padding:12px 28px;background:linear-gradient(135deg,#10B981,#059669);color:white;border-radius:10px;text-decoration:none;font-size:14px;font-weight:700;box-shadow:0 4px 15px rgba(16,185,129,.3)"><i class="fas fa-sign-in-alt" style="margin-right:6px"></i> Sign In Now</a>' +
+          '</div>';
+        // Update header to show success
+        document.querySelector('.invite-header').style.background = 'linear-gradient(135deg, #10B981, #047857)';
+        document.querySelector('.invite-header i').className = 'fas fa-check-circle';
+        document.querySelector('.invite-header h1').textContent = 'Account Ready!';
+        document.querySelector('.invite-header p').textContent = 'Your portal access is now active';
+      } catch(err) {
+        var errMsg = (err.response && err.response.data && err.response.data.error) || 'Failed to set password. Please try again.';
+        msgEl.className = 'invite-msg error';
+        msgEl.textContent = errMsg;
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-check-circle"></i> Set Password & Activate';
+      }
+    }
+  </script>
+</body>
+</html>`)
+})
 
 // ==================== SERVE PARENT SHELL ====================
 app.get('/', (c) => c.redirect('/app'))
