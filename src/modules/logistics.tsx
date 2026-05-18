@@ -5503,7 +5503,7 @@ app.get('/api/warehouse/dashboard', async (c) => {
   try {
     const [products, todayOrders, todayRoutes, pendingReturns, recentActivity] = await Promise.all([
       db.prepare(`SELECT p.id, p.name, p.sku, p.category, p.unit_type, p.stock_quantity, p.warehouse_zone,
-        p.weight_per_unit, p.pallet_qty
+        p.weight_per_unit, p.pallet_qty, p.low_stock_threshold, p.reorder_point
         FROM products p WHERE p.active = 1 ORDER BY p.warehouse_zone, p.category, p.name`).all(),
       db.prepare(`SELECT o.id, o.order_number, o.status, o.priority, o.scheduled_date, o.warehouse_received,
         c.business_name, (SELECT COALESCE(SUM(oi.quantity),0) FROM order_items oi WHERE oi.order_id = o.id) as item_count
@@ -5541,7 +5541,7 @@ app.get('/api/warehouse/inventory', async (c) => {
   const zone = c.req.query('zone')
   const search = c.req.query('search')
   let query = `SELECT p.id, p.name, p.sku, p.category, p.unit_type, p.stock_quantity, p.warehouse_zone,
-    p.weight_per_unit, p.pallet_qty, p.price, p.cost
+    p.weight_per_unit, p.pallet_qty, p.price, p.cost, p.low_stock_threshold, p.reorder_point
     FROM products p WHERE p.active = 1`
   const params: any[] = []
   if (zone && zone !== 'all') { query += ' AND p.warehouse_zone = ?'; params.push(zone) }
@@ -5702,7 +5702,7 @@ app.get('/api/warehouse/activity', async (c) => {
   return c.json({ activity: result.results })
 })
 
-// Receive inbound stock (PO / delivery from supplier)
+// Receive inbound stock (manual — no PO link)
 app.post('/api/warehouse/receive-stock', async (c) => {
   const body = await c.req.json()
   const { items, received_by, notes } = body // items: [{product_id, quantity}]
@@ -5716,6 +5716,169 @@ app.post('/api/warehouse/receive-stock', async (c) => {
     ).bind(item.product_id, item.quantity, notes || 'Inbound stock received', received_by || null).run()
   }
   return c.json({ success: true, received: items.length })
+})
+
+// ==================== PO-LINKED WAREHOUSE RECEIVING ====================
+
+// Get receivable POs (ordered / in_transit / partial) for warehouse Receive tab
+app.get('/api/warehouse/pending-pos', async (c) => {
+  const db = c.env.DB
+  const result = await db.prepare(`
+    SELECT po.id, po.po_number, po.status, po.order_type, po.expected_date, po.supplier_id,
+      s.name as supplier_name,
+      (SELECT COUNT(*) FROM po_items WHERE po_id = po.id) as item_count,
+      (SELECT COALESCE(SUM(qty_ordered),0) FROM po_items WHERE po_id = po.id) as total_ordered,
+      (SELECT COALESCE(SUM(qty_received),0) FROM po_items WHERE po_id = po.id) as total_received
+    FROM purchase_orders po
+    LEFT JOIN suppliers s ON po.supplier_id = s.id
+    WHERE po.status IN ('ordered','in_transit','partial','delayed')
+    ORDER BY CASE po.status WHEN 'in_transit' THEN 1 WHEN 'partial' THEN 2 WHEN 'delayed' THEN 3 ELSE 4 END,
+      po.expected_date ASC`).all()
+  return c.json({ pos: result.results || [] })
+})
+
+// Get PO items for warehouse receiving (shows remaining qty to receive)
+app.get('/api/warehouse/po/:id/items', async (c) => {
+  const db = c.env.DB
+  const poId = parseInt(c.req.param('id'))
+  const po = await db.prepare(`
+    SELECT po.*, s.name as supplier_name
+    FROM purchase_orders po LEFT JOIN suppliers s ON po.supplier_id = s.id
+    WHERE po.id = ?`).bind(poId).first() as any
+  if (!po) return c.json({ error: 'PO not found' }, 404)
+
+  const items = await db.prepare(`
+    SELECT pi.id as po_item_id, pi.product_id, pi.description, pi.qty_ordered, pi.qty_received,
+      pi.unit, pi.unit_cost, (pi.qty_ordered - pi.qty_received) as qty_remaining,
+      p.name as product_name, p.sku, p.stock_quantity, p.warehouse_zone, p.unit_type
+    FROM po_items pi LEFT JOIN products p ON pi.product_id = p.id
+    WHERE pi.po_id = ? ORDER BY pi.id`).bind(poId).all()
+
+  return c.json({ po, items: items.results || [] })
+})
+
+// Receive PO items through warehouse — updates stock, po_items, warehouse_activity, and PO status
+app.post('/api/warehouse/po/:id/receive', async (c) => {
+  const db = c.env.DB
+  const poId = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  const { items, received_by, notes } = body
+  // items: [{ po_item_id, product_id, qty_received, condition }]
+  if (!items || !items.length) return c.json({ error: 'items array required' }, 400)
+
+  const po = await db.prepare('SELECT * FROM purchase_orders WHERE id = ?').bind(poId).first() as any
+  if (!po) return c.json({ error: 'PO not found' }, 404)
+
+  // Create a po_receiving record (leverages existing purchasing schema)
+  const recvResult = await db.prepare(
+    `INSERT INTO po_receiving (po_id, received_by, received_by_name, notes, location_id) VALUES (?,?,?,?,?)`
+  ).bind(poId, received_by || null, 'warehouse', notes || null, po.location_id).run()
+  const receivingId = recvResult.meta.last_row_id
+
+  let totalReceived = 0
+  for (const item of items) {
+    if (!item.po_item_id || !item.qty_received || item.qty_received <= 0) continue
+    const condition = item.condition || 'good'
+
+    // Insert po_receiving_items
+    await db.prepare(
+      `INSERT INTO po_receiving_items (receiving_id, po_item_id, product_id, qty_received, condition, notes)
+       VALUES (?,?,?,?,?,?)`
+    ).bind(receivingId, item.po_item_id, item.product_id || null, item.qty_received, condition, item.notes || null).run()
+
+    // Update cumulative qty_received on po_items
+    await db.prepare('UPDATE po_items SET qty_received = qty_received + ? WHERE id = ?')
+      .bind(item.qty_received, item.po_item_id).run()
+
+    // Update product stock_quantity (only for non-rejected items)
+    if (item.product_id && condition !== 'rejected') {
+      await db.prepare('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?')
+        .bind(item.qty_received, item.product_id).run()
+    }
+
+    // Log warehouse activity with PO link
+    await db.prepare(
+      `INSERT INTO warehouse_activity (activity_type, product_id, quantity, direction, reference_type, reference_id, zone, notes, performed_by, po_id)
+       VALUES ('order_received', ?, ?, 'in', 'purchase_order', ?, ?, ?, ?, ?)`
+    ).bind(item.product_id || null, item.qty_received, poId,
+      item.warehouse_zone || null, `PO ${po.po_number} received` + (condition !== 'good' ? ` (${condition})` : ''),
+      received_by || null, poId).run()
+
+    totalReceived += item.qty_received
+  }
+
+  // Auto-update PO status based on remaining quantities
+  const poItems = await db.prepare('SELECT qty_ordered, qty_received FROM po_items WHERE po_id = ?').bind(poId).all()
+  const allReceived = (poItems.results || []).every((i: any) => i.qty_received >= i.qty_ordered)
+  const anyReceived = (poItems.results || []).some((i: any) => i.qty_received > 0)
+  let newStatus = po.status
+  if (allReceived) newStatus = 'received'
+  else if (anyReceived) newStatus = 'partial'
+
+  if (newStatus !== po.status) {
+    await db.prepare(`UPDATE purchase_orders SET status = ?,
+      received_date = CASE WHEN ? = 'received' THEN date('now') ELSE received_date END,
+      updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(newStatus, newStatus, poId).run()
+  }
+
+  return c.json({ success: true, receiving_id: receivingId, total_received: totalReceived, new_status: newStatus })
+})
+
+// ==================== LOW STOCK ALERTS & THRESHOLDS ====================
+
+// Get low stock alerts — products where stock_quantity <= low_stock_threshold (and threshold > 0)
+app.get('/api/warehouse/alerts', async (c) => {
+  const db = c.env.DB
+  const zone = c.req.query('zone')
+  let query = `SELECT p.id, p.name, p.sku, p.category, p.unit_type, p.stock_quantity, p.warehouse_zone,
+    p.low_stock_threshold, p.reorder_point, p.cost, p.price
+    FROM products p WHERE p.active = 1 AND p.low_stock_threshold > 0 AND p.stock_quantity <= p.low_stock_threshold`
+  const params: any[] = []
+  if (zone && zone !== 'all') { query += ' AND p.warehouse_zone = ?'; params.push(zone) }
+  query += ' ORDER BY (p.stock_quantity - p.low_stock_threshold) ASC, p.warehouse_zone, p.name'
+  const result = await db.prepare(query).bind(...params).all()
+
+  // Also get products at or below reorder_point (need reorder soon)
+  let reorderQuery = `SELECT p.id, p.name, p.sku, p.category, p.unit_type, p.stock_quantity, p.warehouse_zone,
+    p.low_stock_threshold, p.reorder_point, p.cost, p.price
+    FROM products p WHERE p.active = 1 AND p.reorder_point > 0 AND p.stock_quantity <= p.reorder_point`
+  const reorderParams: any[] = []
+  if (zone && zone !== 'all') { reorderQuery += ' AND p.warehouse_zone = ?'; reorderParams.push(zone) }
+  reorderQuery += ' ORDER BY (p.stock_quantity - p.reorder_point) ASC, p.name'
+  const reorderResult = await db.prepare(reorderQuery).bind(...reorderParams).all()
+
+  return c.json({
+    low_stock: result.results || [],
+    needs_reorder: reorderResult.results || [],
+  })
+})
+
+// Update thresholds for a single product
+app.put('/api/warehouse/product/:id/thresholds', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const { low_stock_threshold, reorder_point } = await c.req.json()
+  await db.prepare('UPDATE products SET low_stock_threshold = ?, reorder_point = ? WHERE id = ?')
+    .bind(low_stock_threshold ?? 0, reorder_point ?? 0, id).run()
+  return c.json({ success: true })
+})
+
+// Bulk update thresholds (set same threshold for all products in a zone or category)
+app.post('/api/warehouse/thresholds/bulk', async (c) => {
+  const db = c.env.DB
+  const { zone, category, low_stock_threshold, reorder_point } = await c.req.json()
+  let query = 'UPDATE products SET '
+  const sets: string[] = []
+  const params: any[] = []
+  if (low_stock_threshold !== undefined) { sets.push('low_stock_threshold = ?'); params.push(low_stock_threshold) }
+  if (reorder_point !== undefined) { sets.push('reorder_point = ?'); params.push(reorder_point) }
+  if (sets.length === 0) return c.json({ error: 'No thresholds provided' }, 400)
+  query += sets.join(', ') + ' WHERE active = 1'
+  if (zone) { query += ' AND warehouse_zone = ?'; params.push(zone) }
+  if (category) { query += ' AND category = ?'; params.push(category) }
+  const result = await db.prepare(query).bind(...params).run()
+  return c.json({ success: true, updated: result.meta.changes || 0 })
 })
 
 // HTML serving is handled by the parent shell — not this module

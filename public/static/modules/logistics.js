@@ -14888,15 +14888,27 @@ function whRenderPage() {
 }
 
 // ---- OVERVIEW ----
-function whRenderOverview(ct, d) {
+async function whRenderOverview(ct, d) {
   const prods = d.products || [];
   const zones = { shelf_goods:{ label:'Shelf Goods', icon:'fa-boxes-stacked', color:'#2563EB', items:[] }, hay:{ label:'Hay', icon:'fa-wheat-awn', color:'#CA8A04', items:[] }, shavings:{ label:'Shavings', icon:'fa-leaf', color:'#059669', items:[] } };
   prods.forEach(p => { const z = zones[p.warehouse_zone] || zones.shelf_goods; z.items.push(p); });
-  const lowStock = prods.filter(p => (p.stock_quantity||0) <= 5 && (p.stock_quantity||0) >= 0);
+
+  // Smart low stock: use threshold if configured, else fallback to stock <= 5
+  const lowStock = prods.filter(p => {
+    if ((p.low_stock_threshold||0) > 0) return (p.stock_quantity||0) <= p.low_stock_threshold;
+    return (p.stock_quantity||0) <= 5 && (p.stock_quantity||0) >= 0;
+  });
+  const needsReorder = prods.filter(p => (p.reorder_point||0) > 0 && (p.stock_quantity||0) <= p.reorder_point);
+
   const todayOrders = d.today_orders || [];
   const todayRoutes = d.today_routes || [];
   const pendingRets = d.pending_returns || [];
   const notLoaded = todayRoutes.reduce((s,r) => s + (r.stop_count - (r.loaded_count||0)), 0);
+
+  // Fetch pending POs count for a quick badge
+  var pendingPOCount = 0;
+  try { const r = await API.get('/warehouse/pending-pos'); pendingPOCount = (r.data.pos||[]).length; } catch(e) {}
+
   ct.innerHTML = `
     <div class="wh-stats">
       <div class="wh-stat-card" onclick="whTab='counts';whZoneFilter='all';whRenderPage()">
@@ -14914,30 +14926,93 @@ function whRenderOverview(ct, d) {
         <div class="wh-stat-value">${pendingRets.length}</div>
         <div class="wh-stat-label">Returns Pending</div>
       </div>
-      <div class="wh-stat-card" onclick="whTab='counts';whZoneFilter='all';whSearch='';whRenderPage()" style="${lowStock.length>0?'border-left:3px solid #DC2626':''}">
-        <div class="wh-stat-icon" style="background:#DC2626"><i class="fas fa-triangle-exclamation"></i></div>
-        <div class="wh-stat-value">${lowStock.length}</div>
-        <div class="wh-stat-label">Low Stock</div>
+      <div class="wh-stat-card" onclick="whTab='receive';whRecvMode='po';whRenderPage()" style="${pendingPOCount>0?'border-left:3px solid #059669':''}">
+        <div class="wh-stat-icon" style="background:#059669"><i class="fas fa-dolly"></i></div>
+        <div class="wh-stat-value">${pendingPOCount}</div>
+        <div class="wh-stat-label">POs to Receive</div>
       </div>
     </div>
+
+    ${lowStock.length > 0 ? `<div class="wh-alert-panel">
+      <div class="wh-alert-header" onclick="document.getElementById('whAlertBody').classList.toggle('collapsed')">
+        <div class="wh-alert-title">
+          <i class="fas fa-triangle-exclamation" style="color:#DC2626"></i>
+          <span>Low Stock Alerts <span class="wh-alert-count">${lowStock.length}</span></span>
+        </div>
+        <i class="fas fa-chevron-down wh-alert-chevron"></i>
+      </div>
+      <div id="whAlertBody" class="wh-alert-body">
+        ${lowStock.slice(0,15).map(p => {
+          const thresh = p.low_stock_threshold || 5;
+          const pct = thresh > 0 ? Math.max(0, Math.min(100, Math.round(((p.stock_quantity||0) / thresh) * 100))) : 0;
+          const critical = (p.stock_quantity||0) === 0;
+          const barColor = critical ? '#DC2626' : pct <= 50 ? '#F97316' : '#CA8A04';
+          return `<div class="wh-alert-item${critical?' critical':''}">
+            <div class="wh-alert-item-info">
+              <div class="wh-alert-item-name">${escapeHtml(p.name)}</div>
+              <div class="wh-alert-item-meta">${p.sku||''} &bull; ${p.warehouse_zone?.replace('_',' ')||'shelf goods'}</div>
+            </div>
+            <div class="wh-alert-item-stock">
+              <div class="wh-alert-item-qty">${p.stock_quantity||0} <span>/ ${thresh}</span></div>
+              <div class="wh-progress" style="height:4px;width:60px"><div class="wh-progress-bar" style="width:${pct}%;background:${barColor}"></div></div>
+            </div>
+          </div>`;
+        }).join('')}
+        ${lowStock.length > 15 ? `<div style="text-align:center;padding:8px;font-size:12px;color:var(--gray-400)">+ ${lowStock.length - 15} more items below threshold</div>` : ''}
+        <div class="wh-alert-actions">
+          <button class="wh-btn secondary" onclick="whTab='counts';whZoneFilter='all';whSearch='';whShowLowOnly=true;whRenderPage()" style="font-size:12px;padding:6px 12px">
+            <i class="fas fa-list"></i> View All Low Stock
+          </button>
+          <button class="wh-btn secondary" onclick="whShowThresholdManager()" style="font-size:12px;padding:6px 12px">
+            <i class="fas fa-sliders-h"></i> Manage Thresholds
+          </button>
+        </div>
+      </div>
+    </div>` : ''}
+
+    ${needsReorder.length > 0 ? `<div class="wh-reorder-panel">
+      <div class="wh-alert-header" onclick="document.getElementById('whReorderBody').classList.toggle('collapsed')">
+        <div class="wh-alert-title">
+          <i class="fas fa-cart-shopping" style="color:#F97316"></i>
+          <span>Needs Reorder <span class="wh-alert-count" style="background:#FEF3C7;color:#92400E">${needsReorder.length}</span></span>
+        </div>
+        <i class="fas fa-chevron-down wh-alert-chevron"></i>
+      </div>
+      <div id="whReorderBody" class="wh-alert-body">
+        ${needsReorder.slice(0,10).map(p => `<div class="wh-alert-item">
+          <div class="wh-alert-item-info">
+            <div class="wh-alert-item-name">${escapeHtml(p.name)}</div>
+            <div class="wh-alert-item-meta">${p.sku||''} &bull; Reorder point: ${p.reorder_point}</div>
+          </div>
+          <div class="wh-alert-item-stock">
+            <div class="wh-alert-item-qty" style="color:#F97316">${p.stock_quantity||0}</div>
+          </div>
+        </div>`).join('')}
+        ${needsReorder.length > 10 ? `<div style="text-align:center;padding:8px;font-size:12px;color:var(--gray-400)">+ ${needsReorder.length - 10} more</div>` : ''}
+      </div>
+    </div>` : ''}
 
     <div class="wh-zone-cards">
       ${Object.entries(zones).map(([key,z]) => {
         const totalQty = z.items.reduce((s,p) => s + (p.stock_quantity||0), 0);
+        const zLow = z.items.filter(p => (p.low_stock_threshold||0) > 0 ? (p.stock_quantity||0) <= p.low_stock_threshold : (p.stock_quantity||0) <= 5 && (p.stock_quantity||0) >= 0);
         return `<div class="wh-zone-card" onclick="whTab='counts';whZoneFilter='${key}';whRenderPage()">
           <div class="wh-zone-header" style="background:${z.color}10;border-bottom:2px solid ${z.color}">
             <i class="fas ${z.icon}" style="color:${z.color};font-size:20px"></i>
             <div>
               <div class="wh-zone-title">${z.label}</div>
-              <div class="wh-zone-subtitle">${z.items.length} products</div>
+              <div class="wh-zone-subtitle">${z.items.length} products${zLow.length>0?' &bull; <span style="color:#DC2626">'+zLow.length+' low</span>':''}</div>
             </div>
             <div class="wh-zone-qty">${totalQty.toLocaleString()}</div>
           </div>
           <div class="wh-zone-body">
-            ${z.items.slice(0,5).map(p => `<div class="wh-zone-row">
-              <span class="wh-zone-product">${escapeHtml(p.name)}</span>
-              <span class="wh-zone-stock ${(p.stock_quantity||0)<=5?'low':''}">${p.stock_quantity||0} ${p.unit_type||'units'}</span>
-            </div>`).join('')}
+            ${z.items.slice(0,5).map(p => {
+              const isLow = (p.low_stock_threshold||0) > 0 ? (p.stock_quantity||0) <= p.low_stock_threshold : (p.stock_quantity||0) <= 5;
+              return `<div class="wh-zone-row">
+                <span class="wh-zone-product">${escapeHtml(p.name)}</span>
+                <span class="wh-zone-stock ${isLow?'low':''}">${p.stock_quantity||0} ${p.unit_type||'units'}</span>
+              </div>`;
+            }).join('')}
             ${z.items.length > 5 ? `<div style="text-align:center;padding:6px;font-size:12px;color:var(--gray-400)">+ ${z.items.length - 5} more</div>` : ''}
           </div>
         </div>`;
@@ -14969,8 +15044,10 @@ function whRenderOverview(ct, d) {
 }
 
 // ---- COUNTS ----
+var whShowLowOnly = false;
+
 function whRenderCounts(ct, d) {
-  const prods = (d.products || []).filter(p => {
+  var prods = (d.products || []).filter(p => {
     if (whZoneFilter !== 'all' && p.warehouse_zone !== whZoneFilter) return false;
     if (whSearch) {
       const s = whSearch.toLowerCase();
@@ -14978,15 +15055,30 @@ function whRenderCounts(ct, d) {
     }
     return true;
   });
+  // Low stock filter
+  if (whShowLowOnly) {
+    prods = prods.filter(p => {
+      if ((p.low_stock_threshold||0) > 0) return (p.stock_quantity||0) <= p.low_stock_threshold;
+      return (p.stock_quantity||0) <= 5 && (p.stock_quantity||0) >= 0;
+    });
+  }
   const zoneLabels = { all:'All Zones', shelf_goods:'Shelf Goods', hay:'Hay', shavings:'Shavings' };
   ct.innerHTML = `
     <div class="wh-count-toolbar">
       <div class="wh-zone-pills">
         ${Object.entries(zoneLabels).map(([k,v]) => `<button class="wh-pill${whZoneFilter===k?' active':''}" onclick="whZoneFilter='${k}';whRenderPage()">${v}</button>`).join('')}
+        <button class="wh-pill${whShowLowOnly?' active':''}" onclick="whShowLowOnly=!whShowLowOnly;whRenderPage()" style="${whShowLowOnly?'background:#FEE2E2;color:#DC2626;border-color:#FECACA':''}">
+          <i class="fas fa-triangle-exclamation"></i> Low Stock
+        </button>
       </div>
-      <div class="wh-search">
-        <i class="fas fa-search"></i>
-        <input type="text" placeholder="Search products..." value="${escapeHtml(whSearch)}" oninput="whSearch=this.value;whRenderPage()" id="whSearchInput">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div class="wh-search" style="flex:1;min-width:180px">
+          <i class="fas fa-search"></i>
+          <input type="text" placeholder="Search products..." value="${escapeHtml(whSearch)}" oninput="whSearch=this.value;whRenderPage()" id="whSearchInput">
+        </div>
+        <button class="wh-btn secondary" onclick="whShowThresholdManager()" style="font-size:12px;padding:8px 12px;white-space:nowrap" title="Set alert thresholds">
+          <i class="fas fa-bell"></i> Thresholds
+        </button>
       </div>
     </div>
     <div class="wh-count-list" id="whCountList">
@@ -14994,11 +15086,12 @@ function whRenderCounts(ct, d) {
         prods.map(p => {
           const edited = whCountEdits[p.id] !== undefined;
           const qty = edited ? whCountEdits[p.id] : (p.stock_quantity || 0);
-          const isLow = qty <= 5;
+          const thresh = p.low_stock_threshold || 0;
+          const isLow = thresh > 0 ? qty <= thresh : qty <= 5;
           return `<div class="wh-count-item${isLow?' low':''}" id="whItem_${p.id}">
             <div class="wh-count-product">
-              <div class="wh-count-name">${escapeHtml(p.name)}</div>
-              <div class="wh-count-meta">${p.sku||''} &bull; ${p.unit_type||'units'} &bull; ${p.category||'other'}</div>
+              <div class="wh-count-name">${escapeHtml(p.name)}${thresh > 0 && isLow ? ' <i class="fas fa-triangle-exclamation" style="color:#DC2626;font-size:11px" title="Below threshold ('+thresh+')"></i>' : ''}</div>
+              <div class="wh-count-meta">${p.sku||''} &bull; ${p.unit_type||'units'} &bull; ${p.category||'other'}${thresh > 0 ? ' &bull; <span style="color:#6B7280" title="Low stock threshold">⚠ '+thresh+'</span>' : ''}</div>
             </div>
             <div class="wh-count-controls">
               <button class="wh-count-btn minus" onclick="whAdjustCount(${p.id},-1)"><i class="fas fa-minus"></i></button>
@@ -15057,6 +15150,115 @@ async function whSubmitCounts() {
     whData = data;
     whRenderPage();
   } catch(e) { showToast('Failed to save counts: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ---- THRESHOLD MANAGER ----
+function whShowThresholdManager() {
+  // Show a bottom-sheet modal with bulk threshold options + per-product editor
+  const overlay = document.createElement('div');
+  overlay.id = 'whThresholdOverlay';
+  overlay.className = 'wh-modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+  const zones = [
+    { key:'shelf_goods', label:'Shelf Goods', icon:'fa-boxes-stacked', color:'#2563EB' },
+    { key:'hay', label:'Hay', icon:'fa-wheat-awn', color:'#CA8A04' },
+    { key:'shavings', label:'Shavings', icon:'fa-leaf', color:'#059669' }
+  ];
+  const prods = (whData.products || []).filter(p => p.low_stock_threshold > 0 || p.reorder_point > 0);
+
+  overlay.innerHTML = `
+    <div class="wh-modal-sheet" onclick="event.stopPropagation()">
+      <div class="wh-modal-header">
+        <h3><i class="fas fa-bell" style="color:#F97316"></i> Stock Alert Thresholds</h3>
+        <button onclick="document.getElementById('whThresholdOverlay').remove()" class="wh-modal-close"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="wh-modal-body">
+        <div class="wh-thresh-section">
+          <h4 style="font-size:14px;color:var(--gray-600);margin-bottom:8px"><i class="fas fa-layer-group"></i> Bulk Set by Zone</h4>
+          <p style="font-size:12px;color:var(--gray-400);margin-bottom:12px">Apply a threshold to all products in a zone at once.</p>
+          <div class="wh-thresh-bulk-list">
+            ${zones.map(z => `<div class="wh-thresh-bulk-row">
+              <div class="wh-thresh-zone-label"><i class="fas ${z.icon}" style="color:${z.color}"></i> ${z.label}</div>
+              <div class="wh-thresh-inputs">
+                <div class="wh-thresh-field">
+                  <label>Low Stock</label>
+                  <input type="number" id="whThBulk_low_${z.key}" min="0" placeholder="0" class="wh-count-input" style="width:60px;font-size:13px">
+                </div>
+                <div class="wh-thresh-field">
+                  <label>Reorder</label>
+                  <input type="number" id="whThBulk_reorder_${z.key}" min="0" placeholder="0" class="wh-count-input" style="width:60px;font-size:13px">
+                </div>
+                <button class="wh-btn primary" style="font-size:12px;padding:6px 12px;height:36px" onclick="whBulkSetThreshold('${z.key}')">Apply</button>
+              </div>
+            </div>`).join('')}
+          </div>
+        </div>
+        <div class="wh-thresh-section" style="margin-top:16px">
+          <h4 style="font-size:14px;color:var(--gray-600);margin-bottom:8px"><i class="fas fa-sliders-h"></i> Per-Product Thresholds</h4>
+          <p style="font-size:12px;color:var(--gray-400);margin-bottom:8px">Products with custom thresholds. Set on individual items via the Counts tab pencil icon.</p>
+          ${prods.length === 0 ? '<div style="text-align:center;padding:16px;color:var(--gray-400);font-size:13px">No per-product thresholds set yet.<br>Use Bulk Set above or edit individual products.</div>' :
+            `<div class="wh-thresh-product-list">
+              ${prods.map(p => `<div class="wh-thresh-product-row">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.name)}</div>
+                  <div style="font-size:11px;color:var(--gray-400)">${p.warehouse_zone?.replace('_',' ')||'shelf goods'} &bull; Stock: ${p.stock_quantity||0}</div>
+                </div>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <div class="wh-thresh-field" style="text-align:center">
+                    <label style="font-size:10px">Low</label>
+                    <input type="number" value="${p.low_stock_threshold||0}" min="0" class="wh-count-input" style="width:50px;font-size:12px"
+                      onchange="whSetProductThreshold(${p.id},parseInt(this.value),null)">
+                  </div>
+                  <div class="wh-thresh-field" style="text-align:center">
+                    <label style="font-size:10px">Reorder</label>
+                    <input type="number" value="${p.reorder_point||0}" min="0" class="wh-count-input" style="width:50px;font-size:12px"
+                      onchange="whSetProductThreshold(${p.id},null,parseInt(this.value))">
+                  </div>
+                </div>
+              </div>`).join('')}
+            </div>`}
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function whBulkSetThreshold(zone) {
+  const lowEl = document.getElementById('whThBulk_low_' + zone);
+  const reorderEl = document.getElementById('whThBulk_reorder_' + zone);
+  const low = parseInt(lowEl?.value);
+  const reorder = parseInt(reorderEl?.value);
+  if (!low && !reorder) { showToast('Enter at least one threshold value', 'warning'); return; }
+  const body = { zone };
+  if (low >= 0) body.low_stock_threshold = low;
+  if (reorder >= 0) body.reorder_point = reorder;
+  try {
+    const { data } = await API.post('/warehouse/thresholds/bulk', body);
+    showToast(`Updated ${data.updated} products in ${zone.replace('_',' ')}`, 'success');
+    // Refresh
+    const dash = await API.get('/warehouse/dashboard');
+    whData = dash.data;
+    document.getElementById('whThresholdOverlay')?.remove();
+    whRenderPage();
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function whSetProductThreshold(productId, low, reorder) {
+  const body = {};
+  // Fetch current values from whData
+  const prod = (whData.products||[]).find(p => p.id === productId);
+  body.low_stock_threshold = low !== null ? low : (prod?.low_stock_threshold || 0);
+  body.reorder_point = reorder !== null ? reorder : (prod?.reorder_point || 0);
+  try {
+    await API.put('/warehouse/product/' + productId + '/thresholds', body);
+    // Update local data
+    if (prod) {
+      if (low !== null) prod.low_stock_threshold = low;
+      if (reorder !== null) prod.reorder_point = reorder;
+    }
+    showToast('Threshold updated', 'success');
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
 // ---- LOAD TRUCKS ----
@@ -15195,18 +15397,183 @@ async function whProcessReturn(returnId) {
   }
 }
 
-// ---- RECEIVE STOCK ----
-function whRenderReceive(ct, d) {
+// ---- RECEIVE STOCK (with PO integration) ----
+var whRecvMode = 'po'; // 'po' or 'manual'
+var whPendingPOs = [];
+var whSelectedPO = null;
+var whPOItems = [];
+
+async function whRenderReceive(ct, d) {
+  // Load pending POs in background
+  try {
+    const { data } = await API.get('/warehouse/pending-pos');
+    whPendingPOs = data.pos || [];
+  } catch(e) { whPendingPOs = []; }
+
   const prods = d.products || [];
+  const hasPOs = whPendingPOs.length > 0;
+
   ct.innerHTML = `
     <div class="wh-section-title" style="margin-bottom:12px"><i class="fas fa-dolly" style="color:#059669"></i> Receive Inbound Stock</div>
-    <p style="color:var(--gray-500);font-size:14px;margin-bottom:16px">Add stock from supplier deliveries or purchase orders.</p>
+    <div class="wh-recv-tabs">
+      <button class="wh-recv-tab${whRecvMode==='po'?' active':''}" onclick="whRecvMode='po';whSelectedPO=null;whPOItems=[];whRenderPage()">
+        <i class="fas fa-file-invoice"></i> From Purchase Order ${hasPOs?'<span class="wh-recv-badge">'+whPendingPOs.length+'</span>':''}
+      </button>
+      <button class="wh-recv-tab${whRecvMode==='manual'?' active':''}" onclick="whRecvMode='manual';whRenderPage()">
+        <i class="fas fa-hand-pointer"></i> Manual Entry
+      </button>
+    </div>
+    <div id="whRecvContent"></div>`;
+
+  const rc = document.getElementById('whRecvContent');
+  if (whRecvMode === 'po') whRenderReceivePO(rc, prods);
+  else whRenderReceiveManual(rc, prods);
+}
+
+function whRenderReceivePO(ct, prods) {
+  if (!whSelectedPO) {
+    // Show PO list to select from
+    if (whPendingPOs.length === 0) {
+      ct.innerHTML = `<div class="wh-empty" style="margin-top:24px">
+        <i class="fas fa-check-circle" style="color:#059669"></i>
+        <div style="margin-top:8px;font-size:14px">No pending Purchase Orders</div>
+        <div style="font-size:12px;color:var(--gray-400);margin-top:4px">All POs have been received. Use <strong>Manual Entry</strong> for non-PO deliveries.</div>
+      </div>`;
+      return;
+    }
+    ct.innerHTML = `
+      <div class="wh-po-list">
+        ${whPendingPOs.map(po => {
+          const pct = po.total_ordered > 0 ? Math.round((po.total_received / po.total_ordered) * 100) : 0;
+          const statusColors = { ordered:'#2563EB', in_transit:'#F97316', partial:'#CA8A04', delayed:'#DC2626' };
+          const statusColor = statusColors[po.status] || '#6B7280';
+          return `<div class="wh-po-card" onclick="whSelectPO(${po.id})">
+            <div class="wh-po-card-top">
+              <div>
+                <div class="wh-po-number"><i class="fas fa-file-invoice" style="color:${statusColor};margin-right:6px"></i>${po.po_number}</div>
+                <div class="wh-po-supplier">${escapeHtml(po.supplier_name || 'No supplier')}</div>
+              </div>
+              <div style="text-align:right">
+                <span class="wh-badge" style="background:${statusColor}15;color:${statusColor};border:1px solid ${statusColor}30">${po.status.replace('_',' ')}</span>
+                ${po.expected_date ? `<div style="font-size:11px;color:var(--gray-400);margin-top:4px"><i class="fas fa-calendar"></i> ${po.expected_date}</div>` : ''}
+              </div>
+            </div>
+            <div class="wh-po-card-bottom">
+              <div class="wh-po-progress-info">
+                <span>${po.item_count} item${po.item_count!==1?'s':''}</span>
+                <span>${Math.round(po.total_received)} / ${Math.round(po.total_ordered)} received (${pct}%)</span>
+              </div>
+              <div class="wh-progress" style="height:6px"><div class="wh-progress-bar" style="width:${pct}%;background:${pct>=100?'#059669':statusColor}"></div></div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    return;
+  }
+
+  // Show selected PO items for receiving
+  const po = whSelectedPO;
+  const items = whPOItems;
+  ct.innerHTML = `
+    <div class="wh-po-detail-header">
+      <button class="wh-btn secondary" onclick="whSelectedPO=null;whPOItems=[];whRenderPage()" style="padding:8px 12px">
+        <i class="fas fa-arrow-left"></i> Back
+      </button>
+      <div>
+        <div class="wh-po-number" style="font-size:16px">${po.po_number}</div>
+        <div style="font-size:12px;color:var(--gray-500)">${escapeHtml(po.supplier_name||'No supplier')} &bull; ${po.order_type?.replace('_',' ')||''}</div>
+      </div>
+    </div>
+    <div class="wh-po-recv-items">
+      ${items.map((item, idx) => {
+        const remaining = Math.max(0, (item.qty_ordered||0) - (item.qty_received||0));
+        const done = remaining <= 0;
+        return `<div class="wh-po-recv-item${done?' done':''}" id="whPOItem_${idx}">
+          <div class="wh-po-recv-product">
+            <div class="wh-po-recv-name">${escapeHtml(item.product_name || item.description)}</div>
+            <div class="wh-po-recv-meta">
+              ${item.sku ? item.sku+' &bull; ' : ''}Ordered: ${item.qty_ordered} &bull; Already received: ${item.qty_received} &bull; 
+              <strong style="color:${done?'#059669':'#CA8A04'}">Remaining: ${remaining}</strong>
+            </div>
+            ${item.stock_quantity !== null ? `<div class="wh-po-recv-stock">Current stock: ${item.stock_quantity||0} ${item.unit_type||'units'}</div>` : ''}
+          </div>
+          <div class="wh-po-recv-controls">
+            ${done ? '<span class="wh-badge wh-badge-green"><i class="fas fa-check"></i> Complete</span>' : `
+              <input type="number" class="wh-count-input" id="whPORcvQty_${idx}" value="${remaining}" min="0" max="${remaining * 2}"
+                style="width:70px;font-size:16px" onfocus="this.select()">
+              <select class="wh-input" id="whPORcvCond_${idx}" style="font-size:12px;padding:6px 8px;width:auto">
+                <option value="good">Good</option>
+                <option value="fair">Fair</option>
+                <option value="damaged">Damaged</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            `}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="margin-top:12px">
+      <label class="wh-label">Notes (optional)</label>
+      <input type="text" class="wh-input" id="whPORecvNotes" placeholder="Delivery notes, BOL number, etc." style="width:100%">
+    </div>
+    <div style="margin-top:16px">
+      <button class="wh-btn primary" onclick="whSubmitPOReceive(${po.id})" style="width:100%">
+        <i class="fas fa-check"></i> Receive Items
+      </button>
+    </div>`;
+}
+
+async function whSelectPO(poId) {
+  try {
+    const { data } = await API.get('/warehouse/po/' + poId + '/items');
+    whSelectedPO = data.po;
+    whPOItems = data.items || [];
+    whRenderPage();
+  } catch(e) { showToast('Error loading PO: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function whSubmitPOReceive(poId) {
+  const items = [];
+  whPOItems.forEach((item, idx) => {
+    const remaining = Math.max(0, (item.qty_ordered||0) - (item.qty_received||0));
+    if (remaining <= 0) return; // already fully received
+    const qtyEl = document.getElementById('whPORcvQty_' + idx);
+    const condEl = document.getElementById('whPORcvCond_' + idx);
+    const qty = parseInt(qtyEl?.value) || 0;
+    if (qty <= 0) return;
+    items.push({
+      po_item_id: item.po_item_id,
+      product_id: item.product_id,
+      qty_received: qty,
+      condition: condEl?.value || 'good',
+      warehouse_zone: item.warehouse_zone
+    });
+  });
+  if (items.length === 0) { showToast('No items to receive — enter quantities', 'warning'); return; }
+  try {
+    const { data } = await API.post('/warehouse/po/' + poId + '/receive', {
+      items, received_by: currentUser?.id,
+      notes: document.getElementById('whPORecvNotes')?.value || null
+    });
+    showToast(`Received ${data.total_received} items from PO — Status: ${data.new_status}`, 'success');
+    whSelectedPO = null; whPOItems = [];
+    // Refresh dashboard data
+    const dash = await API.get('/warehouse/dashboard');
+    whData = dash.data;
+    whRenderPage();
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ---- MANUAL RECEIVE (original) ----
+function whRenderReceiveManual(ct, prods) {
+  ct.innerHTML = `
+    <p style="color:var(--gray-500);font-size:14px;margin-bottom:16px;margin-top:12px">Receive stock not linked to a Purchase Order (direct deliveries, transfers, etc.)</p>
     <div class="wh-receive-form" id="whReceiveForm">
       <div id="whReceiveItems">
         <div class="wh-receive-row" data-idx="0">
           <select class="wh-input" id="whRecvProd_0" style="flex:2">
             <option value="">— Select product —</option>
-            ${prods.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.sku||'no SKU'}) [${p.stock_quantity||0} in stock]</option>`).join('')}
+            ${prods.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.sku||'no SKU'}) [${p.stock_quantity||0}]</option>`).join('')}
           </select>
           <input type="number" class="wh-input" id="whRecvQty_0" placeholder="Qty" min="1" style="flex:0 0 80px">
           <button class="wh-count-btn minus" onclick="this.closest('.wh-receive-row').remove()" title="Remove"><i class="fas fa-times"></i></button>
@@ -15215,7 +15582,7 @@ function whRenderReceive(ct, d) {
       <button class="wh-btn secondary" onclick="whAddReceiveRow()" style="margin-top:8px"><i class="fas fa-plus"></i> Add Item</button>
       <div style="margin-top:12px">
         <label class="wh-label">Notes (optional)</label>
-        <input type="text" class="wh-input" id="whRecvNotes" placeholder="PO number, supplier, etc." style="width:100%">
+        <input type="text" class="wh-input" id="whRecvNotes" placeholder="Supplier, delivery reference, etc." style="width:100%">
       </div>
       <div style="margin-top:16px">
         <button class="wh-btn primary" onclick="whSubmitReceive()" style="width:100%"><i class="fas fa-check"></i> Receive Stock</button>
@@ -15234,7 +15601,7 @@ function whAddReceiveRow() {
   row.innerHTML = `
     <select class="wh-input" id="whRecvProd_${idx}" style="flex:2">
       <option value="">— Select product —</option>
-      ${prods.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.sku||'no SKU'}) [${p.stock_quantity||0} in stock]</option>`).join('')}
+      ${prods.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.sku||'no SKU'}) [${p.stock_quantity||0}]</option>`).join('')}
     </select>
     <input type="number" class="wh-input" id="whRecvQty_${idx}" placeholder="Qty" min="1" style="flex:0 0 80px">
     <button class="wh-count-btn minus" onclick="this.closest('.wh-receive-row').remove()" title="Remove"><i class="fas fa-times"></i></button>`;
