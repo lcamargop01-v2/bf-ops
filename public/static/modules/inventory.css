@@ -629,32 +629,46 @@
   .inv-desktop-only { display: none !important; }
   .inv-mobile-only { display: block !important; }
 
-  .inv-nav { padding: 6px 8px; }
-  .inv-nav-btn { padding: 6px 8px; font-size: 12px; }
+  .inv-nav { padding: 6px 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; gap: 4px; }
+  .inv-nav-btn { padding: 8px 10px; font-size: 12px; flex-shrink: 0; min-height: 40px; }
   .inv-nav-btn span { display: none; }
   .inv-nav-btn i { font-size: 16px; }
   .inv-nav-btn.active span { display: inline; }
 
   .inv-cards-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-  .inv-stat-card { padding: 12px; }
+  .inv-stat-card { padding: 12px; gap: 8px; }
   .inv-stat-icon { width: 36px; height: 36px; font-size: 14px; }
   .inv-stat-value { font-size: 16px; }
 
   .inv-quick-actions { grid-template-columns: repeat(2, 1fr); }
-  .inv-action-btn { padding: 12px; font-size: 12px; flex-direction: column; text-align: center; }
+  .inv-action-btn { padding: 12px; font-size: 12px; flex-direction: column; text-align: center; min-height: 44px; }
 
   .inv-detail-grid { grid-template-columns: 1fr; }
   .inv-trf-item { flex-wrap: wrap; }
   
-  .inv-section { padding: 14px; }
-  .inv-dashboard { padding: 12px; }
-  .inv-count-page { padding: 12px; }
+  .inv-section { padding: 12px; }
+  .inv-dashboard { padding: 10px; }
+  .inv-count-page { padding: 10px; }
 
   .inv-count-item { padding: 10px 12px; }
-  .inv-stepper-btn { width: 44px; height: 44px; font-size: 22px; }
+  .inv-stepper-btn { width: 48px; height: 48px; font-size: 24px; }
   .inv-count-field { width: 80px; font-size: 22px; padding: 8px; }
 
   .inv-stock-card-nums { grid-template-columns: repeat(2, 1fr); }
+
+  /* Modal bottom-sheet style */
+  .inv-modal-overlay { padding: 0; align-items: flex-end; }
+  .inv-modal { max-width: 100%; border-radius: 16px 16px 0 0; max-height: 92vh; }
+  .inv-modal-header { padding: 14px 16px; }
+  .inv-modal-body { padding: 14px; }
+  .inv-modal-footer { padding: 12px 14px; }
+  .inv-modal-footer .inv-btn { flex: 1; justify-content: center; }
+
+  /* Forms — prevent iOS zoom */
+  .inv-input, .inv-select, .inv-textarea { font-size: 16px; padding: 10px 12px; }
+
+  /* Tables */
+  .inv-table-wrap { -webkit-overflow-scrolling: touch; }
 }
 
 @media (max-width: 480px) {
@@ -663,6 +677,8 @@
   .inv-stat-icon { width: 32px; height: 32px; font-size: 13px; }
   .inv-stat-value { font-size: 15px; }
   .inv-stat-label { font-size: 10px; }
+  .inv-modal-footer { flex-direction: column; }
+  .inv-modal-footer .inv-btn { width: 100%; }
 }
 
 /* ==================== PRODUCT IMAGE THUMBNAILS ==================== */

@@ -260,7 +260,7 @@ function launchModule(moduleId) {
     <div class="shell-app-layout">
       <div class="shell-topbar">
         <button class="shell-back-btn" onclick="renderHome()">
-          <i class="fas fa-th-large"></i> Modules
+          <i class="fas fa-th-large"></i> <span class="back-label">Modules</span>
         </button>
         <div class="shell-module-tabs">
           ${allMods.map(m => `
@@ -278,6 +278,10 @@ function launchModule(moduleId) {
             </button>
           ` : ''}
         </div>
+        <select class="shell-mobile-module-select" onchange="if(this.value)launchModule(this.value)">
+          ${allMods.map(m => `<option value="${m.id}" ${m.id === moduleId ? 'selected' : ''} ${m.soon ? 'disabled' : ''}>${m.name}</option>`).join('')}
+          ${isAdmin ? `<option value="admin" ${'admin' === moduleId ? 'selected' : ''}>Admin</option>` : ''}
+        </select>
         <div class="shell-topbar-right">
           <div class="shell-topbar-user" onclick="renderHome()">
             <div>
@@ -586,7 +590,7 @@ async function renderAdminPanel() {
             </div>
           </div>
           <table class="shell-admin-table">
-            <thead><tr><th>User</th><th>Role</th><th>Phone</th><th>Language</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>User</th><th>Role</th><th class="hide-mobile">Phone</th><th class="hide-mobile">Language</th><th>Status</th><th></th></tr></thead>
             <tbody>
               ${users.map(u => `
                 <tr ${!u.active ? 'style="opacity:0.5"' : ''}>
@@ -600,8 +604,8 @@ async function renderAdminPanel() {
                     </div>
                   </td>
                   <td><span style="font-size:11px;padding:2px 8px;border-radius:12px;background:${roleColors[u.role]||'#F1F5F9'}22;color:${roleColors[u.role]||'#475569'};font-weight:600;border:1px solid ${roleColors[u.role]||'#E2E8F0'}">${u.role}</span></td>
-                  <td style="font-size:12px">${u.phone || '—'}</td>
-                  <td style="font-size:12px">${langNames[u.preferred_language] || u.preferred_language || 'English'}</td>
+                  <td class="hide-mobile" style="font-size:12px">${u.phone || '—'}</td>
+                  <td class="hide-mobile" style="font-size:12px">${langNames[u.preferred_language] || u.preferred_language || 'English'}</td>
                   <td>${u.active ? '<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#ECFDF5;color:#059669;font-weight:600">Active</span>' : '<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#FEF2F2;color:#DC2626;font-weight:600">Inactive</span>'}</td>
                   <td style="display:flex;gap:4px;flex-wrap:wrap">
                     <button class="shell-save-btn" onclick="showAdminEditUserModal(${u.id})" title="Edit"><i class="fas fa-edit"></i></button>

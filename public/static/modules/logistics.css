@@ -55,7 +55,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .topbar-left { display: flex; align-items: center; gap: 16px; }
 .topbar-title { font-size: 18px; font-weight: 700; color: var(--gray-800); }
 .topbar-breadcrumb { font-size: 13px; color: var(--gray-400); }
-.menu-toggle { display: none; background: none; border: none; font-size: 20px; color: var(--gray-600); cursor: pointer; }
+.menu-toggle { display: none; background: none; border: none; font-size: 20px; color: var(--gray-600); cursor: pointer; min-width: 44px; min-height: 44px; }
 
 /* Cards & Containers */
 .page-content { padding: 24px; max-width: 1400px; }
@@ -218,7 +218,7 @@ tbody tr { cursor: pointer; transition: background 0.1s; }
 .toast-info { background: var(--navy-light); }
 
 /* Login */
-.login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, var(--navy-dark) 0%, var(--navy) 50%, var(--navy-light) 100%); padding: 20px; }
+.login-page { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, var(--navy-dark) 0%, var(--navy) 50%, var(--navy-light) 100%); padding: 20px; overflow-y: auto; }
 .login-card { background: white; border-radius: 20px; padding: 48px; width: 100%; max-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
 .login-logo { text-align: center; margin-bottom: 32px; }
 .login-logo i { font-size: 48px; color: var(--orange); }
@@ -238,28 +238,117 @@ tbody tr { cursor: pointer; transition: background 0.1s; }
 .weight-bar-fill.warning { background: var(--yellow); }
 .weight-bar-fill.danger { background: var(--red); }
 
-/* Responsive */
+/* ==================== RESPONSIVE ==================== */
+
+/* Sidebar overlay (mobile dark backdrop) */
+.sidebar-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  z-index: 39; animation: fadeIn 0.2s;
+}
+.sidebar-overlay.active { display: block; }
+
 @media (max-width: 1024px) {
   .sidebar { transform: translateX(-100%); }
   .sidebar.open { transform: translateX(0); }
   .main-content { margin-left: 0 !important; }
   .menu-toggle { display: block; }
-  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
   .calendar-grid { grid-template-columns: repeat(3, 1fr); }
   .form-row { grid-template-columns: 1fr; }
   .form-row-3 { grid-template-columns: 1fr; }
 }
 
-@media (max-width: 640px) {
-  .page-content { padding: 16px; }
-  .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
-  .stat-card { padding: 14px; }
-  .stat-value { font-size: 22px; }
-  .calendar-grid { grid-template-columns: 1fr 1fr; }
-  .topbar { padding: 0 16px; }
-  .filters-bar { flex-direction: column; align-items: stretch; }
-  .modal { border-radius: 12px; }
+@media (max-width: 768px) {
+  /* --- Page & Layout --- */
+  .page-content { padding: 12px; }
+  .topbar { padding: 0 12px; height: 50px; }
+  .topbar-title { font-size: 15px; }
+  .topbar-breadcrumb { font-size: 11px; }
+
+  /* --- Stats --- */
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat-card { padding: 12px; gap: 10px; }
+  .stat-icon { width: 38px; height: 38px; border-radius: 10px; font-size: 16px; }
+  .stat-value { font-size: 20px; }
+  .stat-label { font-size: 11px; }
+
+  /* --- Cards --- */
+  .card-header { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
+  .card-title { font-size: 14px; }
+  .card-body { padding: 12px; }
+
+  /* --- Tables --- */
+  .table-container { -webkit-overflow-scrolling: touch; }
+  thead th { padding: 8px 10px; font-size: 10px; }
+  tbody td { padding: 10px 10px; font-size: 12px; }
+
+  /* --- Buttons --- */
+  .btn { padding: 8px 14px; font-size: 13px; }
+  .btn-sm { padding: 6px 10px; font-size: 11px; }
+  .btn-lg { padding: 10px 18px; font-size: 14px; }
+
+  /* --- Forms --- */
+  .form-input, .form-select, .form-textarea { padding: 10px 12px; font-size: 16px; } /* 16px prevents iOS zoom */
+  .form-label { font-size: 12px; }
+
+  /* --- Modals (bottom-sheet style on mobile) --- */
+  .modal-overlay { padding: 0; align-items: flex-end; }
+  .modal { max-width: 100% !important; width: 100% !important; max-height: 92vh; border-radius: 16px 16px 0 0; animation: slideUpMobile 0.3s; }
+  .modal-lg { max-width: 100% !important; }
+  .modal-header { padding: 14px 16px; }
+  .modal-title { font-size: 16px; }
   .modal-body { padding: 16px; }
+  .modal-footer { padding: 12px 16px; }
+  .modal-footer .btn { flex: 1; justify-content: center; }
+
+  /* --- Calendar / Schedule --- */
+  .calendar-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .calendar-day { min-height: 90px; padding: 8px; }
+  .calendar-date { font-size: 12px; }
+  .calendar-order { font-size: 11px; padding: 4px 6px; }
+
+  /* --- Filters --- */
+  .filters-bar { flex-direction: column; align-items: stretch; gap: 8px; }
+  .search-bar { width: 100%; }
+
+  /* --- Tabs --- */
+  .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; gap: 0; flex-wrap: nowrap; }
+  .tab { padding: 8px 14px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+
+  /* --- Toast --- */
+  .toast-container { top: auto; bottom: 12px; right: 12px; left: 12px; }
+  .toast { min-width: 0; width: 100%; font-size: 13px; }
+
+  /* --- Driver View --- */
+  .driver-stop-actions { flex-wrap: wrap; }
+  .driver-stop-actions .btn { font-size: 12px; padding: 8px 12px; }
+
+  /* --- Status flow --- */
+  .status-flow { gap: 2px; }
+  .status-step { padding: 3px 8px; font-size: 10px; }
+
+  /* --- Sidebar (logistics internal) --- */
+  .sidebar { width: 280px; }
+  .nav-item { padding: 12px 20px; font-size: 14px; min-height: 44px; } /* 44px touch target */
+}
+
+@media (max-width: 480px) {
+  .page-content { padding: 10px; }
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .stat-card { padding: 10px; flex-direction: column; text-align: center; gap: 6px; }
+  .stat-icon { width: 32px; height: 32px; font-size: 14px; }
+  .stat-value { font-size: 18px; }
+  .stat-label { font-size: 10px; }
+  .calendar-grid { grid-template-columns: 1fr; }
+  .modal-body { padding: 12px; }
+  .modal-footer { flex-direction: column; }
+  .modal-footer .btn { width: 100%; }
+}
+
+/* Slide-up animation for mobile modals */
+@keyframes slideUpMobile {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* Ticket Upload / OCR */

@@ -1738,6 +1738,16 @@ function cleanupAllMaps() {
 function updateSidebar() {
   const sb = document.querySelector('.sidebar');
   if (sb) sb.classList.toggle('open', sidebarOpen);
+  // Manage mobile overlay
+  var overlay = document.querySelector('.sidebar-overlay');
+  if (sidebarOpen && window.innerWidth <= 1024) {
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = 'sidebar-overlay active';
+      overlay.onclick = function() { sidebarOpen = false; updateSidebar(); };
+      document.body.appendChild(overlay);
+    } else { overlay.classList.add('active'); }
+  } else if (overlay) { overlay.remove(); }
 }
 
 // ==================== MAIN RENDER ====================
