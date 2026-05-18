@@ -1870,7 +1870,17 @@ function quickLogin(email, pw) {
   doLogin(new Event('submit'));
 }
 
-function logout() { clearToken(); currentUser = null; currentPage = 'dashboard'; render(); }
+function logout() {
+  clearToken();
+  currentUser = null;
+  currentPage = 'dashboard';
+  // If running inside the shell, go back to shell home instead of showing logistics login
+  if (window._logisticsActive && typeof window.shellLogout === 'function') {
+    window.shellLogout();
+  } else {
+    render();
+  }
+}
 
 // ==================== DASHBOARD ====================
 async function renderDashboard() {

@@ -100,6 +100,9 @@ function shellLogout() {
   setToken(null);
   localStorage.removeItem('bf_ops_user');
   localStorage.removeItem('bf_ops_token');
+  // Also clean up logistics module's auth keys
+  localStorage.removeItem('bf_user');
+  localStorage.removeItem('bf_token');
   // Clean up any module state
   cleanupActiveModule();
   renderLogin();
@@ -330,17 +333,19 @@ function loadLogisticsModule() {
 
 function initLogisticsInShell() {
   // The logistics module looks for a saved user in localStorage under 'bf_user'
-  // We bridge the parent auth to what logistics expects
-  if (currentUser) {
-    localStorage.setItem('bf_user', JSON.stringify(currentUser));
-    // Also set the token logistics expects
-    const parentToken = localStorage.getItem('bf_ops_token');
-    if (parentToken) {
-      localStorage.setItem('bf_token', parentToken);
-    }
+  // We bridge the parent auth to what logistics expects.
+  //
+  // IMPORTANT: We read from bf_ops_user (shell's storage key) instead of the
+  // global currentUser variable because logistics.js declares its own
+  // `var currentUser = null` at load time which overwrites the shell's global.
+  var shellUser = localStorage.getItem('bf_ops_user');
+  var parentToken = localStorage.getItem('bf_ops_token');
+  if (shellUser && parentToken) {
+    localStorage.setItem('bf_user', shellUser);
+    localStorage.setItem('bf_token', parentToken);
   }
 
-  // Trigger logistics init — the module's IIFE looks for bf_user in localStorage
+  // Trigger logistics init — the module reads bf_user from localStorage
   // and calls render(). Since we've already loaded the script once, we need to
   // manually trigger re-initialization.
   if (typeof window._logisticsInit === 'function') {
