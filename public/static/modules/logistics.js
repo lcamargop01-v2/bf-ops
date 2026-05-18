@@ -14335,7 +14335,18 @@ window._logisticsInit = function() {
 
 // ==================== TICKET REVIEW PAGE (QuickBooks-style split screen) ====================
 
+// Guard against concurrent renders (rapid clicks / scan completions)
+window._trRendering = false;
+window._trRenderQueued = false;
+
 async function renderTicketReview() {
+  // Prevent concurrent async renders that corrupt the DOM
+  if (window._trRendering) {
+    window._trRenderQueued = true;
+    return;
+  }
+  window._trRendering = true;
+
   const pc = document.getElementById('pageContent');
   const sq = window._scanQueue;
 
@@ -14376,19 +14387,26 @@ async function renderTicketReview() {
     </div>
   `;
 
-  // Load addresses if a customer is pre-selected
+  // Load addresses if a customer is pre-selected, or show ticket address
   if (reviewable.length > 0) {
     const item = reviewable[Math.min(selectedIdx, reviewable.length - 1)];
-    if (item.result?.customer_id) {
-      trLoadAddresses(item.result.customer_id, item.result?.delivery_address);
-    }
+    const custId = item.result?.customer_id || document.getElementById('trCustomer')?.value;
+    trLoadAddresses(custId || '', item.result?.delivery_address);
   }
 
   // Set up auto-refresh when scanning
   if (scanning.length > 0) {
+    if (window._trRefreshTimer) clearTimeout(window._trRefreshTimer);
     window._trRefreshTimer = setTimeout(() => {
       if (currentPage === 'ticket_review') renderTicketReview();
     }, 3000);
+  }
+
+  // Release render lock and process queued render if any
+  window._trRendering = false;
+  if (window._trRenderQueued) {
+    window._trRenderQueued = false;
+    renderTicketReview();
   }
 }
 
@@ -14511,7 +14529,7 @@ function trSplitView(reviewable, selectedIdx) {
 
           <div class="form-group" style="margin-bottom:12px">
             <label class="form-label" style="font-size:12px">Customer *</label>
-            <select class="form-select" id="trCustomer" onchange="trLoadAddresses(this.value)">
+            <select class="form-select" id="trCustomer" onchange="trOnCustomerChange(this.value)">
               <option value="">— Select customer —</option>
               ${custOpts}
               ${newCustOpt}
@@ -14521,6 +14539,10 @@ function trSplitView(reviewable, selectedIdx) {
           <div class="form-group" style="margin-bottom:12px">
             <label class="form-label" style="font-size:12px">Delivery Address</label>
             <select class="form-select" id="trAddress"><option value="">Loading...</option></select>
+            ${result.delivery_address ? `<div id="trTicketAddress" style="margin-top:6px;padding:8px 10px;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;font-size:12px;color:#15803D">
+              <i class="fas fa-map-marker-alt" style="margin-right:4px"></i>
+              <strong>From ticket:</strong> ${escapeHtml((result.delivery_address.street||'') + (result.delivery_address.city ? ', '+result.delivery_address.city : '') + (result.delivery_address.state ? ' '+result.delivery_address.state : '') + (result.delivery_address.zip ? ' '+result.delivery_address.zip : ''))}
+            </div>` : ''}
           </div>
 
           <div class="form-row" style="gap:10px;margin-bottom:12px">
@@ -14530,7 +14552,7 @@ function trSplitView(reviewable, selectedIdx) {
             </div>
             <div class="form-group" style="flex:1">
               <label class="form-label" style="font-size:12px">Delivery Date</label>
-              <input class="form-input" type="date" id="trDate" value="${result.delivery_date || ''}">
+              <input class="form-input" type="date" id="trDate" value="${(result.delivery_date || '').substring(0, 10)}">
             </div>
           </div>
 
@@ -14614,19 +14636,40 @@ function trSelectTicket(idx) {
   renderTicketReview();
 }
 
+function trOnCustomerChange(custId) {
+  // Get the current ticket's delivery address from the scan result
+  const sq = window._scanQueue;
+  const reviewable = sq.items.filter(i => i.status === 'ready' || i.status === 'error');
+  const idx = Math.min(window._trSelectedIdx || 0, reviewable.length - 1);
+  const item = reviewable[idx];
+  const ticketAddr = item?.result?.delivery_address || null;
+  trLoadAddresses(custId, ticketAddr);
+}
+
 async function trLoadAddresses(custId, ticketAddr) {
   const sel = document.getElementById('trAddress');
   if (!sel) return;
+  // Build a fallback ticket-address label from OCR data
+  var ticketLabel = '';
+  if (ticketAddr && (ticketAddr.street || ticketAddr.city)) {
+    ticketLabel = (ticketAddr.street || '') + (ticketAddr.city ? ', ' + ticketAddr.city : '') + (ticketAddr.state ? ' ' + ticketAddr.state : '') + (ticketAddr.zip ? ' ' + ticketAddr.zip : '');
+  }
   if (!custId || custId === '__new__') {
-    sel.innerHTML = '<option value="">Will use ticket address</option>';
+    sel.innerHTML = ticketLabel
+      ? '<option value="__ticket__">From ticket: ' + escapeHtml(ticketLabel) + '</option>'
+      : '<option value="">Will use ticket address</option>';
     return;
   }
   try {
     const { data } = await API.get('/customers/' + custId);
     const addrs = data.addresses || [];
-    sel.innerHTML = addrs.length > 0
-      ? addrs.map(a => `<option value="${a.id}">${a.label}: ${a.street}, ${a.city}</option>`).join('')
-      : '<option value="">No addresses on file</option>';
+    if (addrs.length > 0) {
+      sel.innerHTML = addrs.map(a => '<option value="' + a.id + '">' + (a.label ? a.label + ': ' : '') + a.street + ', ' + a.city + '</option>').join('');
+    } else if (ticketLabel) {
+      sel.innerHTML = '<option value="__ticket__">From ticket: ' + escapeHtml(ticketLabel) + '</option>';
+    } else {
+      sel.innerHTML = '<option value="">No addresses on file</option>';
+    }
   } catch (e) {
     sel.innerHTML = '<option value="">Error loading addresses</option>';
   }
@@ -14733,20 +14776,39 @@ async function trCreateOrder(id) {
     }
 
     // Get address
-    let addrId = addrVal ? parseInt(addrVal) : null;
-    if (!addrId && customerId && (custVal === '__new__' || !custVal)) {
+    let addrId = addrVal && addrVal !== '__ticket__' ? parseInt(addrVal) : null;
+    // If ticket address selected or new customer, create address from OCR data
+    if (!addrId && customerId && result.delivery_address?.street) {
+      try {
+        const { data: newAddr } = await API.post('/customers/' + customerId + '/addresses', {
+          label: 'Delivery',
+          street: result.delivery_address.street,
+          city: result.delivery_address.city || 'Wellington',
+          state: result.delivery_address.state || 'FL',
+          zip: result.delivery_address.zip || null,
+        });
+        addrId = newAddr.id || newAddr.address?.id || null;
+      } catch(e) {
+        console.warn('Auto-create address from ticket failed:', e);
+      }
+    }
+    if (!addrId && customerId) {
       try {
         const { data: cd } = await API.get('/customers/' + customerId);
         if (cd.addresses?.length) addrId = cd.addresses[0].id;
       } catch(e) {}
     }
 
+    // Sanitize date to YYYY-MM-DD only (strip any time component)
+    const rawDate = document.getElementById('trDate')?.value || null;
+    const cleanDate = rawDate ? rawDate.substring(0, 10) : null;
+
     const { data } = await API.post('/orders', {
       customer_id: parseInt(customerId),
       address_id: addrId,
       order_number: document.getElementById('trOrderNum')?.value.trim() || null,
       priority: document.getElementById('trPriority')?.value,
-      scheduled_date: document.getElementById('trDate')?.value || null,
+      scheduled_date: cleanDate,
       special_instructions: document.getElementById('trNotes')?.value || null,
       items: orderItems,
       created_by: currentUser?.id,

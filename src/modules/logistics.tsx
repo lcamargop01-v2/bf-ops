@@ -387,7 +387,9 @@ app.get('/api/orders/:id', async (c) => {
 app.post('/api/orders', async (c) => {
   try {
     const body = await c.req.json()
-    const { customer_id, address_id, priority, scheduled_date, special_instructions, items, ticket_image } = body
+    const { customer_id, address_id, priority, special_instructions, items, ticket_image } = body
+    // Sanitize scheduled_date to YYYY-MM-DD only (strip any time component)
+    const scheduled_date = body.scheduled_date ? String(body.scheduled_date).substring(0, 10) : null
     // Use user-provided order number (from ticket) or auto-generate with random suffix
     let orderNum = body.order_number?.trim() || ('BF-' + Math.floor(10000 + Math.random() * 90000))
     
@@ -440,6 +442,8 @@ app.post('/api/orders', async (c) => {
 app.put('/api/orders/:id', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
+  // Sanitize scheduled_date to YYYY-MM-DD only
+  if (body.scheduled_date) body.scheduled_date = String(body.scheduled_date).substring(0, 10)
   const fields: string[] = []
   const vals: any[] = []
   for (const key of ['status', 'priority', 'scheduled_date', 'special_instructions', 'address_id', 'customer_id', 'order_number', 'recurring_schedule_id']) {
