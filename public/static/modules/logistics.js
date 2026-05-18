@@ -1794,6 +1794,8 @@ function renderSidebarContent() {
     { id: 'trucks', icon: 'fa-truck', label: t('nav_fleet') },
     { id: 'drivers_mgmt', icon: 'fa-id-card', label: t('nav_drivers') || 'Drivers' },
     { id: 'maintenance', icon: 'fa-wrench', label: t('nav_maintenance') || 'Maintenance' },
+    { section: 'Warehouse' },
+    { id: 'warehouse', icon: 'fa-warehouse', label: 'Warehouse' },
     { section: t('nav_delivery') },
     { id: 'driver', icon: 'fa-steering-wheel', label: t('nav_driver_view') },
     { id: 'packing', icon: 'fa-list-check', label: t('nav_packing_lists') },
@@ -1856,10 +1858,10 @@ function renderSidebarUser() {
 }
 
 function renderPage() {
-  const titles = { dashboard:t('nav_dashboard'), orders:t('nav_orders'), ticket_review:'Ticket Review', schedule:t('nav_schedule'), routes:t('nav_routes'), route_builder:'Route Builder', zones:t('zones_title'), recurring:t('recurring_title'), customers:t('nav_customers'), products:t('nav_products'), trucks:t('trucks_title'), drivers_mgmt:t('nav_drivers')||'Drivers', maintenance:t('nav_maintenance')||'Fleet Maintenance', driver:t('nav_driver_view'), packing:t('nav_packing_lists'), returns:'Returns', learning:'AI Learning Engine', fleet_tracking:'Fleet Tracking', fleet_sync:'Fleet Sync' };
+  const titles = { dashboard:t('nav_dashboard'), orders:t('nav_orders'), ticket_review:'Ticket Review', schedule:t('nav_schedule'), routes:t('nav_routes'), route_builder:'Route Builder', zones:t('zones_title'), recurring:t('recurring_title'), customers:t('nav_customers'), products:t('nav_products'), trucks:t('trucks_title'), drivers_mgmt:t('nav_drivers')||'Drivers', maintenance:t('nav_maintenance')||'Fleet Maintenance', warehouse:'Warehouse', driver:t('nav_driver_view'), packing:t('nav_packing_lists'), returns:'Returns', learning:'AI Learning Engine', fleet_tracking:'Fleet Tracking', fleet_sync:'Fleet Sync' };
   const el = document.getElementById('pageTitle');
   if (el) el.textContent = titles[currentPage] || '';
-  const pages = { dashboard: renderDashboard, orders: renderOrders, ticket_review: renderTicketReview, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
+  const pages = { dashboard: renderDashboard, orders: renderOrders, ticket_review: renderTicketReview, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, warehouse: renderWarehouse, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
   const fn = pages[currentPage];
   if (fn) {
     const result = fn();
@@ -14838,6 +14840,449 @@ async function trCreateOrder(id) {
     showToast('Failed: ' + (err.response?.data?.error || err.message), 'error');
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Create Order'; }
   }
+}
+
+// ==================== WAREHOUSE PAGE ====================
+
+var whTab = 'overview'; // overview, counts, load, returns, receive, activity
+var whData = null;
+var whCountEdits = {}; // product_id → new qty
+var whZoneFilter = 'all';
+var whSearch = '';
+
+async function renderWarehouse() {
+  const pc = document.getElementById('pageContent');
+  pc.innerHTML = '<div style="text-align:center;padding:60px"><i class="fas fa-spinner fa-spin fa-2x" style="color:#9ca3af"></i></div>';
+  try {
+    const { data } = await API.get('/warehouse/dashboard');
+    whData = data;
+  } catch(e) { console.error('Warehouse load error:', e); whData = { products:[], today_orders:[], today_routes:[], pending_returns:[], recent_activity:[] }; }
+  whRenderPage();
+}
+
+function whRenderPage() {
+  const pc = document.getElementById('pageContent');
+  const d = whData;
+  const tabs = [
+    { id:'overview', icon:'fa-warehouse', label:'Overview' },
+    { id:'counts', icon:'fa-clipboard-check', label:'Counts' },
+    { id:'load', icon:'fa-truck-loading', label:'Load Trucks' },
+    { id:'returns', icon:'fa-rotate-left', label:'Returns' },
+    { id:'receive', icon:'fa-dolly', label:'Receive' },
+    { id:'activity', icon:'fa-clock-rotate-left', label:'Activity' },
+  ];
+  pc.innerHTML = `
+    <div class="wh-tabs">
+      ${tabs.map(t => `<button class="wh-tab${whTab===t.id?' active':''}" onclick="whTab='${t.id}';whRenderPage()">
+        <i class="fas ${t.icon}"></i><span>${t.label}</span>
+      </button>`).join('')}
+    </div>
+    <div id="whContent"></div>`;
+  const ct = document.getElementById('whContent');
+  if (whTab === 'overview') whRenderOverview(ct, d);
+  else if (whTab === 'counts') whRenderCounts(ct, d);
+  else if (whTab === 'load') whRenderLoadTrucks(ct, d);
+  else if (whTab === 'returns') whRenderReturns(ct, d);
+  else if (whTab === 'receive') whRenderReceive(ct, d);
+  else if (whTab === 'activity') whRenderActivity(ct, d);
+}
+
+// ---- OVERVIEW ----
+function whRenderOverview(ct, d) {
+  const prods = d.products || [];
+  const zones = { shelf_goods:{ label:'Shelf Goods', icon:'fa-boxes-stacked', color:'#2563EB', items:[] }, hay:{ label:'Hay', icon:'fa-wheat-awn', color:'#CA8A04', items:[] }, shavings:{ label:'Shavings', icon:'fa-leaf', color:'#059669', items:[] } };
+  prods.forEach(p => { const z = zones[p.warehouse_zone] || zones.shelf_goods; z.items.push(p); });
+  const lowStock = prods.filter(p => (p.stock_quantity||0) <= 5 && (p.stock_quantity||0) >= 0);
+  const todayOrders = d.today_orders || [];
+  const todayRoutes = d.today_routes || [];
+  const pendingRets = d.pending_returns || [];
+  const notLoaded = todayRoutes.reduce((s,r) => s + (r.stop_count - (r.loaded_count||0)), 0);
+  ct.innerHTML = `
+    <div class="wh-stats">
+      <div class="wh-stat-card" onclick="whTab='counts';whZoneFilter='all';whRenderPage()">
+        <div class="wh-stat-icon" style="background:#2563EB"><i class="fas fa-boxes-stacked"></i></div>
+        <div class="wh-stat-value">${prods.length}</div>
+        <div class="wh-stat-label">Total Products</div>
+      </div>
+      <div class="wh-stat-card" onclick="whTab='load';whRenderPage()" style="${notLoaded>0?'border-left:3px solid #F97316':''}">
+        <div class="wh-stat-icon" style="background:#F97316"><i class="fas fa-truck-loading"></i></div>
+        <div class="wh-stat-value">${notLoaded}</div>
+        <div class="wh-stat-label">Stops to Load</div>
+      </div>
+      <div class="wh-stat-card" onclick="whTab='returns';whRenderPage()" style="${pendingRets.length>0?'border-left:3px solid #7C3AED':''}">
+        <div class="wh-stat-icon" style="background:#7C3AED"><i class="fas fa-rotate-left"></i></div>
+        <div class="wh-stat-value">${pendingRets.length}</div>
+        <div class="wh-stat-label">Returns Pending</div>
+      </div>
+      <div class="wh-stat-card" onclick="whTab='counts';whZoneFilter='all';whSearch='';whRenderPage()" style="${lowStock.length>0?'border-left:3px solid #DC2626':''}">
+        <div class="wh-stat-icon" style="background:#DC2626"><i class="fas fa-triangle-exclamation"></i></div>
+        <div class="wh-stat-value">${lowStock.length}</div>
+        <div class="wh-stat-label">Low Stock</div>
+      </div>
+    </div>
+
+    <div class="wh-zone-cards">
+      ${Object.entries(zones).map(([key,z]) => {
+        const totalQty = z.items.reduce((s,p) => s + (p.stock_quantity||0), 0);
+        return `<div class="wh-zone-card" onclick="whTab='counts';whZoneFilter='${key}';whRenderPage()">
+          <div class="wh-zone-header" style="background:${z.color}10;border-bottom:2px solid ${z.color}">
+            <i class="fas ${z.icon}" style="color:${z.color};font-size:20px"></i>
+            <div>
+              <div class="wh-zone-title">${z.label}</div>
+              <div class="wh-zone-subtitle">${z.items.length} products</div>
+            </div>
+            <div class="wh-zone-qty">${totalQty.toLocaleString()}</div>
+          </div>
+          <div class="wh-zone-body">
+            ${z.items.slice(0,5).map(p => `<div class="wh-zone-row">
+              <span class="wh-zone-product">${escapeHtml(p.name)}</span>
+              <span class="wh-zone-stock ${(p.stock_quantity||0)<=5?'low':''}">${p.stock_quantity||0} ${p.unit_type||'units'}</span>
+            </div>`).join('')}
+            ${z.items.length > 5 ? `<div style="text-align:center;padding:6px;font-size:12px;color:var(--gray-400)">+ ${z.items.length - 5} more</div>` : ''}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    ${todayRoutes.length > 0 ? `<div class="wh-section">
+      <h3 class="wh-section-title"><i class="fas fa-truck" style="color:#F97316"></i> Today's Routes</h3>
+      <div class="wh-route-cards">
+        ${todayRoutes.map(r => {
+          const pct = r.stop_count > 0 ? Math.round(((r.loaded_count||0) / r.stop_count) * 100) : 0;
+          const allLoaded = pct === 100;
+          return `<div class="wh-route-card ${allLoaded?'loaded':''}" onclick="whShowRouteLoad(${r.id})">
+            <div class="wh-route-top">
+              <strong>${r.route_number || 'Route #'+r.id}</strong>
+              <span class="wh-badge ${allLoaded?'wh-badge-green':'wh-badge-orange'}">${allLoaded?'Loaded':pct+'%'}</span>
+            </div>
+            <div class="wh-route-info">${r.truck_name||'No truck'} &bull; ${r.driver_name||'No driver'} &bull; ${r.stop_count} stops</div>
+            <div class="wh-progress"><div class="wh-progress-bar" style="width:${pct}%;background:${allLoaded?'#059669':'#F97316'}"></div></div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    ${(d.recent_activity||[]).length > 0 ? `<div class="wh-section">
+      <h3 class="wh-section-title"><i class="fas fa-clock-rotate-left" style="color:var(--gray-400)"></i> Recent Activity</h3>
+      ${whActivityList(d.recent_activity.slice(0,8))}
+    </div>` : ''}`;
+}
+
+// ---- COUNTS ----
+function whRenderCounts(ct, d) {
+  const prods = (d.products || []).filter(p => {
+    if (whZoneFilter !== 'all' && p.warehouse_zone !== whZoneFilter) return false;
+    if (whSearch) {
+      const s = whSearch.toLowerCase();
+      return (p.name||'').toLowerCase().includes(s) || (p.sku||'').toLowerCase().includes(s);
+    }
+    return true;
+  });
+  const zoneLabels = { all:'All Zones', shelf_goods:'Shelf Goods', hay:'Hay', shavings:'Shavings' };
+  ct.innerHTML = `
+    <div class="wh-count-toolbar">
+      <div class="wh-zone-pills">
+        ${Object.entries(zoneLabels).map(([k,v]) => `<button class="wh-pill${whZoneFilter===k?' active':''}" onclick="whZoneFilter='${k}';whRenderPage()">${v}</button>`).join('')}
+      </div>
+      <div class="wh-search">
+        <i class="fas fa-search"></i>
+        <input type="text" placeholder="Search products..." value="${escapeHtml(whSearch)}" oninput="whSearch=this.value;whRenderPage()" id="whSearchInput">
+      </div>
+    </div>
+    <div class="wh-count-list" id="whCountList">
+      ${prods.length === 0 ? '<div class="wh-empty"><i class="fas fa-inbox"></i> No products found</div>' :
+        prods.map(p => {
+          const edited = whCountEdits[p.id] !== undefined;
+          const qty = edited ? whCountEdits[p.id] : (p.stock_quantity || 0);
+          const isLow = qty <= 5;
+          return `<div class="wh-count-item${isLow?' low':''}" id="whItem_${p.id}">
+            <div class="wh-count-product">
+              <div class="wh-count-name">${escapeHtml(p.name)}</div>
+              <div class="wh-count-meta">${p.sku||''} &bull; ${p.unit_type||'units'} &bull; ${p.category||'other'}</div>
+            </div>
+            <div class="wh-count-controls">
+              <button class="wh-count-btn minus" onclick="whAdjustCount(${p.id},-1)"><i class="fas fa-minus"></i></button>
+              <input type="number" class="wh-count-input${edited?' edited':''}" value="${qty}" min="0"
+                onchange="whSetCount(${p.id},parseInt(this.value)||0)" id="whQty_${p.id}">
+              <button class="wh-count-btn plus" onclick="whAdjustCount(${p.id},1)"><i class="fas fa-plus"></i></button>
+            </div>
+          </div>`;
+        }).join('')}
+    </div>
+    ${Object.keys(whCountEdits).length > 0 ? `<div class="wh-count-footer">
+      <span>${Object.keys(whCountEdits).length} product(s) changed</span>
+      <button class="wh-btn secondary" onclick="whCountEdits={};whRenderPage()"><i class="fas fa-undo"></i> Reset</button>
+      <button class="wh-btn primary" onclick="whSubmitCounts()"><i class="fas fa-check"></i> Save Counts</button>
+    </div>` : ''}`;
+  // Restore focus to search input
+  const si = document.getElementById('whSearchInput');
+  if (si && document.activeElement?.tagName !== 'INPUT') { /* don't steal focus from qty inputs */ }
+}
+
+function whAdjustCount(pid, delta) {
+  const prod = (whData.products||[]).find(p => p.id === pid);
+  if (!prod) return;
+  const current = whCountEdits[pid] !== undefined ? whCountEdits[pid] : (prod.stock_quantity || 0);
+  const newVal = Math.max(0, current + delta);
+  if (newVal === (prod.stock_quantity || 0)) { delete whCountEdits[pid]; }
+  else { whCountEdits[pid] = newVal; }
+  whRenderPage();
+}
+
+function whSetCount(pid, val) {
+  const prod = (whData.products||[]).find(p => p.id === pid);
+  if (!prod) return;
+  if (val === (prod.stock_quantity || 0)) { delete whCountEdits[pid]; }
+  else { whCountEdits[pid] = val; }
+  // Don't re-render fully; just update the footer
+  const footer = document.querySelector('.wh-count-footer');
+  const input = document.getElementById('whQty_' + pid);
+  if (input) input.classList.toggle('edited', whCountEdits[pid] !== undefined);
+  if (Object.keys(whCountEdits).length > 0 && !footer) whRenderPage();
+  else if (Object.keys(whCountEdits).length === 0 && footer) whRenderPage();
+}
+
+async function whSubmitCounts() {
+  const counts = Object.entries(whCountEdits).map(([pid, qty]) => {
+    const prod = (whData.products||[]).find(p => p.id === parseInt(pid));
+    return { product_id: parseInt(pid), count_qty: qty, zone: prod?.warehouse_zone || 'shelf_goods' };
+  });
+  if (counts.length === 0) return;
+  try {
+    await API.post('/warehouse/count/bulk', { counts, counted_by: currentUser?.id });
+    showToast(`Updated ${counts.length} product counts`, 'success');
+    whCountEdits = {};
+    // Refresh data
+    const { data } = await API.get('/warehouse/dashboard');
+    whData = data;
+    whRenderPage();
+  } catch(e) { showToast('Failed to save counts: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ---- LOAD TRUCKS ----
+function whRenderLoadTrucks(ct, d) {
+  const routes = d.today_routes || [];
+  if (routes.length === 0) {
+    ct.innerHTML = `<div class="wh-empty-big"><i class="fas fa-truck"></i><h3>No Routes Today</h3><p>Routes will appear here when they're scheduled for today.</p></div>`;
+    return;
+  }
+  ct.innerHTML = `
+    <div class="wh-route-list">
+      ${routes.map(r => {
+        const pct = r.stop_count > 0 ? Math.round(((r.loaded_count||0) / r.stop_count) * 100) : 0;
+        const allLoaded = pct === 100;
+        return `<div class="wh-load-route" onclick="whShowRouteLoad(${r.id})">
+          <div class="wh-load-route-header">
+            <div>
+              <div class="wh-load-route-name">${r.route_number || 'Route #'+r.id}</div>
+              <div class="wh-load-route-meta"><i class="fas fa-truck"></i> ${r.truck_name||'—'} &bull; <i class="fas fa-user"></i> ${r.driver_name||'—'} &bull; ${r.stop_count} stops</div>
+            </div>
+            <div style="text-align:right">
+              <div class="wh-badge ${allLoaded?'wh-badge-green':'wh-badge-orange'}" style="font-size:14px;padding:6px 14px">${allLoaded?'✓ Loaded':r.loaded_count+'/'+r.stop_count}</div>
+            </div>
+          </div>
+          <div class="wh-progress" style="height:8px"><div class="wh-progress-bar" style="width:${pct}%;background:${allLoaded?'#059669':'#F97316'}"></div></div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+async function whShowRouteLoad(routeId) {
+  const ct = document.getElementById('whContent');
+  ct.innerHTML = '<div style="text-align:center;padding:40px"><i class="fas fa-spinner fa-spin fa-2x" style="color:#9ca3af"></i></div>';
+  try {
+    const { data } = await API.get('/warehouse/route/' + routeId + '/load');
+    const r = data.route;
+    const stops = data.stops || [];
+    const loaded = stops.filter(s => s.loaded_at);
+    const pct = stops.length > 0 ? Math.round((loaded.length / stops.length) * 100) : 0;
+    ct.innerHTML = `
+      <button class="wh-back-btn" onclick="whRenderPage()"><i class="fas fa-arrow-left"></i> Back to Routes</button>
+      <div class="wh-load-header">
+        <div>
+          <h2 style="font-weight:800;color:var(--navy)">${r.route_number || 'Route #'+r.id}</h2>
+          <div style="font-size:14px;color:var(--gray-500)"><i class="fas fa-truck"></i> ${r.truck_name||'—'} &bull; <i class="fas fa-user"></i> ${r.driver_name||'—'} &bull; ${stops.length} stops</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${loaded.length < stops.length ? `<button class="wh-btn primary" onclick="whLoadAll(${r.id})"><i class="fas fa-check-double"></i> Load All</button>` : `<div class="wh-badge wh-badge-green" style="font-size:16px;padding:10px 20px">✓ Fully Loaded</div>`}
+        </div>
+      </div>
+      <div class="wh-progress" style="height:10px;margin-bottom:20px"><div class="wh-progress-bar" style="width:${pct}%;background:${pct===100?'#059669':'#F97316'}"></div></div>
+      <div class="wh-load-stops">
+        ${stops.map((s,i) => {
+          const isLoaded = !!s.loaded_at;
+          const items = s.items || [];
+          return `<div class="wh-load-stop${isLoaded?' loaded':''}" id="whStop_${s.stop_id}">
+            <div class="wh-load-stop-header" onclick="this.parentElement.classList.toggle('expanded')">
+              <div class="wh-load-stop-num">${i+1}</div>
+              <div class="wh-load-stop-info">
+                <div class="wh-load-stop-order">${s.order_number} — ${s.business_name}</div>
+                <div class="wh-load-stop-addr">${s.street||''} ${s.city||''}</div>
+                <div class="wh-load-stop-items">${items.length} product${items.length!==1?'s':''} &bull; ${items.reduce((s,i)=>s+i.quantity,0)} units</div>
+              </div>
+              <div class="wh-load-stop-status">
+                ${isLoaded
+                  ? '<span class="wh-badge wh-badge-green"><i class="fas fa-check"></i> Loaded</span>'
+                  : `<button class="wh-btn primary" onclick="event.stopPropagation();whLoadStop(${s.stop_id},${routeId})"><i class="fas fa-check"></i> Load</button>`}
+              </div>
+            </div>
+            <div class="wh-load-stop-detail">
+              ${s.priority === 'urgent' || s.priority === 'high' ? `<div class="wh-alert"><i class="fas fa-exclamation-triangle"></i> ${s.priority.toUpperCase()} PRIORITY</div>` : ''}
+              ${s.special_instructions ? `<div class="wh-note"><i class="fas fa-sticky-note"></i> ${escapeHtml(s.special_instructions)}</div>` : ''}
+              <table class="wh-items-table">
+                <thead><tr><th>Product</th><th>Qty</th><th>Unit</th></tr></thead>
+                <tbody>${items.map(it => `<tr><td><strong>${escapeHtml(it.product_name)}</strong>${it.sku?'<br><code>'+escapeHtml(it.sku)+'</code>':''}</td><td class="wh-qty-cell">${it.quantity}</td><td>${it.unit_type||'units'}</td></tr>`).join('')}</tbody>
+              </table>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+  } catch(e) {
+    ct.innerHTML = `<div class="wh-empty-big"><i class="fas fa-exclamation-triangle" style="color:var(--red)"></i><h3>Error Loading Route</h3><p>${e.message}</p><button class="wh-btn primary" onclick="whRenderPage()">Go Back</button></div>`;
+  }
+}
+
+async function whLoadStop(stopId, routeId) {
+  try {
+    await API.post('/warehouse/route-stop/' + stopId + '/load', { loaded_by: currentUser?.id });
+    showToast('Stop loaded!', 'success');
+    // Refresh
+    const { data: dData } = await API.get('/warehouse/dashboard');
+    whData = dData;
+    whShowRouteLoad(routeId);
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function whLoadAll(routeId) {
+  try {
+    const { data } = await API.post('/warehouse/route/' + routeId + '/load-all', { loaded_by: currentUser?.id });
+    showToast(`All ${data.loaded} stops loaded!`, 'success');
+    const { data: dData } = await API.get('/warehouse/dashboard');
+    whData = dData;
+    whShowRouteLoad(routeId);
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ---- RETURNS ----
+function whRenderReturns(ct, d) {
+  const rets = d.pending_returns || [];
+  if (rets.length === 0) {
+    ct.innerHTML = `<div class="wh-empty-big"><i class="fas fa-rotate-left"></i><h3>No Pending Returns</h3><p>Returns will appear here when they need to be processed.</p></div>`;
+    return;
+  }
+  ct.innerHTML = `
+    <div class="wh-section-title" style="margin-bottom:12px"><i class="fas fa-rotate-left" style="color:#7C3AED"></i> Returns to Process (${rets.length})</div>
+    <div class="wh-returns-list">
+      ${rets.map(r => `<div class="wh-return-card" onclick="whProcessReturn(${r.id})">
+        <div class="wh-return-info">
+          <div class="wh-return-customer">${r.business_name}</div>
+          <div class="wh-return-meta">${r.order_number||'No order'} &bull; ${r.item_count} item${r.item_count!==1?'s':''}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="wh-badge ${r.status==='received'?'wh-badge-blue':r.status==='approved'?'wh-badge-green':'wh-badge-orange'}">${r.status}</span>
+          <i class="fas fa-chevron-right" style="color:var(--gray-300)"></i>
+        </div>
+      </div>`).join('')}
+    </div>`;
+}
+
+async function whProcessReturn(returnId) {
+  // Delegate to existing receive modal
+  if (typeof showReceiveReturnModal === 'function') {
+    showReceiveReturnModal(returnId);
+  } else {
+    showToast('Return processing not available', 'warning');
+  }
+}
+
+// ---- RECEIVE STOCK ----
+function whRenderReceive(ct, d) {
+  const prods = d.products || [];
+  ct.innerHTML = `
+    <div class="wh-section-title" style="margin-bottom:12px"><i class="fas fa-dolly" style="color:#059669"></i> Receive Inbound Stock</div>
+    <p style="color:var(--gray-500);font-size:14px;margin-bottom:16px">Add stock from supplier deliveries or purchase orders.</p>
+    <div class="wh-receive-form" id="whReceiveForm">
+      <div id="whReceiveItems">
+        <div class="wh-receive-row" data-idx="0">
+          <select class="wh-input" id="whRecvProd_0" style="flex:2">
+            <option value="">— Select product —</option>
+            ${prods.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.sku||'no SKU'}) [${p.stock_quantity||0} in stock]</option>`).join('')}
+          </select>
+          <input type="number" class="wh-input" id="whRecvQty_0" placeholder="Qty" min="1" style="flex:0 0 80px">
+          <button class="wh-count-btn minus" onclick="this.closest('.wh-receive-row').remove()" title="Remove"><i class="fas fa-times"></i></button>
+        </div>
+      </div>
+      <button class="wh-btn secondary" onclick="whAddReceiveRow()" style="margin-top:8px"><i class="fas fa-plus"></i> Add Item</button>
+      <div style="margin-top:12px">
+        <label class="wh-label">Notes (optional)</label>
+        <input type="text" class="wh-input" id="whRecvNotes" placeholder="PO number, supplier, etc." style="width:100%">
+      </div>
+      <div style="margin-top:16px">
+        <button class="wh-btn primary" onclick="whSubmitReceive()" style="width:100%"><i class="fas fa-check"></i> Receive Stock</button>
+      </div>
+    </div>`;
+}
+
+var whRecvRowIdx = 1;
+function whAddReceiveRow() {
+  const container = document.getElementById('whReceiveItems');
+  const prods = whData.products || [];
+  const idx = whRecvRowIdx++;
+  const row = document.createElement('div');
+  row.className = 'wh-receive-row';
+  row.dataset.idx = idx;
+  row.innerHTML = `
+    <select class="wh-input" id="whRecvProd_${idx}" style="flex:2">
+      <option value="">— Select product —</option>
+      ${prods.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.sku||'no SKU'}) [${p.stock_quantity||0} in stock]</option>`).join('')}
+    </select>
+    <input type="number" class="wh-input" id="whRecvQty_${idx}" placeholder="Qty" min="1" style="flex:0 0 80px">
+    <button class="wh-count-btn minus" onclick="this.closest('.wh-receive-row').remove()" title="Remove"><i class="fas fa-times"></i></button>`;
+  container.appendChild(row);
+}
+
+async function whSubmitReceive() {
+  const rows = document.querySelectorAll('.wh-receive-row');
+  const items = [];
+  rows.forEach(row => {
+    const idx = row.dataset.idx;
+    const pid = document.getElementById('whRecvProd_' + idx)?.value;
+    const qty = parseInt(document.getElementById('whRecvQty_' + idx)?.value);
+    if (pid && qty > 0) items.push({ product_id: parseInt(pid), quantity: qty });
+  });
+  if (items.length === 0) { showToast('Add at least one product', 'warning'); return; }
+  try {
+    await API.post('/warehouse/receive-stock', { items, received_by: currentUser?.id, notes: document.getElementById('whRecvNotes')?.value || null });
+    showToast(`Received ${items.length} product(s)`, 'success');
+    whRecvRowIdx = 1;
+    const { data } = await API.get('/warehouse/dashboard');
+    whData = data;
+    whRenderPage();
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ---- ACTIVITY LOG ----
+function whRenderActivity(ct, d) {
+  const acts = d.recent_activity || [];
+  ct.innerHTML = `
+    <div class="wh-section-title" style="margin-bottom:12px"><i class="fas fa-clock-rotate-left" style="color:var(--gray-500)"></i> Activity Log</div>
+    ${acts.length === 0 ? '<div class="wh-empty"><i class="fas fa-inbox"></i> No activity yet</div>' : whActivityList(acts)}`;
+}
+
+function whActivityList(acts) {
+  const icons = { count_update:'fa-clipboard-check', order_loaded:'fa-truck-loading', order_received:'fa-dolly', return_received:'fa-rotate-left', return_restocked:'fa-box-open', stock_adjustment:'fa-sliders-h', transfer_in:'fa-arrow-right', transfer_out:'fa-arrow-left' };
+  const colors = { count_update:'#2563EB', order_loaded:'#F97316', order_received:'#059669', return_received:'#7C3AED', return_restocked:'#059669', stock_adjustment:'#CA8A04', transfer_in:'#059669', transfer_out:'#DC2626' };
+  return `<div class="wh-activity-list">
+    ${acts.map(a => `<div class="wh-activity-item">
+      <div class="wh-activity-icon" style="background:${(colors[a.activity_type]||'#6B7280')}20;color:${colors[a.activity_type]||'#6B7280'}">
+        <i class="fas ${icons[a.activity_type]||'fa-circle'}"></i>
+      </div>
+      <div class="wh-activity-info">
+        <div class="wh-activity-desc">${a.product_name ? '<strong>'+escapeHtml(a.product_name)+'</strong> — ' : ''}${a.quantity ? (a.direction==='in'?'+':'-')+a.quantity+' ' : ''}${(a.notes||a.activity_type).replace(/_/g,' ')}</div>
+        <div class="wh-activity-meta">${a.performed_by_name||'System'} &bull; ${a.created_at ? dayjs(a.created_at).fromNow() : '—'}</div>
+      </div>
+    </div>`).join('')}
+  </div>`;
 }
 
 // ==================== SCAN QUEUE (QuickBooks-style background scanning) ====================

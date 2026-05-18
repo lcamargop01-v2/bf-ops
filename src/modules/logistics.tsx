@@ -5494,6 +5494,230 @@ app.get('/api/verizon/dashboard', async (c) => {
   } catch (e: any) { return c.json({ error: e.message }, 500) }
 })
 
+// ==================== WAREHOUSE API ====================
+
+// Warehouse dashboard summary
+app.get('/api/warehouse/dashboard', async (c) => {
+  const db = c.env.DB
+  const today = new Date().toISOString().split('T')[0]
+  try {
+    const [products, todayOrders, todayRoutes, pendingReturns, recentActivity] = await Promise.all([
+      db.prepare(`SELECT p.id, p.name, p.sku, p.category, p.unit_type, p.stock_quantity, p.warehouse_zone,
+        p.weight_per_unit, p.pallet_qty
+        FROM products p WHERE p.active = 1 ORDER BY p.warehouse_zone, p.category, p.name`).all(),
+      db.prepare(`SELECT o.id, o.order_number, o.status, o.priority, o.scheduled_date, o.warehouse_received,
+        c.business_name, (SELECT COALESCE(SUM(oi.quantity),0) FROM order_items oi WHERE oi.order_id = o.id) as item_count
+        FROM orders o JOIN customers c ON o.customer_id = c.id
+        WHERE o.archived = 0 AND o.scheduled_date = ? AND o.status IN ('new','confirmed','scheduled','loaded')
+        ORDER BY CASE o.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END`).bind(today).all(),
+      db.prepare(`SELECT r.id, r.route_number, r.date, r.status, r.truck_id, r.driver_id,
+        t.name as truck_name, u.name as driver_name,
+        (SELECT COUNT(*) FROM route_stops rs WHERE rs.route_id = r.id) as stop_count,
+        (SELECT COUNT(*) FROM route_stops rs WHERE rs.route_id = r.id AND rs.loaded_at IS NOT NULL) as loaded_count
+        FROM routes r LEFT JOIN trucks t ON r.truck_id = t.id LEFT JOIN users u ON r.driver_id = u.id
+        WHERE r.date = ? AND r.status NOT IN ('completed','cancelled')
+        ORDER BY r.route_number`).bind(today).all(),
+      db.prepare(`SELECT ret.id, ret.status, ret.order_id, c.business_name, o.order_number,
+        (SELECT COUNT(*) FROM return_items ri WHERE ri.return_id = ret.id) as item_count
+        FROM returns ret JOIN customers c ON ret.customer_id = c.id LEFT JOIN orders o ON ret.order_id = o.id
+        WHERE ret.status IN ('pending','approved','received')
+        ORDER BY ret.created_at DESC LIMIT 20`).all(),
+      db.prepare(`SELECT wa.*, p.name as product_name, u.name as performed_by_name
+        FROM warehouse_activity wa LEFT JOIN products p ON wa.product_id = p.id LEFT JOIN users u ON wa.performed_by = u.id
+        ORDER BY wa.created_at DESC LIMIT 30`).all(),
+    ])
+    return c.json({
+      products: products.results,
+      today_orders: todayOrders.results,
+      today_routes: todayRoutes.results,
+      pending_returns: pendingReturns.results,
+      recent_activity: recentActivity.results,
+    })
+  } catch (e: any) { return c.json({ error: e.message }, 500) }
+})
+
+// Warehouse inventory counts by zone
+app.get('/api/warehouse/inventory', async (c) => {
+  const zone = c.req.query('zone')
+  const search = c.req.query('search')
+  let query = `SELECT p.id, p.name, p.sku, p.category, p.unit_type, p.stock_quantity, p.warehouse_zone,
+    p.weight_per_unit, p.pallet_qty, p.price, p.cost
+    FROM products p WHERE p.active = 1`
+  const params: any[] = []
+  if (zone && zone !== 'all') { query += ' AND p.warehouse_zone = ?'; params.push(zone) }
+  if (search) { query += ' AND (p.name LIKE ? OR p.sku LIKE ?)'; params.push(`%${search}%`, `%${search}%`) }
+  query += ' ORDER BY p.warehouse_zone, p.category, p.name'
+  const result = await c.env.DB.prepare(query).bind(...params).all()
+  return c.json({ products: result.results })
+})
+
+// Update stock count for a product (quick count)
+app.post('/api/warehouse/count', async (c) => {
+  const body = await c.req.json()
+  const { product_id, count_qty, zone, notes, counted_by } = body
+  if (!product_id || count_qty === undefined) return c.json({ error: 'product_id and count_qty required' }, 400)
+  const db = c.env.DB
+  // Get current stock
+  const product = await db.prepare('SELECT stock_quantity, name FROM products WHERE id = ?').bind(product_id).first() as any
+  if (!product) return c.json({ error: 'Product not found' }, 404)
+  const oldQty = product.stock_quantity || 0
+  const diff = count_qty - oldQty
+  // Update products table
+  await db.prepare('UPDATE products SET stock_quantity = ? WHERE id = ?').bind(count_qty, product_id).run()
+  // Record the count
+  await db.prepare(
+    'INSERT INTO warehouse_counts (product_id, zone, count_qty, counted_by, notes) VALUES (?,?,?,?,?)'
+  ).bind(product_id, zone || 'shelf_goods', count_qty, counted_by || null, notes || null).run()
+  // Log activity
+  await db.prepare(
+    `INSERT INTO warehouse_activity (activity_type, product_id, quantity, direction, reference_type, zone, notes, performed_by)
+     VALUES ('count_update', ?, ?, ?, 'adjustment', ?, ?, ?)`
+  ).bind(product_id, Math.abs(diff), diff >= 0 ? 'in' : 'out', zone || 'shelf_goods',
+    `Count updated: ${oldQty} → ${count_qty}` + (notes ? ` (${notes})` : ''), counted_by || null).run()
+  return c.json({ success: true, old_qty: oldQty, new_qty: count_qty, diff })
+})
+
+// Bulk update stock counts
+app.post('/api/warehouse/count/bulk', async (c) => {
+  const body = await c.req.json()
+  const { counts, counted_by } = body // counts: [{product_id, count_qty, zone?, notes?}]
+  if (!counts || !counts.length) return c.json({ error: 'counts array required' }, 400)
+  const db = c.env.DB
+  let updated = 0
+  for (const item of counts) {
+    const product = await db.prepare('SELECT stock_quantity FROM products WHERE id = ?').bind(item.product_id).first() as any
+    if (!product) continue
+    const oldQty = product.stock_quantity || 0
+    const diff = item.count_qty - oldQty
+    if (diff === 0) continue
+    await db.prepare('UPDATE products SET stock_quantity = ? WHERE id = ?').bind(item.count_qty, item.product_id).run()
+    await db.prepare(
+      'INSERT INTO warehouse_counts (product_id, zone, count_qty, counted_by, notes) VALUES (?,?,?,?,?)'
+    ).bind(item.product_id, item.zone || 'shelf_goods', item.count_qty, counted_by || null, item.notes || null).run()
+    await db.prepare(
+      `INSERT INTO warehouse_activity (activity_type, product_id, quantity, direction, reference_type, zone, notes, performed_by)
+       VALUES ('count_update', ?, ?, ?, 'adjustment', ?, ?, ?)`
+    ).bind(item.product_id, Math.abs(diff), diff >= 0 ? 'in' : 'out', item.zone || 'shelf_goods',
+      `Count: ${oldQty} → ${item.count_qty}`, counted_by || null).run()
+    updated++
+  }
+  return c.json({ success: true, updated })
+})
+
+// Set warehouse zone for a product
+app.put('/api/warehouse/product/:id/zone', async (c) => {
+  const id = c.req.param('id')
+  const { zone } = await c.req.json()
+  await c.env.DB.prepare('UPDATE products SET warehouse_zone = ? WHERE id = ?').bind(zone || 'shelf_goods', id).run()
+  return c.json({ success: true })
+})
+
+// Get orders ready to load for a route
+app.get('/api/warehouse/route/:id/load', async (c) => {
+  const routeId = c.req.param('id')
+  const db = c.env.DB
+  const route = await db.prepare(
+    `SELECT r.*, t.name as truck_name, u.name as driver_name
+     FROM routes r LEFT JOIN trucks t ON r.truck_id = t.id LEFT JOIN users u ON r.driver_id = u.id WHERE r.id = ?`
+  ).bind(routeId).first() as any
+  if (!route) return c.json({ error: 'Route not found' }, 404)
+  const stops = await db.prepare(
+    `SELECT rs.id as stop_id, rs.order_id, rs.sequence, rs.status as stop_status, rs.loaded_at, rs.loaded_by,
+     o.order_number, o.status as order_status, o.priority, o.special_instructions, c.business_name,
+     a.street, a.city
+     FROM route_stops rs JOIN orders o ON rs.order_id = o.id JOIN customers c ON o.customer_id = c.id
+     LEFT JOIN addresses a ON o.address_id = a.id
+     WHERE rs.route_id = ? ORDER BY rs.sequence`
+  ).bind(routeId).all()
+  // Get items for each stop
+  for (const stop of stops.results as any[]) {
+    const items = await db.prepare(
+      `SELECT oi.quantity, p.name as product_name, p.sku, p.unit_type, p.weight_per_unit, p.pallet_qty
+       FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?`
+    ).bind(stop.order_id).all()
+    stop.items = items.results
+  }
+  return c.json({ route, stops: stops.results })
+})
+
+// Mark a stop as loaded
+app.post('/api/warehouse/route-stop/:id/load', async (c) => {
+  const stopId = c.req.param('id')
+  const { loaded_by } = await c.req.json()
+  const db = c.env.DB
+  const stop = await db.prepare(
+    'SELECT rs.*, o.order_number FROM route_stops rs JOIN orders o ON rs.order_id = o.id WHERE rs.id = ?'
+  ).bind(stopId).first() as any
+  if (!stop) return c.json({ error: 'Stop not found' }, 404)
+  await db.prepare(
+    "UPDATE route_stops SET loaded_at = datetime('now'), loaded_by = ? WHERE id = ?"
+  ).bind(loaded_by || null, stopId).run()
+  // Update order status to loaded
+  await db.prepare("UPDATE orders SET status = 'loaded', updated_at = datetime('now') WHERE id = ? AND status IN ('new','confirmed','scheduled')")
+    .bind(stop.order_id).run()
+  // Log activity
+  const items = await db.prepare(
+    'SELECT oi.quantity, p.name as product_name, p.id as product_id FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?'
+  ).bind(stop.order_id).all()
+  for (const item of items.results as any[]) {
+    await db.prepare(
+      `INSERT INTO warehouse_activity (activity_type, product_id, quantity, direction, reference_type, reference_id, notes, performed_by)
+       VALUES ('order_loaded', ?, ?, 'out', 'order', ?, ?, ?)`
+    ).bind(item.product_id, item.quantity, stop.order_id, `Loaded for ${stop.order_number}`, loaded_by || null).run()
+  }
+  return c.json({ success: true })
+})
+
+// Mark all stops in a route as loaded
+app.post('/api/warehouse/route/:id/load-all', async (c) => {
+  const routeId = c.req.param('id')
+  const { loaded_by } = await c.req.json()
+  const db = c.env.DB
+  const stops = await db.prepare(
+    'SELECT rs.id, rs.order_id FROM route_stops rs WHERE rs.route_id = ? AND rs.loaded_at IS NULL'
+  ).bind(routeId).all()
+  for (const stop of stops.results as any[]) {
+    await db.prepare("UPDATE route_stops SET loaded_at = datetime('now'), loaded_by = ? WHERE id = ?").bind(loaded_by || null, stop.id).run()
+    await db.prepare("UPDATE orders SET status = 'loaded', updated_at = datetime('now') WHERE id = ? AND status IN ('new','confirmed','scheduled')").bind(stop.order_id).run()
+  }
+  // Log activity
+  await db.prepare(
+    `INSERT INTO warehouse_activity (activity_type, quantity, direction, reference_type, reference_id, notes, performed_by)
+     VALUES ('order_loaded', ?, 'out', 'route', ?, ?, ?)`
+  ).bind(stops.results.length, routeId, `Loaded all ${stops.results.length} stops for route`, loaded_by || null).run()
+  return c.json({ success: true, loaded: stops.results.length })
+})
+
+// Warehouse activity log
+app.get('/api/warehouse/activity', async (c) => {
+  const limit = parseInt(c.req.query('limit') || '50')
+  const type = c.req.query('type')
+  let query = `SELECT wa.*, p.name as product_name, p.sku, u.name as performed_by_name
+    FROM warehouse_activity wa LEFT JOIN products p ON wa.product_id = p.id LEFT JOIN users u ON wa.performed_by = u.id`
+  const params: any[] = []
+  if (type) { query += ' WHERE wa.activity_type = ?'; params.push(type) }
+  query += ' ORDER BY wa.created_at DESC LIMIT ?'
+  params.push(limit)
+  const result = await c.env.DB.prepare(query).bind(...params).all()
+  return c.json({ activity: result.results })
+})
+
+// Receive inbound stock (PO / delivery from supplier)
+app.post('/api/warehouse/receive-stock', async (c) => {
+  const body = await c.req.json()
+  const { items, received_by, notes } = body // items: [{product_id, quantity}]
+  if (!items || !items.length) return c.json({ error: 'items array required' }, 400)
+  const db = c.env.DB
+  for (const item of items) {
+    await db.prepare('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?').bind(item.quantity, item.product_id).run()
+    await db.prepare(
+      `INSERT INTO warehouse_activity (activity_type, product_id, quantity, direction, reference_type, notes, performed_by)
+       VALUES ('order_received', ?, ?, 'in', 'adjustment', ?, ?)`
+    ).bind(item.product_id, item.quantity, notes || 'Inbound stock received', received_by || null).run()
+  }
+  return c.json({ success: true, received: items.length })
+})
+
 // HTML serving is handled by the parent shell — not this module
 export default app
 export { app as logisticsApp }
