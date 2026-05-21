@@ -97,17 +97,18 @@ app.get('/api/crm/organizations', async (c) => {
   const limit = parseInt(c.req.query('limit') || '50')
   const offset = parseInt(c.req.query('offset') || '0')
 
+  const fromClause = `FROM crm_organizations o
+    LEFT JOIN users u ON o.owner_id = u.id WHERE 1=1`
   let q = `SELECT o.*, u.name as owner_name,
     (SELECT COUNT(*) FROM crm_contacts WHERE organization_id = o.id) as contact_count,
     (SELECT COUNT(*) FROM crm_opportunities WHERE organization_id = o.id AND status = 'open') as open_opps
-    FROM crm_organizations o
-    LEFT JOIN users u ON o.owner_id = u.id WHERE 1=1`
+    ${fromClause}`
   const binds: any[] = []
 
   if (search) { q += ' AND (o.name LIKE ? OR o.email LIKE ? OR o.phone LIKE ?)'; binds.push(`%${search}%`, `%${search}%`, `%${search}%`) }
   if (type) { q += ' AND o.org_type = ?'; binds.push(type) }
 
-  const countQ = q.replace(/SELECT o\.\*.*FROM/, 'SELECT COUNT(*) as total FROM')
+  const countQ = `SELECT COUNT(*) as total ${fromClause}` + q.substring(q.indexOf('WHERE 1=1') + 9)
   const countR = await db.prepare(countQ).bind(...binds).first() as any
 
   q += ' ORDER BY o.updated_at DESC LIMIT ? OFFSET ?'
@@ -174,17 +175,18 @@ app.get('/api/crm/contacts', async (c) => {
   const limit = parseInt(c.req.query('limit') || '50')
   const offset = parseInt(c.req.query('offset') || '0')
 
-  let q = `SELECT c.*, o.name as organization_name, u.name as owner_name
-    FROM crm_contacts c
+  const fromClause = `FROM crm_contacts c
     LEFT JOIN crm_organizations o ON c.organization_id = o.id
     LEFT JOIN users u ON c.owner_id = u.id WHERE 1=1`
+  let q = `SELECT c.*, o.name as organization_name, u.name as owner_name
+    ${fromClause}`
   const binds: any[] = []
 
   if (search) { q += ' AND (c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)'; binds.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`) }
   if (status) { q += ' AND c.lead_status = ?'; binds.push(status) }
   if (org_id) { q += ' AND c.organization_id = ?'; binds.push(parseInt(org_id)) }
 
-  const countQ = q.replace(/SELECT c\.\*.*FROM/, 'SELECT COUNT(*) as total FROM')
+  const countQ = `SELECT COUNT(*) as total ${fromClause}` + q.substring(q.indexOf('WHERE 1=1') + 9)
   const countR = await db.prepare(countQ).bind(...binds).first() as any
 
   q += ' ORDER BY c.updated_at DESC LIMIT ? OFFSET ?'
