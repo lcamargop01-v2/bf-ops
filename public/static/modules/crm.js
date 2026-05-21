@@ -764,11 +764,29 @@ async function crmRenderContactsPage() {
 
 function crmRenderContactsContent() {
   var ct = document.getElementById('crmContent');
+  // Determine if filters are active
+  var searchEl = document.getElementById('crmContactSearch');
+  var statusEl = document.getElementById('crmContactStatusFilter');
+  var hasFilters = (searchEl && searchEl.value) || (statusEl && statusEl.value);
   ct.innerHTML =
     '<div class="crm-list-page">' +
       '<div class="crm-list-header">' +
         '<h2><i class="fas fa-address-book"></i> Contacts</h2>' +
-        '<button class="crm-btn crm-btn-primary" onclick="crmShowNewContact()"><i class="fas fa-plus"></i> New Contact</button>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+          '<div style="position:relative" id="crmExportDropdown">' +
+            '<button class="crm-btn crm-btn-outline" onclick="crmToggleExportMenu()" style="display:flex;align-items:center;gap:6px"><i class="fas fa-file-excel" style="color:#059669"></i> Export <i class="fas fa-caret-down" style="font-size:10px;opacity:0.6"></i></button>' +
+            '<div id="crmExportMenu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:white;border:1px solid #E5E7EB;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);z-index:100;min-width:200px;overflow:hidden">' +
+              '<button class="crm-export-option" onclick="crmExportContacts(false)" style="display:flex;align-items:center;gap:8px;padding:10px 16px;width:100%;border:none;background:none;cursor:pointer;font-size:13px;color:#374151;text-align:left" onmouseover="this.style.background=\'#F3F4F6\'" onmouseout="this.style.background=\'none\'">' +
+                '<i class="fas fa-download" style="color:#059669;width:16px"></i> Export All Contacts' +
+              '</button>' +
+              (hasFilters ?
+                '<button class="crm-export-option" onclick="crmExportContacts(true)" style="display:flex;align-items:center;gap:8px;padding:10px 16px;width:100%;border:none;background:none;cursor:pointer;font-size:13px;color:#374151;text-align:left;border-top:1px solid #F3F4F6" onmouseover="this.style.background=\'#F3F4F6\'" onmouseout="this.style.background=\'none\'">' +
+                  '<i class="fas fa-filter" style="color:#6366F1;width:16px"></i> Export Filtered (' + crmContactsTotal + ')' +
+                '</button>' : '') +
+            '</div>' +
+          '</div>' +
+          '<button class="crm-btn crm-btn-primary" onclick="crmShowNewContact()"><i class="fas fa-plus"></i> New Contact</button>' +
+        '</div>' +
       '</div>' +
       '<div class="crm-toolbar">' +
         '<div class="crm-search-box"><i class="fas fa-search"></i>' +
@@ -1613,4 +1631,118 @@ async function crmCreateActivity() {
     else if (crmPage === 'contactDetail' && crmDetailData) crmViewContact(crmDetailData.contact.id);
     else if (crmPage === 'oppDetail' && crmDetailData) crmViewOpp(crmDetailData.opportunity.id);
   } catch(e) { crmToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ==================== CONTACTS EXPORT TO EXCEL ====================
+
+function crmToggleExportMenu() {
+  var menu = document.getElementById('crmExportMenu');
+  if (!menu) return;
+  var isOpen = menu.style.display !== 'none';
+  menu.style.display = isOpen ? 'none' : 'block';
+  // Close on outside click
+  if (!isOpen) {
+    var closer = function(e) {
+      var dd = document.getElementById('crmExportDropdown');
+      if (dd && !dd.contains(e.target)) {
+        menu.style.display = 'none';
+        document.removeEventListener('click', closer);
+      }
+    };
+    setTimeout(function() { document.addEventListener('click', closer); }, 10);
+  }
+}
+
+function crmLoadSheetJS() {
+  return new Promise(function(resolve, reject) {
+    if (window.XLSX) { resolve(window.XLSX); return; }
+    var script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    script.onload = function() { resolve(window.XLSX); };
+    script.onerror = function() { reject(new Error('Failed to load SheetJS library')); };
+    document.head.appendChild(script);
+  });
+}
+
+async function crmExportContacts(filtered) {
+  // Hide dropdown
+  var menu = document.getElementById('crmExportMenu');
+  if (menu) menu.style.display = 'none';
+
+  crmToast('Preparing export...');
+
+  try {
+    // Build query params
+    var params = '';
+    if (filtered) {
+      var search = document.getElementById('crmContactSearch');
+      var statusEl = document.getElementById('crmContactStatusFilter');
+      var parts = [];
+      if (search && search.value) parts.push('search=' + encodeURIComponent(search.value));
+      if (statusEl && statusEl.value) parts.push('status=' + statusEl.value);
+      if (parts.length) params = '?' + parts.join('&');
+    }
+
+    // Fetch export data from backend
+    var resp = await crmAPI.get('/api/crm/contacts/export' + params, { headers: crmHeaders() });
+    var contacts = resp.data.contacts || [];
+
+    if (contacts.length === 0) {
+      crmToast('No contacts to export', 'error');
+      return;
+    }
+
+    // Load SheetJS
+    var XLSX = await crmLoadSheetJS();
+
+    // Build worksheet data
+    var headers = [
+      'First Name', 'Last Name', 'Title', 'Phone', 'Mobile', 'Email',
+      'Organization', 'Org Type', 'Org Phone',
+      'Street', 'City', 'State', 'ZIP',
+      'Lead Source', 'Lead Status', 'Owner', 'Tags', 'Notes',
+      'Created', 'Updated'
+    ];
+
+    var rows = contacts.map(function(c) {
+      return [
+        c.first_name || '', c.last_name || '', c.title || '',
+        c.phone || '', c.mobile || '', c.email || '',
+        c.organization_name || '', c.organization_type || '', c.organization_phone || '',
+        c.address_street || '', c.address_city || '', c.address_state || '', c.address_zip || '',
+        c.lead_source || '', c.lead_status || '', c.owner_name || '',
+        c.tags || '', c.notes || '',
+        c.created_at ? dayjs(c.created_at).format('YYYY-MM-DD HH:mm') : '',
+        c.updated_at ? dayjs(c.updated_at).format('YYYY-MM-DD HH:mm') : ''
+      ];
+    });
+
+    var data = [headers].concat(rows);
+    var ws = XLSX.utils.aoa_to_sheet(data);
+
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 25 },
+      { wch: 25 }, { wch: 12 }, { wch: 15 },
+      { wch: 25 }, { wch: 15 }, { wch: 8 }, { wch: 10 },
+      { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 20 }, { wch: 30 },
+      { wch: 16 }, { wch: 16 }
+    ];
+
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Contacts');
+
+    // Generate file name
+    var dateStr = dayjs().format('YYYY-MM-DD');
+    var suffix = filtered ? '_filtered' : '_all';
+    var fileName = 'BF_CRM_Contacts' + suffix + '_' + dateStr + '.xlsx';
+
+    // Trigger download
+    XLSX.writeFile(wb, fileName);
+    crmToast('Exported ' + contacts.length + ' contact' + (contacts.length !== 1 ? 's' : '') + ' to Excel');
+
+  } catch(e) {
+    console.error('[CRM] Export error:', e);
+    crmToast('Export failed: ' + (e.message || 'Unknown error'), 'error');
+  }
 }

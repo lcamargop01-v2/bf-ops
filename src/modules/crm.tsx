@@ -194,6 +194,35 @@ app.get('/api/crm/contacts', async (c) => {
   return c.json({ contacts: contacts.results || [], total: countR?.total || 0 })
 })
 
+// Export contacts (all or filtered) — returns all matching records without pagination
+app.get('/api/crm/contacts/export', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const search = c.req.query('search')
+  const status = c.req.query('status')
+  const org_id = c.req.query('organization_id')
+
+  let q = `SELECT c.first_name, c.last_name, c.title, c.phone, c.mobile, c.email,
+    c.lead_source, c.lead_status, c.tags, c.notes,
+    o.name as organization_name, o.org_type as organization_type, o.phone as organization_phone,
+    o.address_street, o.address_city, o.address_state, o.address_zip,
+    u.name as owner_name, c.created_at, c.updated_at
+    FROM crm_contacts c
+    LEFT JOIN crm_organizations o ON c.organization_id = o.id
+    LEFT JOIN users u ON c.owner_id = u.id WHERE 1=1`
+  const binds: any[] = []
+
+  if (search) { q += ' AND (c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)'; binds.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`) }
+  if (status) { q += ' AND c.lead_status = ?'; binds.push(status) }
+  if (org_id) { q += ' AND c.organization_id = ?'; binds.push(parseInt(org_id)) }
+
+  q += ' ORDER BY c.last_name ASC, c.first_name ASC'
+
+  const contacts = await db.prepare(q).bind(...binds).all()
+  return c.json({ contacts: contacts.results || [] })
+})
+
 app.get('/api/crm/contacts/:id', async (c) => {
   const db = c.env.DB
   const id = parseInt(c.req.param('id'))
