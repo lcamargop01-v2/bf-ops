@@ -196,8 +196,6 @@ app.get('/api/crm/contacts', async (c) => {
 
 // Export contacts (all or filtered) — returns all matching records without pagination
 app.get('/api/crm/contacts/export', async (c) => {
-  const user = getUserFromHeader(c)
-  if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const db = c.env.DB
   const search = c.req.query('search')
   const status = c.req.query('status')
