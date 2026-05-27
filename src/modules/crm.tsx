@@ -357,15 +357,18 @@ app.put('/api/crm/opportunities/:id', async (c) => {
 // Move opportunity to a stage (drag-and-drop on pipeline board)
 app.post('/api/crm/opportunities/:id/move', async (c) => {
   const user = getUserFromHeader(c)
-  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  if (!user) return c.json({ error: 'Session expired — please log in again' }, 401)
   const db = c.env.DB
   const id = parseInt(c.req.param('id'))
-  const { stage_id } = await c.req.json()
+
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'Invalid request body' }, 400) }
+  const stage_id = body.stage_id
+  if (!stage_id) return c.json({ error: 'Missing stage_id' }, 400)
 
   const stage = await db.prepare('SELECT * FROM crm_pipeline_stages WHERE id = ?').bind(stage_id).first() as any
   if (!stage) return c.json({ error: 'Stage not found' }, 404)
 
-  const updates: any = { stage_id, probability: stage.win_probability, updated_at: 'CURRENT_TIMESTAMP' }
   let status = 'open'
   if (stage.stage_type === 'won') status = 'won'
   else if (stage.stage_type === 'lost') status = 'lost'

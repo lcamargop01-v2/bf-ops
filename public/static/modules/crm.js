@@ -3,6 +3,15 @@
 // Ties into POS via convert-to-customer flow
 
 var crmAPI = axios.create({ baseURL: '' });
+// Intercept 401 responses — prompt re-login on expired / missing token
+crmAPI.interceptors.response.use(function(resp) { return resp; }, function(err) {
+  if (err.response && err.response.status === 401) {
+    crmToast('Session expired — please log in again', 'error');
+    // Give user a moment to see the toast, then trigger shell logout
+    setTimeout(function() { if (typeof shellLogout === 'function') shellLogout(); }, 2000);
+  }
+  return Promise.reject(err);
+});
 var crmUser = null;
 var crmPage = 'dashboard'; // dashboard, pipeline, organizations, contacts, orgDetail, contactDetail, oppDetail
 var crmPipelines = [];
@@ -676,7 +685,11 @@ async function crmDrop(ev, stageId) {
     crmToast('Lead moved');
     crmDragOppId = null;
     crmRenderPipeline();
-  } catch(e) { crmToast('Failed to move lead', 'error'); }
+  } catch(e) {
+    var msg = (e.response && e.response.data && e.response.data.error) || e.message || 'Unknown error';
+    if (e.response && e.response.status !== 401) crmToast('Failed to move lead: ' + msg, 'error');
+    // 401 already handled by interceptor
+  }
 }
 
 // ==================== ORGANIZATIONS PAGE ====================
@@ -1110,7 +1123,10 @@ async function crmMoveOppToStage(oppId, stageId) {
     var resp = await crmAPI.post('/api/crm/opportunities/' + oppId + '/move', { stage_id: parseInt(stageId) }, { headers: crmHeaders() });
     crmToast('Moved to ' + (resp.data.stage_name || 'stage'));
     crmViewOpp(oppId);
-  } catch(e) { crmToast('Failed to move', 'error'); }
+  } catch(e) {
+    var msg = (e.response && e.response.data && e.response.data.error) || e.message || 'Unknown error';
+    if (e.response && e.response.status !== 401) crmToast('Failed to move: ' + msg, 'error');
+  }
 }
 
 async function crmConvertOpp(oppId) {
