@@ -1147,6 +1147,120 @@ app.get('/api/inventory/products/categories', async (c) => {
   return c.json({ categories: (cats.results || []).map((r: any) => r.category) })
 })
 
+// Preview recategorization — returns all products with suggested new category
+// IMPORTANT: This must be registered BEFORE /products/:id to avoid route collision
+app.get('/api/inventory/products/recategorize-preview', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+
+  // Fetch ALL products (including inactive) in batches
+  const allProducts: any[] = []
+  let offset = 0
+  const batchSize = 500
+  while (true) {
+    const batch = await db.prepare(
+      'SELECT id, name, sku, category, active FROM products ORDER BY name ASC LIMIT ? OFFSET ?'
+    ).bind(batchSize, offset).all()
+    const rows = batch.results || []
+    allProducts.push(...rows)
+    if (rows.length < batchSize) break
+    offset += batchSize
+  }
+
+  // Classify each product
+  const results = allProducts.map((p: any) => {
+    const suggested = classifyProduct(p.name, p.category)
+    return {
+      id: p.id,
+      name: p.name,
+      sku: p.sku,
+      current_category: p.category,
+      suggested_category: suggested,
+      changed: p.category !== suggested,
+      active: p.active
+    }
+  })
+
+  // Summary stats
+  const summary = {
+    total: results.length,
+    changed: results.filter(r => r.changed).length,
+    unchanged: results.filter(r => !r.changed).length,
+    by_suggested: {
+      hay: results.filter(r => r.suggested_category === 'hay').length,
+      shavings: results.filter(r => r.suggested_category === 'shavings').length,
+      grain: results.filter(r => r.suggested_category === 'grain').length,
+      shelf_goods: results.filter(r => r.suggested_category === 'shelf_goods').length
+    },
+    by_current: {} as Record<string, number>
+  }
+  results.forEach(r => {
+    summary.by_current[r.current_category] = (summary.by_current[r.current_category] || 0) + 1
+  })
+
+  return c.json({ products: results, summary })
+})
+
+// Apply recategorization — bulk update products with optional overrides
+app.post('/api/inventory/products/recategorize-apply', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  if (user.role !== 'admin' && user.role !== 'owner') {
+    return c.json({ error: 'Only admins can apply category consolidation' }, 403)
+  }
+  const db = c.env.DB
+  const body = await c.req.json()
+  // overrides: { [product_id]: category } — user can override specific products
+  const overrides: Record<number, string> = body.overrides || {}
+  const validCategories = ['hay', 'shavings', 'grain', 'shelf_goods']
+
+  // Fetch all products
+  const allProducts: any[] = []
+  let offset = 0
+  const batchSize = 500
+  while (true) {
+    const batch = await db.prepare(
+      'SELECT id, name, category FROM products ORDER BY id ASC LIMIT ? OFFSET ?'
+    ).bind(batchSize, offset).all()
+    const rows = batch.results || []
+    allProducts.push(...rows)
+    if (rows.length < batchSize) break
+    offset += batchSize
+  }
+
+  let updated = 0
+  let skipped = 0
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+
+  for (const p of allProducts) {
+    // Determine new category: override > AI suggestion
+    let newCat = overrides[p.id] || classifyProduct(p.name, p.category)
+    if (!validCategories.includes(newCat)) newCat = 'shelf_goods'
+
+    if (newCat !== p.category) {
+      await db.prepare('UPDATE products SET category = ? WHERE id = ?')
+        .bind(newCat, p.id).run()
+      updated++
+    } else {
+      skipped++
+    }
+  }
+
+  // Log the bulk action in audit
+  const anyStock = await db.prepare('SELECT location_id FROM inventory_stock LIMIT 1').first() as any
+  if (anyStock) {
+    await auditLog(db, {
+      product_id: 0, location_id: anyStock.location_id, action: 'category_consolidation', qty_change: 0,
+      reason: `Bulk category consolidation: ${updated} products updated, ${skipped} unchanged. Categories: hay, shavings, grain, shelf_goods`,
+      notes: `Overrides applied: ${Object.keys(overrides).length}`,
+      user_id: user.id, user_name: userInfo?.name || user.email
+    })
+  }
+
+  return c.json({ success: true, updated, skipped, total: allProducts.length })
+})
+
 // Get single product detail
 app.get('/api/inventory/products/:id', async (c) => {
   const db = c.env.DB
@@ -1226,6 +1340,96 @@ app.post('/api/inventory/products', async (c) => {
   const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(result.meta.last_row_id).first()
   return c.json({ success: true, product })
 })
+
+// ==================== CATEGORY CONSOLIDATION HELPER ====================
+
+// Classify a product into one of 4 categories: hay, shavings, grain, shelf_goods
+// Uses tiered matching: (1) exclusion rules for accessories/tools, (2) direct category match,
+// (3) keyword substring match with negative-match filters, (4) default to shelf_goods
+function classifyProduct(name: string, currentCategory: string): string {
+  const n = (name || '').toLowerCase()
+  const cat = (currentCategory || '').toLowerCase()
+
+  // === EXCLUSION RULES (checked FIRST to catch accessories/tools) ===
+  // Hay accessories: nets, bags (not "bag of hay"), feeders, racks
+  const hayAccessory = /\b(hay\s*net|haynet|haylage\s*net|hay\s*bag|hay\s*ring|hay\s*rack|hay\s*hook)\b/.test(n)
+    || (n.includes('hay') && /\b(net|feeder|ring|hook|rack|tote|carrier)\b/.test(n))
+    || (n.includes('haylage') && n.includes('net'))
+  if (hayAccessory && !n.includes('bag of hay')) return 'shelf_goods'
+
+  // Shavings accessories: forks, scoops
+  if (/\bshaving\s*fork\b/.test(n) || (n.includes('shaving') && /\b(fork|scoop|rake)\b/.test(n))) return 'shelf_goods'
+
+  // Feed accessories: scoops, buckets, pans, tubs, bins, holders, feeders (barn equipment)
+  const feedAccessory = /\b(feed\s*scoop|feed\s*bucket|feed\s*pan|feed\s*tub|feed\s*bin)\b/.test(n)
+    || (n.includes('feed') && /\b(scoop|bucket|pan|tub|bin)\b/.test(n))
+    || /\b(corner\s*feeder|hook\s*over\s*feeder|hang\s*feeder|greedy\s*feeder|slow\s*feed\s*net|net\s*slow\s*feed)\b/.test(n)
+    || /\b(salt\s*block\s*holder|salt\s*block\s*pan|salt\s*lick\s*holder|mineral\s*salt\s*block\s*pan)\b/.test(n)
+    || (n.includes('block') && /\b(holder|pan)\b/.test(n))
+    || (n.includes('feeder') && /\b(leash|rubber|hang)\b/.test(n))
+  if (feedAccessory) return 'shelf_goods'
+
+  // Cavalor supplements/treats (NOT feed) — check before the 'cavalor' brand keyword
+  const cavalorNonFeed = /\b(derma|electroliq|electrolyte\s*balance|gastro\s*aid|hepato|oilmega|resist|vitaflora|vitamino|nutri\s*plus|arti\s*matrix|bronchix|crunchies|fruities|sweeties)\b/.test(n)
+  if (n.includes('cavalor') && cavalorNonFeed) return 'shelf_goods'
+
+  // VETRX is a poultry health remedy, not feed
+  if (n.includes('vetrx')) return 'shelf_goods'
+
+  // === TIER 1: Direct category match ===
+
+  // --- HAY ---
+  if (cat === 'hay') return 'hay'
+  const hayKeywords = [
+    'hay', ' teff', 'teff ', 'alfalfa cube', 'alfalfa pellet', 'timothy', 'orchard grass',
+    'bermuda', 'alfa supreme', 'standlee', '3 string', '2 string', '3-string', '2-string',
+    '2nd cut', '1st cut', '3rd cut', 'grass hay', 'coastal', 'bale of',
+    'alfalfa/timothy', 'orchard/alfalfa', 'compressed hay', 'hay bale',
+    'straw bale', 'wheat straw', 'forage', 'timothy pellet'
+  ]
+  for (const kw of hayKeywords) {
+    if (n.includes(kw)) return 'hay'
+  }
+
+  // --- SHAVINGS / BEDDING ---
+  if (cat === 'shavings') return 'shavings'
+  const shavingsKeywords = [
+    'shaving', 'bedding', 'shavings', 'pine flake', 'wood pellet bed',
+    'stall dry', 'stall-dry', 'stalldry', 'sweet pdz', 'pdz',
+    'pelleted bedding', 'flake bedding', 'animal bedding'
+  ]
+  for (const kw of shavingsKeywords) {
+    if (n.includes(kw)) return 'shavings'
+  }
+
+  // --- GRAIN / FEED ---
+  if (cat === 'feed' || cat === 'poultry') return 'grain'
+  const grainKeywords = [
+    'feed', 'grain', ' oat', 'oats ', 'beet pulp', ' mash', 'mash ',
+    'cavalor', 'buckeye', 'nutrena', 'purina', 'tribute', 'calf-manna', 'calf manna',
+    'blue bonnet', 'equilene', 'intensify', 'action mix', 'cadence',
+    'fibremax', 'fibremash', 'fibre max', 'fibre mash',
+    'enrich plus', 'enrich 32', 'impact ', 'safechoice',
+    'strategy ', 'strategy gx', 'senior feed', 'mare & foal',
+    'sweet feed', 'pelleted feed', 'complete feed',
+    'layer pellet', 'layer crumble', 'scratch grain', 'chick starter',
+    'chicken feed', 'poultry feed', 'gamebird', 'game bird',
+    'dog food', 'cat food', 'rabbit pellet', 'goat feed',
+    'equine senior', 'equine junior', 'horse feed',
+    'rice bran', 'corn oil', 'flax seed', 'ration balancer',
+    'mineral block', 'salt block', 'salt lick', 'mineral tub',
+    'hay stretcher', 'alfalfa meal',
+    'cob ', ' cob', 'textured', 'pellet feed',
+    'omolene', 'ultium', 'empower', 'topline',
+    'kalm ultra', 'kalm n ez', 'progressiv', 'essential k'
+  ]
+  for (const kw of grainKeywords) {
+    if (n.includes(kw)) return 'grain'
+  }
+
+  // --- SHELF GOODS (everything else) ---
+  return 'shelf_goods'
+}
 
 export default app
 export { app as inventoryApp }

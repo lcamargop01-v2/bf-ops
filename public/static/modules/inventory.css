@@ -1053,6 +1053,23 @@
   .inv-product-info-card { grid-template-columns: 1fr 1fr; }
 }
 
+/* ==================== RECATEGORIZE BADGES ==================== */
+.inv-recat-old {
+  background: #F1F5F9;
+  color: #64748B;
+  text-decoration: line-through;
+  font-style: italic;
+}
+.inv-recat-hay { background: #D1FAE5; color: #065F46; }
+.inv-recat-shavings { background: #FEF3C7; color: #92400E; }
+.inv-recat-grain { background: #DBEAFE; color: #1E40AF; }
+.inv-recat-shelf_goods { background: #F3E8FF; color: #6B21A8; }
+/* Also style category badges globally for new categories */
+.inv-cat-hay { background: #D1FAE5; color: #065F46; }
+.inv-cat-shavings { background: #FEF3C7; color: #92400E; }
+.inv-cat-grain { background: #DBEAFE; color: #1E40AF; }
+.inv-cat-shelf_goods { background: #F3E8FF; color: #6B21A8; }
+
 /* ==================== VIEW-ONLY MODE ==================== */
 .inv-view-only .inv-btn-primary,
 .inv-view-only .inv-btn-danger,

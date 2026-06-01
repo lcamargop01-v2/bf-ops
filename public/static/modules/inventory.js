@@ -16,6 +16,10 @@ var invProductsTotal = 0;
 var invProductsOffset = 0;
 var invCountCategory = ''; // Quick Count category filter
 var invCountSort = 'name'; // Quick Count sort: name, category, sku, qty, last_counted
+var invRecatData = null; // Recategorize preview data
+var invRecatOverrides = {}; // User overrides { product_id: category }
+var invRecatFilter = ''; // Filter: '', 'changed', 'hay', 'shavings', 'grain', 'shelf_goods'
+var invRecatSearch = '';
 
 // Permission helper for edit access (view-only enforcement)
 function invCanEdit(feature) {
@@ -81,7 +85,7 @@ async function invLoadCategories() {
     var resp = await invAPI.get('/api/inventory/products/categories', { headers: invHeaders() });
     invCategoryList = resp.data.categories || [];
   } catch(e) {
-    invCategoryList = ['horse','cattle','poultry','swine','goat','supplement','hay','shavings','fly_spray','fly_control','electrolyte','gut_health','psyllium','oil','grooming','shampoo','liniment','clippers','leather','barn','treats','other'];
+    invCategoryList = ['hay','shavings','grain','shelf_goods'];
   }
 }
 
@@ -188,6 +192,11 @@ async function invRender() {
     root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
     var html = await invRenderAuditLog();
     root.innerHTML = invRenderNav() + html;
+  } else if (invPage === 'categories') {
+    root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Analyzing products...</div>';
+    var html = await invRenderCategoriesPage();
+    root = document.getElementById('inventory-app'); if (!root) return;
+    root.innerHTML = invRenderNav() + html;
   }
   } catch(err) {
     console.error('[Inventory] render error:', err);
@@ -208,7 +217,8 @@ function invRenderNav() {
     { id: 'losses', icon: 'fa-triangle-exclamation', label: 'Losses' },
     { id: 'holds', icon: 'fa-lock', label: 'Holds' },
     { id: 'reservations', icon: 'fa-bookmark', label: 'Reserved' },
-    { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' }
+    { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' },
+    { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' }
   ];
   // Filter by role permissions
   var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
@@ -938,6 +948,198 @@ function invActionIcon(action) {
     'init': '<i class="fas fa-download" style="color:#059669"></i>'
   };
   return icons[action] || '<i class="fas fa-circle-info" style="color:#6B7280"></i>';
+}
+
+// ==================== CATEGORY CONSOLIDATION PAGE ====================
+
+async function invRenderCategoriesPage() {
+  // Load preview data if not already loaded
+  if (!invRecatData) {
+    try {
+      var resp = await invAPI.get('/api/inventory/products/recategorize-preview', { headers: invHeaders() });
+      invRecatData = resp.data;
+    } catch(e) {
+      return '<div class="inv-section"><div class="inv-empty"><i class="fas fa-exclamation-triangle" style="font-size:36px;color:#DC2626;display:block;margin-bottom:12px"></i>' +
+        '<h3>Failed to load classification data</h3><p>' + (e.response?.data?.error || e.message) + '</p>' +
+        '<button class="inv-btn inv-btn-primary" onclick="invRecatData=null;invRender()"><i class="fas fa-redo"></i> Retry</button></div></div>';
+    }
+  }
+
+  var data = invRecatData;
+  var products = data.products || [];
+  var summary = data.summary || {};
+  var byS = summary.by_suggested || {};
+
+  // Apply filters
+  var filtered = products;
+  if (invRecatFilter === 'changed') {
+    filtered = products.filter(function(p) { return p.changed || invRecatOverrides[p.id]; });
+  } else if (['hay', 'shavings', 'grain', 'shelf_goods'].indexOf(invRecatFilter) >= 0) {
+    filtered = products.filter(function(p) {
+      var eff = invRecatOverrides[p.id] || p.suggested_category;
+      return eff === invRecatFilter;
+    });
+  }
+  if (invRecatSearch) {
+    var s = invRecatSearch.toLowerCase();
+    filtered = filtered.filter(function(p) {
+      return (p.name || '').toLowerCase().includes(s) || (p.sku || '').toLowerCase().includes(s) || (p.current_category || '').includes(s);
+    });
+  }
+
+  var overrideCount = Object.keys(invRecatOverrides).length;
+
+  var html = '<div class="inv-section" style="max-width:1200px;margin:16px auto">';
+
+  // Header
+  html += '<div class="inv-section-header"><h2><i class="fas fa-wand-magic-sparkles"></i> Category Consolidation</h2></div>';
+  html += '<p class="inv-muted" style="margin-bottom:16px">AI-powered classification of <strong>' + summary.total + '</strong> products into 4 categories. Review the suggestions below, override any you disagree with, then apply.</p>';
+
+  // Summary cards
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:20px">';
+  var cats = [
+    { key: 'hay', icon: 'fa-wheat-awn', color: '#059669', label: 'Hay' },
+    { key: 'shavings', icon: 'fa-tree', color: '#D97706', label: 'Shavings' },
+    { key: 'grain', icon: 'fa-seedling', color: '#2563EB', label: 'Grain' },
+    { key: 'shelf_goods', icon: 'fa-store', color: '#7C3AED', label: 'Shelf Goods' }
+  ];
+  cats.forEach(function(cat) {
+    var count = byS[cat.key] || 0;
+    var pct = summary.total > 0 ? Math.round(count / summary.total * 100) : 0;
+    var active = invRecatFilter === cat.key ? 'border:2px solid ' + cat.color + ';box-shadow:0 0 0 2px ' + cat.color + '30' : 'border:1px solid #E2E8F0';
+    html += '<div style="padding:14px;background:white;border-radius:10px;' + active + ';cursor:pointer;transition:all 0.15s" onclick="invRecatFilter=invRecatFilter===\'' + cat.key + '\'?\'\':' + '\'' + cat.key + '\';invRenderCatPage()">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><i class="fas ' + cat.icon + '" style="color:' + cat.color + ';font-size:16px"></i><strong>' + cat.label + '</strong></div>' +
+      '<div style="font-size:24px;font-weight:700;color:' + cat.color + '">' + count + '</div>' +
+      '<div style="font-size:11px;color:#94A3B8">' + pct + '% of all products</div>' +
+      '</div>';
+  });
+  html += '</div>';
+
+  // Change summary bar
+  html += '<div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap">';
+  html += '<span style="background:#D1FAE5;color:#065F46;padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600"><i class="fas fa-arrows-rotate"></i> ' + summary.changed + ' will change</span>';
+  html += '<span style="background:#F1F5F9;color:#64748B;padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600">' + summary.unchanged + ' unchanged</span>';
+  if (overrideCount > 0) {
+    html += '<span style="background:#DBEAFE;color:#1E40AF;padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600"><i class="fas fa-pen"></i> ' + overrideCount + ' manual overrides</span>';
+  }
+  html += '</div>';
+
+  // Filter toolbar
+  html += '<div class="inv-toolbar">';
+  html += '<div class="inv-search-box"><i class="fas fa-search"></i><input id="invRecatSearchInput" type="text" placeholder="Search products..." value="' + escH(invRecatSearch) + '" oninput="invRecatSearch=this.value;invRenderCatPage()"></div>';
+  var filterOpts = [
+    { val: '', label: 'All Products (' + summary.total + ')' },
+    { val: 'changed', label: 'Changed Only (' + summary.changed + ')' },
+    { val: 'hay', label: 'Hay (' + (byS.hay || 0) + ')' },
+    { val: 'shavings', label: 'Shavings (' + (byS.shavings || 0) + ')' },
+    { val: 'grain', label: 'Grain (' + (byS.grain || 0) + ')' },
+    { val: 'shelf_goods', label: 'Shelf Goods (' + (byS.shelf_goods || 0) + ')' }
+  ];
+  html += '<select class="inv-select" onchange="invRecatFilter=this.value;invRenderCatPage()">';
+  filterOpts.forEach(function(o) {
+    html += '<option value="' + o.val + '"' + (invRecatFilter === o.val ? ' selected' : '') + '>' + o.label + '</option>';
+  });
+  html += '</select>';
+  html += '<button class="inv-btn inv-btn-primary" onclick="invApplyRecategorize()"><i class="fas fa-check"></i> Apply All</button>';
+  html += '<button class="inv-btn inv-btn-outline" onclick="invRecatData=null;invRecatOverrides={};invRender()" title="Re-analyze"><i class="fas fa-redo"></i></button>';
+  html += '</div>';
+
+  html += '<div class="inv-stock-count">' + filtered.length + ' products shown</div>';
+
+  // Products table
+  html += '<div class="inv-table-wrap"><table class="inv-table inv-table-hover">';
+  html += '<thead><tr><th>Product</th><th>SKU</th><th>Current</th><th><i class="fas fa-arrow-right"></i></th><th>New Category</th><th>Override</th></tr></thead><tbody>';
+
+  var maxShow = 200;
+  var shown = filtered.slice(0, maxShow);
+  shown.forEach(function(p) {
+    var effCat = invRecatOverrides[p.id] || p.suggested_category;
+    var hasOverride = invRecatOverrides[p.id] ? true : false;
+    var changed = effCat !== p.current_category;
+    var rowClass = hasOverride ? 'style="background:#EFF6FF"' : changed ? 'style="background:#F0FDF4"' : '';
+    
+    html += '<tr ' + rowClass + '>' +
+      '<td><strong>' + escH(p.name) + '</strong></td>' +
+      '<td class="inv-muted">' + escH(p.sku || '—') + '</td>' +
+      '<td><span class="inv-cat-badge inv-recat-old">' + escH(p.current_category) + '</span></td>' +
+      '<td style="text-align:center">' + (changed ? '<i class="fas fa-arrow-right" style="color:#059669"></i>' : '<i class="fas fa-equals" style="color:#CBD5E1"></i>') + '</td>' +
+      '<td><span class="inv-cat-badge inv-recat-' + effCat + '">' + invCatLabel(effCat) + '</span></td>' +
+      '<td><select class="inv-select" style="padding:4px 8px;font-size:12px;min-width:110px" onchange="invRecatOverride(' + p.id + ',this.value)">' +
+      '<option value=""' + (!hasOverride ? ' selected' : '') + '>AI: ' + invCatLabel(p.suggested_category) + '</option>' +
+      '<option value="hay"' + (invRecatOverrides[p.id] === 'hay' ? ' selected' : '') + '>Hay</option>' +
+      '<option value="shavings"' + (invRecatOverrides[p.id] === 'shavings' ? ' selected' : '') + '>Shavings</option>' +
+      '<option value="grain"' + (invRecatOverrides[p.id] === 'grain' ? ' selected' : '') + '>Grain</option>' +
+      '<option value="shelf_goods"' + (invRecatOverrides[p.id] === 'shelf_goods' ? ' selected' : '') + '>Shelf Goods</option>' +
+      '</select></td></tr>';
+  });
+
+  if (filtered.length > maxShow) {
+    html += '<tr><td colspan="6" style="text-align:center;padding:16px;color:#64748B;font-style:italic">' +
+      'Showing ' + maxShow + ' of ' + filtered.length + ' — use search or filters to narrow results</td></tr>';
+  }
+
+  html += '</tbody></table></div>';
+  html += '</div>';
+  return html;
+}
+
+function invCatLabel(cat) {
+  var labels = { hay: 'Hay', shavings: 'Shavings', grain: 'Grain', shelf_goods: 'Shelf Goods' };
+  return labels[cat] || (cat || 'other').replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
+}
+
+function invRecatOverride(productId, value) {
+  if (value) {
+    invRecatOverrides[productId] = value;
+  } else {
+    delete invRecatOverrides[productId];
+  }
+  // Refresh the page inline
+  invRenderCatPage();
+}
+
+function invRenderCatPage() {
+  // Re-render categories page without reloading data
+  var root = document.getElementById('inventory-app');
+  if (!root || !invRecatData) return;
+  invRenderCategoriesPage().then(function(html) {
+    var r = document.getElementById('inventory-app');
+    if (r) r.innerHTML = invRenderNav() + html;
+  });
+}
+
+async function invApplyRecategorize() {
+  if (!invRecatData) { invToast('No data to apply', 'warning'); return; }
+
+  var changed = (invRecatData.products || []).filter(function(p) {
+    var eff = invRecatOverrides[p.id] || p.suggested_category;
+    return eff !== p.current_category;
+  }).length;
+
+  if (changed === 0) { invToast('No changes to apply', 'warning'); return; }
+
+  if (!confirm('Apply category consolidation?\n\n' + changed + ' products will be recategorized into:\n- Hay\n- Shavings\n- Grain\n- Shelf Goods\n\nThis action cannot be undone.')) return;
+
+  try {
+    var btn = document.querySelector('[onclick*="invApplyRecategorize"]');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying...'; }
+
+    var resp = await invAPI.post('/api/inventory/products/recategorize-apply', {
+      overrides: invRecatOverrides
+    }, { headers: invHeaders() });
+
+    invToast(resp.data.updated + ' products recategorized!');
+    // Clear cached data
+    invRecatData = null;
+    invRecatOverrides = {};
+    // Reload categories list
+    await invLoadCategories();
+    invRender();
+  } catch(e) {
+    invToast('Failed: ' + (e.response?.data?.error || e.message), 'error');
+    var btn = document.querySelector('[onclick*="invApplyRecategorize"]');
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Apply All'; }
+  }
 }
 
 // ==================== MODALS / DIALOGS ====================
