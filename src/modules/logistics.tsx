@@ -1363,34 +1363,76 @@ app.get('/api/routes/:id', async (c) => {
 
 app.post('/api/routes', async (c) => {
   const body = await c.req.json()
-  const routeNum = 'RT-' + body.date.replace(/-/g, '').slice(4) + '-' + Math.floor(Math.random() * 9 + 1)
-  const res = await c.env.DB.prepare(
+  const db = c.env.DB
+  // More entropy: 4 random digits to prevent collisions when creating multiple routes/day
+  const routeNum = 'RT-' + body.date.replace(/-/g, '').slice(4) + '-' + String(Math.floor(1000 + Math.random() * 9000))
+  const res = await db.prepare(
     'INSERT INTO routes (route_number, date, truck_id, driver_id, status, notes) VALUES (?,?,?,?,?,?)'
   ).bind(routeNum, body.date, body.truck_id || null, body.driver_id || null, 'planned', body.notes || null).run()
   const routeId = res.meta.last_row_id
+
+  // --- Batch all stop inserts + order status updates in one D1 batch ---
+  // This avoids sequential round-trips that cause timeouts with many orders
+  const batchStmts: D1PreparedStatement[] = []
   let seq = 1
-  if (body.order_ids) {
+
+  if (body.order_ids && body.order_ids.length > 0) {
+    // Pre-fetch all order snapshots in parallel (2 queries per order, but parallel)
+    const snapshots = await Promise.all(
+      body.order_ids.map((oid: number) => getOrderSnapshot(db, oid))
+    )
     for (let i = 0; i < body.order_ids.length; i++) {
-      await insertRouteStop(c.env.DB, routeId, body.order_ids[i], seq++)
-      await c.env.DB.prepare("UPDATE orders SET status = 'scheduled' WHERE id = ? AND status IN ('new','confirmed')").bind(body.order_ids[i]).run()
+      const oid = body.order_ids[i]
+      const snap = snapshots[i]
+      batchStmts.push(
+        db.prepare(
+          `INSERT INTO route_stops (route_id, order_id, sequence, added_at, items_snapshot, instructions_snapshot)
+           VALUES (?,?,?,datetime("now"),?,?)`
+        ).bind(routeId, oid, seq++, snap.items, snap.instructions)
+      )
+      batchStmts.push(
+        db.prepare("UPDATE orders SET status = 'scheduled' WHERE id = ? AND status IN ('new','confirmed')")
+          .bind(oid)
+      )
     }
   }
-  // Add return stops if provided
+
+  // Pre-fetch return data in parallel if needed
   if (body.return_ids && body.return_ids.length > 0) {
-    for (const retId of body.return_ids) {
-      const ret = await c.env.DB.prepare('SELECT * FROM returns WHERE id = ?').bind(retId).first() as any
+    const retDataArr = await Promise.all(
+      body.return_ids.map(async (retId: number) => {
+        const [ret, retItems] = await Promise.all([
+          db.prepare('SELECT * FROM returns WHERE id = ?').bind(retId).first() as Promise<any>,
+          db.prepare('SELECT ri.*, p.name, p.sku, p.pallet_qty FROM return_items ri JOIN products p ON ri.product_id = p.id WHERE ri.return_id = ?').bind(retId).all()
+        ])
+        return { retId, ret, retItems }
+      })
+    )
+    for (const { retId, ret, retItems } of retDataArr) {
       if (!ret) continue
-      const retItems = await c.env.DB.prepare('SELECT ri.*, p.name, p.sku, p.pallet_qty FROM return_items ri JOIN products p ON ri.product_id = p.id WHERE ri.return_id = ?').bind(retId).all()
       const itemsSnap = JSON.stringify(retItems.results.map((ri: any) => ({ product_id: ri.product_id, name: ri.name, sku: ri.sku, quantity: ri.expected_qty })))
-      await c.env.DB.prepare(
-        `INSERT INTO route_stops (route_id, order_id, return_id, sequence, added_at, items_snapshot, instructions_snapshot)
-         VALUES (?,NULL,?,?,datetime("now"),?,?)`
-      ).bind(routeId, retId, seq++, itemsSnap, ret.notes || '').run()
-      await c.env.DB.prepare('UPDATE returns SET scheduled_date = ?, route_id = ? WHERE id = ?').bind(body.date, routeId, retId).run()
+      batchStmts.push(
+        db.prepare(
+          `INSERT INTO route_stops (route_id, order_id, return_id, sequence, added_at, items_snapshot, instructions_snapshot)
+           VALUES (?,NULL,?,?,datetime("now"),?,?)`
+        ).bind(routeId, retId, seq++, itemsSnap, ret.notes || '')
+      )
+      batchStmts.push(
+        db.prepare('UPDATE returns SET scheduled_date = ?, route_id = ? WHERE id = ?')
+          .bind(body.date, routeId, retId)
+      )
     }
   }
-  // Capture route patterns for learning engine
-  captureRoutePatterns(c.env.DB, routeId as number, 'created').catch(() => {})
+
+  // Execute all stop inserts + status updates in a single D1 batch
+  if (batchStmts.length > 0) {
+    await db.batch(batchStmts)
+  }
+
+  // Defer learning engine capture to after response is sent (non-blocking)
+  c.executionCtx.waitUntil(
+    captureRoutePatterns(db, routeId as number, 'created').catch(() => {})
+  )
 
   return c.json({ id: routeId, route_number: routeNum }, 201)
 })
@@ -1705,11 +1747,11 @@ app.post('/api/routes/:id/reoptimize', async (c) => {
   }
   ordered.push(...noGeo)
 
-  // Update sequences: fixed stops first, then reordered
+  // Update sequences: fixed stops first, then reordered — batched
   const allOrdered = [...fixed, ...ordered]
-  for (let i = 0; i < allOrdered.length; i++) {
-    await c.env.DB.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, allOrdered[i].stop_id).run()
-  }
+  const reoptStmts: D1PreparedStatement[] = allOrdered.map((s, i) =>
+    c.env.DB.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, s.stop_id)
+  )
 
   // Recalculate total miles
   let totalMiles = 0, pLat = DEPOT.lat, pLng = DEPOT.lng
@@ -1717,7 +1759,8 @@ app.post('/api/routes/:id/reoptimize', async (c) => {
     totalMiles += distanceMiles(pLat, pLng, s.lat, s.lng); pLat = s.lat; pLng = s.lng
   }
   if (allOrdered.some(o => o.lat && o.lng)) totalMiles += distanceMiles(pLat, pLng, DEPOT.lat, DEPOT.lng)
-  await c.env.DB.prepare('UPDATE routes SET total_miles = ? WHERE id = ?').bind(Math.round(totalMiles * 10) / 10, routeId).run()
+  reoptStmts.push(c.env.DB.prepare('UPDATE routes SET total_miles = ? WHERE id = ?').bind(Math.round(totalMiles * 10) / 10, routeId))
+  await c.env.DB.batch(reoptStmts)
 
   return c.json({ success: true, total_miles: Math.round(totalMiles * 10) / 10, stops_reordered: ordered.length })
  } catch (e: any) {
@@ -1736,15 +1779,39 @@ app.post('/api/routes/:id/add-order-reoptimize', async (c) => {
   const route = await c.env.DB.prepare('SELECT date FROM routes WHERE id = ?').bind(routeId).first() as any
   if (!route) return c.json({ error: 'Route not found' }, 404)
 
-  // Add each order as a stop
-  const maxSeq = await c.env.DB.prepare('SELECT MAX(sequence) as m FROM route_stops WHERE route_id = ?').bind(routeId).first() as any
+  // Add each order as a stop — batched for performance
+  const db = c.env.DB
+  const maxSeq = await db.prepare('SELECT MAX(sequence) as m FROM route_stops WHERE route_id = ?').bind(routeId).first() as any
   let seq = (maxSeq?.m || 0) + 1
-  for (const oid of order_ids) {
-    // Check not already on this route
-    const exists = await c.env.DB.prepare('SELECT id FROM route_stops WHERE route_id = ? AND order_id = ?').bind(routeId, oid).first()
-    if (exists) continue
-    await insertRouteStop(c.env.DB, routeId, oid, seq++)
-    await c.env.DB.prepare("UPDATE orders SET status = 'scheduled', scheduled_date = ? WHERE id = ? AND status IN ('new','confirmed')").bind(route.date, oid).run()
+
+  // Check which orders are NOT already on this route (parallel)
+  const existChecks = await Promise.all(
+    order_ids.map((oid: number) => db.prepare('SELECT id FROM route_stops WHERE route_id = ? AND order_id = ?').bind(routeId, oid).first())
+  )
+  const newOrderIds = order_ids.filter((_: number, i: number) => !existChecks[i])
+
+  if (newOrderIds.length > 0) {
+    // Pre-fetch snapshots in parallel
+    const snapshots = await Promise.all(
+      newOrderIds.map((oid: number) => getOrderSnapshot(db, oid))
+    )
+    // Batch insert all stops + update order statuses
+    const batchStmts: D1PreparedStatement[] = []
+    for (let i = 0; i < newOrderIds.length; i++) {
+      const oid = newOrderIds[i]
+      const snap = snapshots[i]
+      batchStmts.push(
+        db.prepare(
+          `INSERT INTO route_stops (route_id, order_id, sequence, added_at, items_snapshot, instructions_snapshot)
+           VALUES (?,?,?,datetime("now"),?,?)`
+        ).bind(routeId, oid, seq++, snap.items, snap.instructions)
+      )
+      batchStmts.push(
+        db.prepare("UPDATE orders SET status = 'scheduled', scheduled_date = ? WHERE id = ? AND status IN ('new','confirmed')")
+          .bind(route.date, oid)
+      )
+    }
+    await db.batch(batchStmts)
   }
 
   // Now re-optimize the entire route using nearest-neighbor
@@ -1782,13 +1849,15 @@ app.post('/api/routes/:id/add-order-reoptimize', async (c) => {
   ordered.push(...noGeo)
 
   const allOrdered = [...fixed, ...ordered]
-  for (let i = 0; i < allOrdered.length; i++) {
-    await c.env.DB.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, allOrdered[i].stop_id).run()
-  }
+  // Batch all sequence updates + miles update in one round-trip
+  const reorderStmts: D1PreparedStatement[] = allOrdered.map((s, i) =>
+    db.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, s.stop_id)
+  )
   let totalMiles = 0, pLat = DEPOT.lat, pLng = DEPOT.lng
   for (const s of allOrdered.filter(o => o.lat && o.lng)) { totalMiles += distanceMiles(pLat, pLng, s.lat, s.lng); pLat = s.lat; pLng = s.lng }
   if (allOrdered.some(o => o.lat && o.lng)) totalMiles += distanceMiles(pLat, pLng, DEPOT.lat, DEPOT.lng)
-  await c.env.DB.prepare('UPDATE routes SET total_miles = ? WHERE id = ?').bind(Math.round(totalMiles * 10) / 10, routeId).run()
+  reorderStmts.push(db.prepare('UPDATE routes SET total_miles = ? WHERE id = ?').bind(Math.round(totalMiles * 10) / 10, routeId))
+  await db.batch(reorderStmts)
 
   return c.json({ success: true, added: order_ids.length, total_stops: allOrdered.length, total_miles: Math.round(totalMiles * 10) / 10 })
  } catch (e: any) {
@@ -1855,10 +1924,12 @@ app.delete('/api/routes/:id/stops/:stopId', async (c) => {
     // Clear both route_id and scheduled_date so the return appears unrouted
     await c.env.DB.prepare("UPDATE returns SET route_id = NULL, scheduled_date = NULL WHERE id = ?").bind(stop.return_id).run()
   }
-  // Re-sequence remaining stops
+  // Re-sequence remaining stops (batched)
   const remaining = await c.env.DB.prepare('SELECT id FROM route_stops WHERE route_id = ? ORDER BY sequence').bind(routeId).all()
-  for (let i = 0; i < remaining.results.length; i++) {
-    await c.env.DB.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, (remaining.results[i] as any).id).run()
+  if (remaining.results.length > 0) {
+    await c.env.DB.batch(
+      remaining.results.map((r: any, i: number) => c.env.DB.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, r.id))
+    )
   }
   return c.json({ success: true })
 })
@@ -1872,10 +1943,12 @@ app.delete('/api/orders/:orderId/route', async (c) => {
   await c.env.DB.prepare('DELETE FROM route_stops WHERE id = ?').bind(stop.id).run()
   // Revert order status to confirmed (unrouted)
   await c.env.DB.prepare("UPDATE orders SET status = 'confirmed' WHERE id = ? AND status IN ('new','confirmed','scheduled')").bind(orderId).run()
-  // Re-sequence remaining stops on that route
+  // Re-sequence remaining stops on that route (batched)
   const remaining = await c.env.DB.prepare('SELECT id FROM route_stops WHERE route_id = ? ORDER BY sequence').bind(routeId).all()
-  for (let i = 0; i < remaining.results.length; i++) {
-    await c.env.DB.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, (remaining.results[i] as any).id).run()
+  if (remaining.results.length > 0) {
+    await c.env.DB.batch(
+      remaining.results.map((r: any, i: number) => c.env.DB.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, r.id))
+    )
   }
   return c.json({ success: true, route_id: routeId })
 })
@@ -1888,10 +1961,12 @@ app.delete('/api/returns/:returnId/route', async (c) => {
   const routeId = stop.route_id
   await c.env.DB.prepare('DELETE FROM route_stops WHERE id = ?').bind(stop.id).run()
   await c.env.DB.prepare("UPDATE returns SET route_id = NULL, scheduled_date = NULL WHERE id = ?").bind(returnId).run()
-  // Re-sequence remaining stops
+  // Re-sequence remaining stops (batched)
   const remaining = await c.env.DB.prepare('SELECT id FROM route_stops WHERE route_id = ? ORDER BY sequence').bind(routeId).all()
-  for (let i = 0; i < remaining.results.length; i++) {
-    await c.env.DB.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, (remaining.results[i] as any).id).run()
+  if (remaining.results.length > 0) {
+    await c.env.DB.batch(
+      remaining.results.map((r: any, i: number) => c.env.DB.prepare('UPDATE route_stops SET sequence = ? WHERE id = ?').bind(i + 1, r.id))
+    )
   }
   return c.json({ success: true, route_id: routeId })
 })
