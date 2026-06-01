@@ -476,6 +476,64 @@
   font-size: 14px;
 }
 .inv-count-search:focus { border-color: #2563EB; outline: none; }
+
+/* Count page filter bar */
+.inv-count-filters {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.inv-count-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 140px;
+}
+.inv-count-filter-group label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748B;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.inv-count-filter-group label i { margin-right: 3px; font-size: 10px; }
+.inv-count-filter-group .inv-select {
+  padding: 7px 10px;
+  font-size: 13px;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  background: white;
+}
+.inv-count-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.inv-count-summary { font-size: 12px; color: #64748B; white-space: nowrap; }
+/* Last counted info */
+.inv-count-last {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px !important;
+  color: #059669 !important;
+  margin-top: 2px;
+}
+.inv-count-last i { font-size: 10px; }
+.inv-count-last.inv-count-never { color: #F59E0B !important; }
+/* Category badge in count items */
+.inv-count-item .inv-cat-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #EEF2FF;
+  color: #4338CA;
+  font-weight: 600;
+}
+
 .inv-count-list { margin-top: 12px; }
 .inv-count-item {
   display: flex;
@@ -650,6 +708,10 @@
   .inv-dashboard { padding: 10px; }
   .inv-count-page { padding: 10px; }
 
+  .inv-count-filters { gap: 8px; }
+  .inv-count-filter-group { min-width: 100px; }
+  .inv-count-toolbar { flex-wrap: wrap; }
+  .inv-count-toolbar-right { width: 100%; justify-content: space-between; margin-top: 4px; }
   .inv-count-item { padding: 10px 12px; }
   .inv-stepper-btn { width: 48px; height: 48px; font-size: 24px; }
   .inv-count-field { width: 80px; font-size: 22px; padding: 8px; }

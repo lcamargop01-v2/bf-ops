@@ -14,6 +14,8 @@ var invCategoryList = [];
 var invProductsPageData = [];
 var invProductsTotal = 0;
 var invProductsOffset = 0;
+var invCountCategory = ''; // Quick Count category filter
+var invCountSort = 'name'; // Quick Count sort: name, category, sku, qty, last_counted
 
 // Permission helper for edit access (view-only enforcement)
 function invCanEdit(feature) {
@@ -105,8 +107,12 @@ async function invLoadStock() {
     if (invSelectedLocation) url += 'location_id=' + invSelectedLocation + '&';
     var search = document.getElementById('invSearchInput');
     if (search && search.value) url += 'search=' + encodeURIComponent(search.value) + '&';
+    // Category filter — from stock page dropdown or count page state
     var cat = document.getElementById('invCategoryFilter');
     if (cat && cat.value) url += 'category=' + cat.value + '&';
+    else if (invPage === 'count' && invCountCategory) url += 'category=' + encodeURIComponent(invCountCategory) + '&';
+    // Sort — from count page state
+    if (invPage === 'count' && invCountSort) url += 'sort=' + invCountSort + '&';
     var resp = await invAPI.get(url, { headers: invHeaders() });
     invStockData = resp.data.stock || [];
   } catch(e) { console.error('Stock load failed:', e); }
@@ -410,43 +416,119 @@ function invRenderStockList() {
 // ==================== QUICK COUNT (MOBILE OPTIMIZED) ====================
 function invRenderQuickCount() {
   if (!invSelectedLocation) {
-    return '<div class="inv-section inv-empty">' +
-      '<i class="fas fa-location-dot" style="font-size:48px;color:#CBD5E1"></i>' +
-      '<h3>Select a Location</h3>' +
-      '<p>Choose a location from the dropdown above to start counting.</p>' +
-      '</div>';
+    // Show store selection cards
+    var html = '<div class="inv-count-page">';
+    html += '<div class="inv-count-header">';
+    html += '<h2><i class="fas fa-calculator"></i> Quick Count</h2>';
+    html += '<p>Select a store / location to start counting inventory.</p>';
+    html += '</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;padding:16px">';
+    invLocations.forEach(function(l) {
+      html += '<div class="inv-loc-card" onclick="invSelectedLocation=' + l.id + ';invRender()" style="cursor:pointer;padding:20px;background:white;border-radius:12px;border:1px solid #E2E8F0;text-align:center;transition:all 0.15s">' +
+        '<i class="fas fa-store" style="font-size:28px;color:#6366F1;margin-bottom:8px;display:block"></i>' +
+        '<strong style="display:block;font-size:15px">' + escH(l.name) + '</strong>' +
+        '<span class="inv-muted">' + escH(l.code) + '</span></div>';
+    });
+    html += '</div></div>';
+    return html;
   }
 
   var locName = invLocations.find(function(l) { return l.id == invSelectedLocation; });
   locName = locName ? locName.name : 'Location';
 
+  // Category filter options
+  var catOpts = '<option value="">All Categories</option>';
+  invCategoryList.forEach(function(c) {
+    var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
+    catOpts += '<option value="' + escH(c) + '"' + (invCountCategory === c ? ' selected' : '') + '>' + label + '</option>';
+  });
+
+  // Sort options
+  var sortOpts = [
+    { val: 'name', label: 'Name (A\u2013Z)' },
+    { val: 'category', label: 'Category' },
+    { val: 'sku', label: 'SKU' },
+    { val: 'qty', label: 'Qty (High\u2192Low)' },
+    { val: 'last_counted', label: 'Last Counted' }
+  ];
+  var sortHtml = sortOpts.map(function(o) {
+    return '<option value="' + o.val + '"' + (invCountSort === o.val ? ' selected' : '') + '>' + o.label + '</option>';
+  }).join('');
+
+  // Store selector
+  var storeOpts = '';
+  invLocations.forEach(function(l) {
+    storeOpts += '<option value="' + l.id + '"' + (invSelectedLocation == l.id ? ' selected' : '') + '>' + escH(l.code) + ' \u2014 ' + escH(l.name) + '</option>';
+  });
+
   var html = '<div class="inv-count-page">';
   html += '<div class="inv-count-header">';
-  html += '<h2><i class="fas fa-calculator"></i> Quick Count — ' + escH(locName) + '</h2>';
+  html += '<h2><i class="fas fa-calculator"></i> Quick Count \u2014 ' + escH(locName) + '</h2>';
   html += '<p>Tap quantities to update. Changes are highlighted. Submit when done.</p>';
-  html += '<div class="inv-count-toolbar">';
-  html += '<input id="invCountSearch" type="text" placeholder="Search products..." class="inv-count-search" oninput="invFilterCountList()">';
-  if (invCanEdit('count')) html += '<button class="inv-btn inv-btn-primary" onclick="invSubmitBulkCount()"><i class="fas fa-check"></i> Submit Count</button>';
-  html += '</div>';
+
+  // Row 1: Store + Category + Sort
+  html += '<div class="inv-count-filters">';
+  html += '<div class="inv-count-filter-group"><label><i class="fas fa-store"></i> Store</label>';
+  html += '<select class="inv-select" onchange="invSelectedLocation=this.value;invRender()">' + storeOpts + '</select></div>';
+  html += '<div class="inv-count-filter-group"><label><i class="fas fa-tags"></i> Category</label>';
+  html += '<select class="inv-select" onchange="invCountCategory=this.value;invRender()">' + catOpts + '</select></div>';
+  html += '<div class="inv-count-filter-group"><label><i class="fas fa-sort"></i> Sort By</label>';
+  html += '<select class="inv-select" onchange="invCountSort=this.value;invRender()">' + sortHtml + '</select></div>';
   html += '</div>';
 
+  // Row 2: Search + Summary + Submit
+  html += '<div class="inv-count-toolbar">';
+  html += '<input id="invCountSearch" type="text" placeholder="Search products..." class="inv-count-search" oninput="invFilterCountList()">';
+  html += '<div class="inv-count-toolbar-right">';
+  html += '<span id="invCountSummary" class="inv-count-summary">' + invStockData.length + ' items</span>';
+  if (invCanEdit('count')) html += '<button class="inv-btn inv-btn-primary" onclick="invSubmitBulkCount()"><i class="fas fa-check"></i> Submit Count</button>';
+  html += '</div></div>';
+  html += '</div>'; // end header
+
+  // Count list
   html += '<div id="invCountList" class="inv-count-list">';
+  if (invStockData.length === 0) {
+    html += '<div class="inv-empty" style="padding:40px;text-align:center"><i class="fas fa-box-open" style="font-size:36px;color:#CBD5E1;margin-bottom:12px;display:block"></i><p>No products found for this location' + (invCountCategory ? ' and category' : '') + '.</p></div>';
+  }
   invStockData.forEach(function(s, idx) {
+    var catLabel = (s.category || 'other').replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
+    var lastCountedInfo = '';
+    if (s.last_counted_at) {
+      lastCountedInfo = '<span class="inv-count-last"><i class="fas fa-user-check"></i> ' +
+        escH(s.last_counted_by_name || 'Unknown') + ' \u00b7 ' + invFmtDateShort(s.last_counted_at) + '</span>';
+    } else {
+      lastCountedInfo = '<span class="inv-count-last inv-count-never"><i class="fas fa-exclamation-circle"></i> Never counted</span>';
+    }
     html += '<div class="inv-count-item" data-name="' + escH((s.product_name || '').toLowerCase()) + '" data-sku="' + escH((s.sku || '').toLowerCase()) + '">' +
       '<div class="inv-count-item-info">' +
       '<strong>' + escH(s.product_name) + '</strong>' +
-      '<span class="inv-muted">' + escH(s.sku || '') + ' · ' + escH(s.unit_type || '') + '</span>' +
+      '<span class="inv-muted">' + escH(s.sku || '') + ' \u00b7 ' + escH(s.unit_type || '') + ' \u00b7 <span class="inv-cat-badge">' + catLabel + '</span></span>' +
+      lastCountedInfo +
       '</div>' +
       '<div class="inv-count-item-input">' +
       '<span class="inv-count-current">was: ' + (s.qty_on_hand || 0) + '</span>' +
       '<div class="inv-count-stepper">' +
-      '<button class="inv-stepper-btn" onclick="invStepCount(' + idx + ',-1)">−</button>' +
+      '<button class="inv-stepper-btn" onclick="invStepCount(' + idx + ',-1)">\u2212</button>' +
       '<input type="number" id="invCount_' + idx + '" class="inv-count-field" value="' + (s.qty_on_hand || 0) + '" data-original="' + (s.qty_on_hand || 0) + '" data-product="' + s.product_id + '" inputmode="numeric" onchange="invMarkChanged(' + idx + ')">' +
       '<button class="inv-stepper-btn" onclick="invStepCount(' + idx + ',1)">+</button>' +
       '</div></div></div>';
   });
   html += '</div></div>';
   return html;
+}
+
+// Format date for quick count display
+function invFmtDateShort(d) {
+  if (!d) return '';
+  try {
+    var dt = new Date(d);
+    var now = new Date();
+    var diff = now - dt;
+    if (diff < 86400000) return 'Today';
+    if (diff < 172800000) return 'Yesterday';
+    if (diff < 604800000) return Math.floor(diff / 86400000) + 'd ago';
+    return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  } catch(e) { return ''; }
 }
 
 function invStepCount(idx, delta) {
@@ -468,6 +550,12 @@ function invMarkChanged(idx) {
     item.classList.add('inv-count-changed');
   } else {
     item.classList.remove('inv-count-changed');
+  }
+  // Update changed count summary
+  var changed = document.querySelectorAll('.inv-count-changed').length;
+  var summary = document.getElementById('invCountSummary');
+  if (summary) {
+    summary.innerHTML = invStockData.length + ' items' + (changed > 0 ? ' · <strong style="color:#059669">' + changed + ' changed</strong>' : '');
   }
 }
 

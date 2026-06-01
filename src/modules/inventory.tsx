@@ -58,10 +58,12 @@ app.get('/api/inventory/dashboard', async (c) => {
   const locationId = c.req.query('location_id')
 
   let stockQuery = `SELECT s.*, p.name as product_name, p.sku, p.category, p.unit_type, p.price, p.cost, p.weight_per_unit,
-    l.name as location_name, l.code as location_code
+    l.name as location_name, l.code as location_code,
+    u_count.name as last_counted_by_name
     FROM inventory_stock s
     JOIN products p ON s.product_id = p.id
     JOIN locations l ON s.location_id = l.id
+    LEFT JOIN users u_count ON s.last_counted_by = u_count.id
     WHERE p.active = 1`
   const binds: any[] = []
   if (locationId) { stockQuery += ' AND s.location_id = ?'; binds.push(parseInt(locationId)) }
@@ -110,12 +112,15 @@ app.get('/api/inventory/stock', async (c) => {
   const category = c.req.query('category')
   const search = c.req.query('search')
   const lowStockOnly = c.req.query('low_stock') === '1'
+  const sort = c.req.query('sort') // name, category, sku, qty, last_counted
 
   let query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
-    l.name as location_name, l.code as location_code
+    l.name as location_name, l.code as location_code,
+    u_count.name as last_counted_by_name
     FROM inventory_stock s
     JOIN products p ON s.product_id = p.id
     JOIN locations l ON s.location_id = l.id
+    LEFT JOIN users u_count ON s.last_counted_by = u_count.id
     WHERE p.active = 1`
   const binds: any[] = []
 
@@ -124,7 +129,14 @@ app.get('/api/inventory/stock', async (c) => {
   if (search) { query += ' AND (p.name LIKE ? OR p.sku LIKE ?)'; binds.push(`%${search}%`, `%${search}%`) }
   if (lowStockOnly) { query += ' AND s.reorder_point > 0 AND s.qty_on_hand <= s.reorder_point' }
 
-  query += ' ORDER BY p.name ASC'
+  const orderMap: Record<string, string> = {
+    category: 'p.category ASC, p.name ASC',
+    sku: 'p.sku ASC',
+    qty: 's.qty_on_hand DESC, p.name ASC',
+    last_counted: 's.last_counted_at DESC NULLS LAST, p.name ASC'
+  }
+  query += ' ORDER BY ' + (orderMap[sort || ''] || 'p.name ASC')
+
   const stock = await db.prepare(query).bind(...binds).all()
   return c.json({ stock: stock.results || [] })
 })
