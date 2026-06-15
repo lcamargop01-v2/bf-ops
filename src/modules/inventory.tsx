@@ -1233,18 +1233,26 @@ app.post('/api/inventory/products/recategorize-apply', async (c) => {
   let skipped = 0
   const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
 
+  // Build batch of UPDATE statements for changed products
+  const batchStmts: D1PreparedStatement[] = []
   for (const p of allProducts) {
-    // Determine new category: override > AI suggestion
     let newCat = overrides[p.id] || classifyProduct(p.name, p.category)
     if (!validCategories.includes(newCat)) newCat = 'shelf_goods'
 
     if (newCat !== p.category) {
-      await db.prepare('UPDATE products SET category = ? WHERE id = ?')
-        .bind(newCat, p.id).run()
+      batchStmts.push(
+        db.prepare('UPDATE products SET category = ? WHERE id = ?').bind(newCat, p.id)
+      )
       updated++
     } else {
       skipped++
     }
+  }
+
+  // D1 batch limit is ~100 statements per batch call, so chunk them
+  const BATCH_CHUNK = 80
+  for (let i = 0; i < batchStmts.length; i += BATCH_CHUNK) {
+    await db.batch(batchStmts.slice(i, i + BATCH_CHUNK))
   }
 
   // Log the bulk action in audit
