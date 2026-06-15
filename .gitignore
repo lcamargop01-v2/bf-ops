@@ -21,6 +21,11 @@ logs/
 .DS_Store
 Thumbs.db
 
+# iOS build artifacts (keep project structure, ignore build outputs)
+ios/App/Pods/
+ios/App/build/
+ios/capacitor-cordova-ios-plugins/
+
 # Backup files
 *.backup
 *.bak

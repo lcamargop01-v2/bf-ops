@@ -9,14 +9,26 @@
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
     "db:migrate:local": "wrangler d1 migrations apply bf-deliver-production --local",
     "db:migrate:prod": "wrangler d1 migrations apply bf-deliver-production",
-    "db:seed": "wrangler d1 execute bf-deliver-production --local --file=./seed.sql"
+    "db:seed": "wrangler d1 execute bf-deliver-production --local --file=./seed.sql",
+    "cap:sync": "npm run build && npx cap sync ios",
+    "cap:open": "npx cap open ios",
+    "cap:build": "npm run build && npx cap sync ios && echo 'Open Xcode: npx cap open ios'"
   },
   "dependencies": {
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/core": "^8.4.0",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.4.0",
+    "@capacitor/keyboard": "^8.0.3",
+    "@capacitor/splash-screen": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.2",
     "hono": "^4.11.10"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.6.6",
     "@hono/vite-build": "^1.2.0",
     "@hono/vite-dev-server": "^0.18.2",
+    "typescript": "^6.0.3",
     "vite": "^6.3.5",
     "wrangler": "^4.4.0"
   }
