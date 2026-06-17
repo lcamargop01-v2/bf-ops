@@ -26,7 +26,8 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 
 /* Layout */
 .layout { display: flex; min-height: 100vh; }
-.sidebar { width: var(--sidebar-w); background: linear-gradient(180deg, var(--navy-dark) 0%, var(--navy) 100%); color: white; position: fixed; top: 0; left: 0; bottom: 0; z-index: 40; transition: transform 0.3s ease; overflow-y: auto; }
+.sidebar { width: var(--sidebar-w); background: linear-gradient(180deg, var(--navy-dark) 0%, var(--navy) 100%); color: white; position: fixed; top: 0; left: 0; bottom: 0; z-index: 40; transition: transform 0.3s ease; overflow-y: auto;
+  padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 .sidebar-hidden { transform: translateX(-100%); }
 .main-content { flex: 1; margin-left: var(--sidebar-w); min-height: 100vh; transition: margin-left 0.3s ease; }
 .main-content.full-width { margin-left: 0; }
@@ -51,7 +52,8 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .sidebar-user-role { font-size: 11px; color: rgba(255,255,255,0.5); text-transform: capitalize; }
 
 /* Top Bar */
-.topbar { background: white; border-bottom: 1px solid var(--gray-200); padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 30; }
+.topbar { background: white; border-bottom: 1px solid var(--gray-200); padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 30;
+  padding-right: calc(24px + env(safe-area-inset-right, 0px)); }
 .topbar-left { display: flex; align-items: center; gap: 16px; }
 .topbar-title { font-size: 18px; font-weight: 700; color: var(--gray-800); }
 .topbar-breadcrumb { font-size: 13px; color: var(--gray-400); }
@@ -316,7 +318,7 @@ tbody tr { cursor: pointer; transition: background 0.1s; }
   .tab { padding: 8px 14px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
 
   /* --- Toast --- */
-  .toast-container { top: auto; bottom: 12px; right: 12px; left: 12px; }
+  .toast-container { top: auto; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); right: 12px; left: 12px; }
   .toast { min-width: 0; width: 100%; font-size: 13px; }
 
   /* --- Driver View --- */
@@ -828,7 +830,7 @@ tr[draggable="true"]:hover .drag-handle { color: var(--navy); }
 
 /* ==================== SCAN QUEUE DOCK ==================== */
 .scan-queue-dock {
-  position: fixed; bottom: 20px; right: 20px; z-index: 10000;
+  position: fixed; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); right: calc(20px + env(safe-area-inset-right, 0px)); z-index: 10000;
   width: 360px; max-height: 480px;
   background: white; border-radius: 16px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08);
@@ -1146,7 +1148,7 @@ tr[draggable="true"]:hover .drag-handle { color: var(--navy); }
   .wh-count-controls { width:100%; justify-content:center; }
   .wh-count-input { font-size:20px; width:80px; }
   .wh-count-btn { width:48px; height:48px; font-size:18px; }
-  .wh-count-footer { position:fixed; bottom:0; left:0; right:0; border-radius:0; padding:12px 16px; box-shadow:0 -4px 16px rgba(0,0,0,0.1); }
+  .wh-count-footer { position:fixed; bottom:0; left:0; right:0; border-radius:0; padding:12px 16px; padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px)); box-shadow:0 -4px 16px rgba(0,0,0,0.1); }
   .wh-load-stop-header { flex-wrap:wrap; padding:12px; gap:8px; }
   .wh-load-stop-status { width:100%; }
   .wh-load-stop-status .wh-btn { width:100%; justify-content:center; font-size:16px; padding:14px; }

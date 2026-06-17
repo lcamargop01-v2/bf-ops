@@ -237,7 +237,8 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   .shell-module-icon { width: 44px; height: 44px; border-radius: 10px; font-size: 20px; margin-bottom: 14px; }
 
   /* --- Topbar inside module --- */
-  .shell-topbar { height: 48px; padding: 0 10px; gap: 6px; }
+  .shell-topbar { height: calc(48px + var(--sat)); padding: var(--sat) 10px 0; gap: 6px;
+    padding-left: calc(10px + var(--sal)); padding-right: calc(10px + var(--sar)); }
   .shell-module-tabs { display: none; }
   .shell-mobile-module-select { display: block; }
   .shell-back-btn { padding: 5px 8px; font-size: 11px; }
@@ -256,7 +257,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   .shell-admin-table .hide-mobile { display: none; }
 
   /* --- Toast --- */
-  .shell-toast { top: auto; bottom: 16px; right: 12px; left: 12px; max-width: 100%; font-size: 13px; }
+  .shell-toast { top: auto; bottom: calc(16px + var(--sab)); right: 12px; left: 12px; max-width: 100%; font-size: 13px; }
 }
 
 @media (max-width: 480px) {
