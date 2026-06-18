@@ -5,6 +5,7 @@ import { logisticsApp } from './modules/logistics'
 import { inventoryApp } from './modules/inventory'
 import { purchasingApp } from './modules/purchasing'
 import { crmApp } from './modules/crm'
+import { reportsApp } from './modules/reports'
 
 const app = new Hono<{ Bindings: BFBindings; Variables: BFVariables }>()
 
@@ -41,7 +42,7 @@ app.post('/api/auth/login', async (c) => {
   const modules = accessRows.results?.map((r: any) => r.module) || []
 
   // Admins get all modules
-  const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : modules
+  const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'reports', 'pos', 'tasks', 'admin'] : modules
 
   // Get role-based feature permissions with access levels
   let featurePerms: any = 'all'
@@ -94,7 +95,7 @@ app.get('/api/auth/me', async (c) => {
 
     const accessRows = await db.prepare('SELECT module FROM user_module_access WHERE user_id = ?').bind(user.id).all()
     const modules = accessRows.results?.map((r: any) => r.module) || []
-    const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'pos', 'tasks', 'admin'] : modules
+    const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'reports', 'pos', 'tasks', 'admin'] : modules
 
     let pinnedPages = null
     try { pinnedPages = user.pinned_pages ? JSON.parse(user.pinned_pages) : null } catch {}
@@ -376,6 +377,19 @@ const MODULE_FEATURES: Record<string, { id: string; label: string }[]> = {
     { id: 'organizations', label: 'Organizations' },
     { id: 'contacts', label: 'Contacts' },
   ],
+  reports: [
+    { id: 'financial', label: 'Financial' },
+    { id: 'sales', label: 'Sales' },
+    { id: 'products', label: 'Products' },
+    { id: 'purchasing', label: 'Purchasing' },
+    { id: 'delivery', label: 'Delivery' },
+    { id: 'returns', label: 'Returns' },
+    { id: 'customers', label: 'Customers' },
+    { id: 'inventory', label: 'Inventory' },
+    { id: 'fleet', label: 'Fleet' },
+    { id: 'warehouse', label: 'Warehouse' },
+    { id: 'export', label: 'Data Export' },
+  ],
 }
 
 app.get('/api/admin/module-features', (c) => {
@@ -526,6 +540,9 @@ app.route('/', purchasingApp)
 
 // CRM module: /api/crm/*
 app.route('/', crmApp)
+
+// Reports module: /api/reports/*
+app.route('/', reportsApp)
 
 // Logistics module: /api/orders, /api/routes, /api/customers, etc.
 app.route('/', logisticsApp)

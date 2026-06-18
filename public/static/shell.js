@@ -11,6 +11,7 @@ var MODULES = [
   { id: 'inventory', name: 'Inventory', icon: 'fa-warehouse', desc: 'Stock levels, movements, multi-location tracking', color: '#059669' },
   { id: 'ordering', name: 'Purchasing', icon: 'fa-cart-shopping', desc: 'Purchase orders, vendors, receiving', color: '#D97706' },
   { id: 'crm', name: 'CRM', icon: 'fa-handshake', desc: 'Contacts, organizations, sales pipeline', color: '#6366F1' },
+  { id: 'reports', name: 'Reports', icon: 'fa-chart-pie', desc: 'Comprehensive reporting, exports, analytics', color: '#8B5CF6' },
   { id: 'pos', name: 'Point of Sale', icon: 'fa-cash-register', desc: 'Register, payments, receipts', color: '#7C3AED', soon: true },
   { id: 'tasks', name: 'Tasks', icon: 'fa-list-check', desc: 'Team tasks, checklists, operations', color: '#DC2626', soon: true },
 ];
@@ -320,6 +321,8 @@ function launchModule(moduleId, initialPage) {
     loadPurchasingModule();
   } else if (moduleId === 'crm') {
     loadCRMModule();
+  } else if (moduleId === 'reports') {
+    loadReportsModule();
   } else {
     document.getElementById('moduleFrame').innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px">
@@ -337,6 +340,9 @@ function cleanupActiveModule() {
   }
   if (typeof window._crmCleanup === 'function') {
     try { window._crmCleanup(); } catch(e) {}
+  }
+  if (typeof window._reportsCleanup === 'function') {
+    try { window._reportsCleanup(); } catch(e) {}
   }
   // Remove module-specific stylesheets
   document.querySelectorAll('link[data-module]').forEach(el => el.remove());
@@ -554,6 +560,44 @@ function loadCRMModule() {
     document.body.appendChild(script);
   } else {
     if (typeof window._crmInit === 'function') window._crmInit();
+  }
+}
+
+// ==================== REPORTS MODULE LOADER ====================
+
+function loadReportsModule() {
+  const frame = document.getElementById('moduleFrame');
+
+  // Load reports CSS if needed
+  if (!document.querySelector('link[data-module="reports-css"]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/static/modules/reports.css?v=' + Date.now();
+    link.dataset.module = 'reports-css';
+    document.head.appendChild(link);
+  }
+
+  // Load Chart.js if needed
+  if (!document.querySelector('script[data-module="chartjs"]')) {
+    const chartScript = document.createElement('script');
+    chartScript.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+    chartScript.dataset.module = 'chartjs';
+    document.head.appendChild(chartScript);
+  }
+
+  frame.innerHTML = '<div id="reports-app"></div>';
+
+  if (!loadedModuleScripts.reports) {
+    const script = document.createElement('script');
+    script.src = '/static/modules/reports.js?v=' + Date.now();
+    script.dataset.module = 'reports';
+    script.onload = () => {
+      loadedModuleScripts.reports = true;
+      if (typeof window._reportsInit === 'function') window._reportsInit();
+    };
+    document.body.appendChild(script);
+  } else {
+    if (typeof window._reportsInit === 'function') window._reportsInit();
   }
 }
 
