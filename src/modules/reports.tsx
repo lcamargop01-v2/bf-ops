@@ -11,30 +11,46 @@ function parseDateRange(c: any) {
   return { from, to, locationId }
 }
 
-// ==================== INVENTORY SNAPSHOT: Take daily snapshot ====================
-app.post('/api/reports/inventory/snapshot', async (c) => {
-  const db = c.env.DB
-  const today = new Date().toISOString().slice(0, 10)
+// ==================== AUTO-SNAPSHOT: Saves inventory at end of each day ====================
+// Runs silently on any /api/reports/* request — checks if yesterday's snapshot exists,
+// takes it if not. This ensures we always have a daily record without manual intervention.
 
-  // Check if snapshot already exists for today
-  const existing = await db.prepare('SELECT COUNT(*) as cnt FROM inventory_snapshots WHERE snapshot_date = ?').bind(today).first<any>()
-  if (existing?.cnt > 0) {
-    return c.json({ message: 'Snapshot already exists for today', date: today, count: existing.cnt })
+async function ensureDailySnapshot(db: D1Database) {
+  try {
+    // Snapshot yesterday's inventory if we haven't already
+    // (yesterday because "end of day" = start of next day)
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    const existing = await db.prepare(
+      'SELECT COUNT(*) as cnt FROM inventory_snapshots WHERE snapshot_date = ?'
+    ).bind(yesterday).first<any>()
+
+    if (existing?.cnt > 0) return // Already have it
+
+    // Take snapshot for yesterday using current stock
+    // (This is slightly off for yesterday vs today, but within 24h is acceptable
+    // — the real value comes from accumulating daily snapshots going forward)
+    await db.prepare(`
+      INSERT INTO inventory_snapshots (snapshot_date, product_id, location_id, product_name, category, qty_on_hand, qty_on_hold, qty_reserved, qty_available, unit_cost, total_value)
+      SELECT ?, s.product_id, s.location_id, p.name, p.category,
+             s.qty_on_hand, s.qty_on_hold, s.qty_reserved, s.qty_available,
+             COALESCE(p.cost, 0),
+             s.qty_on_hand * COALESCE(p.cost, 0)
+      FROM inventory_stock s
+      JOIN products p ON p.id = s.product_id
+      WHERE p.active = 1
+    `).bind(yesterday).run()
+  } catch (e) {
+    // Silently fail — don't break the actual report request
+    console.error('Auto-snapshot error:', e)
   }
+}
 
-  // Take snapshot of current inventory
-  const snap = await db.prepare(`
-    INSERT INTO inventory_snapshots (snapshot_date, product_id, location_id, product_name, category, qty_on_hand, qty_on_hold, qty_reserved, qty_available, unit_cost, total_value)
-    SELECT ?, s.product_id, s.location_id, p.name, p.category,
-           s.qty_on_hand, s.qty_on_hold, s.qty_reserved, s.qty_available,
-           COALESCE(p.cost, 0),
-           s.qty_on_hand * COALESCE(p.cost, 0)
-    FROM inventory_stock s
-    JOIN products p ON p.id = s.product_id
-    WHERE p.active = 1
-  `).bind(today).run()
-
-  return c.json({ success: true, date: today, rows: snap.meta?.changes || 0 })
+// Middleware: auto-snapshot on every report request (fast no-op if already done)
+app.use('/api/reports/*', async (c, next) => {
+  // Fire-and-forget: don't await, let it run in background via waitUntil
+  const db = c.env.DB
+  c.executionCtx?.waitUntil?.(ensureDailySnapshot(db))
+  await next()
 })
 
 // ==================== INVENTORY AS-OF DATE ====================

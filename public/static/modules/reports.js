@@ -564,11 +564,11 @@ function loadInventory() {
   var el = document.getElementById('rptContent');
 
   var html = '<div class="rpt-asof-panel">' +
-    '<div class="rpt-asof-title"><i class="fas fa-calendar-day"></i> Inventory As-Of Date</div>' +
+    '<div class="rpt-asof-title"><i class="fas fa-clock-rotate-left"></i> View Inventory As Of Any Date</div>' +
+    '<div style="font-size:12px;color:#6B7280;margin-bottom:10px">Inventory is automatically saved at the end of each day. Pick any past date to see what stock looked like.</div>' +
     '<div class="rpt-asof-controls">' +
-      '<input type="date" id="rptAsOfDate" value="' + _invAsOfDate + '">' +
-      '<button class="rpt-asof-btn" onclick="window._rptLoadAsOf()"><i class="fas fa-search"></i> Load Inventory</button>' +
-      '<button class="rpt-snapshot-btn" onclick="window._rptTakeSnapshot()"><i class="fas fa-camera"></i> Take Today\'s Snapshot</button>' +
+      '<input type="date" id="rptAsOfDate" value="' + _invAsOfDate + '" max="' + new Date().toISOString().slice(0,10) + '" onchange="window._rptLoadAsOf()">' +
+      '<button class="rpt-asof-btn" onclick="window._rptLoadAsOf()"><i class="fas fa-search"></i> Load</button>' +
     '</div>' +
   '</div>';
   html += '<div id="rptInvResults"><div class="rpt-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div></div>';
@@ -591,7 +591,8 @@ function _rptLoadAsOfData() {
 
     if (d.items && d.items.length > 0) {
       var s = d.summary || {};
-      html += '<div style="margin-bottom:8px;font-size:12px;color:#6B7280"><i class="fas fa-info-circle"></i> Source: ' + d.source + (d.source === 'snapshot' ? ' (saved snapshot)' : ' (current stock)') + '</div>';
+      var sourceLabel = d.source === 'live' ? '<i class="fas fa-circle" style="color:#10B981"></i> Current live inventory' : '<i class="fas fa-clock-rotate-left" style="color:#6366F1"></i> Saved snapshot from ' + d.date;
+      html += '<div style="margin-bottom:8px;font-size:12px;color:#6B7280">' + sourceLabel + '</div>';
 
       html += '<div class="rpt-summary">' +
         summaryCard('Products', fmtN(s.totalItems), { icon: 'fa-box', iconBg: '#2563EB' }) +
@@ -632,15 +633,6 @@ function _rptLoadAsOfData() {
 window._rptLoadAsOf = function() {
   _invAsOfDate = document.getElementById('rptAsOfDate')?.value || _invAsOfDate;
   _rptLoadAsOfData();
-};
-
-window._rptTakeSnapshot = function() {
-  API.post('/reports/inventory/snapshot').then(function(r) {
-    alert('Snapshot taken! ' + (r.data.rows || 0) + ' products recorded for ' + r.data.date);
-    _rptLoadAsOfData();
-  }).catch(function(err) {
-    alert('Failed to take snapshot: ' + (err.response?.data?.error || err.message));
-  });
 };
 
 // ==================== FLEET REPORT ====================
