@@ -612,10 +612,10 @@ function _rptLoadAsOfData() {
 
       // Full list
       html += sectionStart('All Products — ' + d.date, 'fa-list', '');
-      html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Product</th><th>Category</th><th class="right">On Hand</th><th class="right">On Hold</th><th class="right">Reserved</th><th class="right">Available</th><th class="right">Cost</th><th class="right">Value</th></tr></thead><tbody>';
+      html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Product</th><th>Category</th><th class="right">On Hand</th><th class="right">On Hold</th><th class="right">Reserved</th><th class="right">Available</th><th class="right">Unit Cost</th><th class="right">Unit Price</th><th class="right">Value (Retail)</th></tr></thead><tbody>';
       d.items.forEach(function(item) {
         var name = item.product_name || item.name || '-';
-        html += '<tr><td>' + name + '</td><td><span class="rpt-badge rpt-badge-blue">' + (item.category || '-') + '</span></td><td class="right num">' + fmtN(item.qty_on_hand) + '</td><td class="right num">' + fmtN(item.qty_on_hold) + '</td><td class="right num">' + fmtN(item.qty_reserved) + '</td><td class="right num">' + fmtN(item.qty_available) + '</td><td class="right num">' + fmt$(item.unit_cost) + '</td><td class="right money">' + fmt$(item.total_value) + '</td></tr>';
+        html += '<tr><td>' + name + '</td><td><span class="rpt-badge rpt-badge-blue">' + (item.category || '-') + '</span></td><td class="right num">' + fmtN(item.qty_on_hand) + '</td><td class="right num">' + fmtN(item.qty_on_hold) + '</td><td class="right num">' + fmtN(item.qty_reserved) + '</td><td class="right num">' + fmtN(item.qty_available) + '</td><td class="right num">' + fmt$(item.unit_cost) + '</td><td class="right num">' + fmt$(item.unit_price) + '</td><td class="right money">' + fmt$(item.total_value) + '</td></tr>';
       });
       html += '</tbody></table></div>' + sectionEnd();
     } else if (d.source !== 'none' && d.source !== 'nearest_snapshot') {

@@ -45,42 +45,9 @@ app.get('/api/reports/inventory/as-of', async (c) => {
   const category = c.req.query('category') || null
   const search = c.req.query('search') || null
 
-  // Check if we have a snapshot for this date
-  let snapshotQuery = `SELECT * FROM inventory_snapshots WHERE snapshot_date = ?`
-  const params: any[] = [date]
-
-  if (locationId) { snapshotQuery += ' AND location_id = ?'; params.push(locationId) }
-  if (category) { snapshotQuery += ' AND category = ?'; params.push(category) }
-  if (search) { snapshotQuery += ' AND product_name LIKE ?'; params.push(`%${search}%`) }
-
-  snapshotQuery += ' ORDER BY product_name'
-  const snap = await db.prepare(snapshotQuery).bind(...params).all()
-
-  if (snap.results.length > 0) {
-    // We have a snapshot — calculate summary
-    const totalItems = snap.results.length
-    const totalQty = snap.results.reduce((s: number, r: any) => s + r.qty_on_hand, 0)
-    const totalValue = snap.results.reduce((s: number, r: any) => s + (r.total_value || 0), 0)
-    const byCategory: Record<string, any> = {}
-    for (const r of snap.results as any[]) {
-      const cat = r.category || 'uncategorized'
-      if (!byCategory[cat]) byCategory[cat] = { category: cat, qty: 0, value: 0, products: 0 }
-      byCategory[cat].qty += r.qty_on_hand
-      byCategory[cat].value += r.total_value || 0
-      byCategory[cat].products++
-    }
-    return c.json({
-      date,
-      source: 'snapshot',
-      summary: { totalItems, totalQty, totalValue },
-      byCategory: Object.values(byCategory),
-      items: snap.results
-    })
-  }
-
-  // No snapshot — check if date is today → use live data
+  // For today's date, always use live data (most accurate, has both cost & retail)
   const today = new Date().toISOString().slice(0, 10)
-  if (date === today) {
+  if (date === today || date >= today) {
     let liveQuery = `
       SELECT s.product_id, s.location_id, p.name as product_name, p.category,
              s.qty_on_hand, s.qty_on_hold, s.qty_reserved, s.qty_available,
@@ -121,8 +88,50 @@ app.get('/api/reports/inventory/as-of', async (c) => {
     })
   }
 
-  // Historical date with no snapshot — try to reconstruct from audit trail
-  // Get latest snapshot before this date as baseline, then apply audit changes
+  // Historical date — check for snapshot
+  let snapshotQuery = `
+    SELECT snap.*, COALESCE(p.price, 0) as unit_price,
+           snap.qty_on_hand * COALESCE(p.price, 0) as total_retail_value
+    FROM inventory_snapshots snap
+    LEFT JOIN products p ON p.id = snap.product_id
+    WHERE snap.snapshot_date = ?`
+  const params: any[] = [date]
+
+  if (locationId) { snapshotQuery += ' AND snap.location_id = ?'; params.push(locationId) }
+  if (category) { snapshotQuery += ' AND snap.category = ?'; params.push(category) }
+  if (search) { snapshotQuery += ' AND snap.product_name LIKE ?'; params.push(`%${search}%`) }
+
+  snapshotQuery += ' ORDER BY snap.product_name'
+  const snap = await db.prepare(snapshotQuery).bind(...params).all()
+
+  if (snap.results.length > 0) {
+    const totalItems = snap.results.length
+    const totalQty = snap.results.reduce((s: number, r: any) => s + r.qty_on_hand, 0)
+    const totalValue = snap.results.reduce((s: number, r: any) => s + (r.total_retail_value || 0), 0)
+    const totalCostValue = snap.results.reduce((s: number, r: any) => s + (r.total_value || 0), 0)
+    const byCategory: Record<string, any> = {}
+    for (const r of snap.results as any[]) {
+      const cat = r.category || 'uncategorized'
+      if (!byCategory[cat]) byCategory[cat] = { category: cat, qty: 0, value: 0, costValue: 0, products: 0 }
+      byCategory[cat].qty += r.qty_on_hand
+      byCategory[cat].value += r.total_retail_value || 0
+      byCategory[cat].costValue += r.total_value || 0
+      byCategory[cat].products++
+    }
+    return c.json({
+      date,
+      source: 'snapshot',
+      summary: { totalItems, totalQty, totalValue, totalCostValue },
+      byCategory: Object.values(byCategory),
+      items: snap.results.map((r: any) => ({
+        ...r,
+        total_value: r.total_retail_value || 0,
+        total_cost_value: r.total_value || 0
+      }))
+    })
+  }
+
+  // Historical date with no snapshot — try to find nearest
   const baseline = await db.prepare(`
     SELECT snapshot_date FROM inventory_snapshots 
     WHERE snapshot_date <= ? 
