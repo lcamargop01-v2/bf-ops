@@ -503,12 +503,13 @@ app.get('/api/reports/customers', async (c) => {
 
   // Top customers by order volume
   const topCustomers = await db.prepare(`
-    SELECT c.id, c.business_name, c.zone,
+    SELECT c.id, c.business_name, COALESCE(loc.name, '') as location,
            COUNT(o.id) as order_count,
            SUM(o.total_weight) as total_weight,
            SUM(oi_agg.revenue) as revenue,
            MAX(o.created_at) as last_order
     FROM customers c
+    LEFT JOIN locations loc ON loc.id = c.location_id
     JOIN orders o ON o.customer_id = c.id
     LEFT JOIN (
       SELECT oi.order_id, SUM(oi.quantity * COALESCE(p.price, 0)) as revenue
@@ -520,9 +521,10 @@ app.get('/api/reports/customers', async (c) => {
 
   // Customers with no orders in period (dormant)
   const dormant = await db.prepare(`
-    SELECT c.id, c.business_name, c.zone,
+    SELECT c.id, c.business_name, COALESCE(loc.name, '') as location,
            (SELECT MAX(created_at) FROM orders WHERE customer_id = c.id) as last_order
     FROM customers c
+    LEFT JOIN locations loc ON loc.id = c.location_id
     WHERE c.active = 1
       AND c.id NOT IN (SELECT DISTINCT customer_id FROM orders WHERE DATE(created_at) >= ? AND DATE(created_at) <= ?)
     ORDER BY last_order DESC LIMIT 50
@@ -848,11 +850,12 @@ app.get('/api/reports/export', async (c) => {
     data = r.results
   } else if (type === 'customers') {
     const r = await db.prepare(`
-      SELECT c.business_name, c.zone, c.email, c.phone,
+      SELECT c.business_name, COALESCE(loc.name, '') as location, c.email, c.phone,
              COUNT(o.id) as orders,
              SUM(o.total_weight) as weight,
              MAX(o.created_at) as last_order
       FROM customers c
+      LEFT JOIN locations loc ON loc.id = c.location_id
       LEFT JOIN orders o ON o.customer_id = c.id AND DATE(o.created_at) >= ? AND DATE(o.created_at) <= ? AND o.status != 'cancelled'
       WHERE c.active = 1
       GROUP BY c.id ORDER BY orders DESC

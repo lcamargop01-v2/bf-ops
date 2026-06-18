@@ -539,7 +539,7 @@ function loadCustomers(q) {
     html += sectionStart('Top Customers (by Revenue)', 'fa-trophy', '');
     html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Customer</th><th>Zone</th><th class="right">Orders</th><th class="right">Revenue</th><th class="right">Weight</th><th>Last Order</th></tr></thead><tbody>';
     (d.topCustomers || []).forEach(function(c) {
-      html += '<tr class="clickable" onclick="window._rptDrillSales(\'customer\',' + c.id + ')"><td>' + (c.business_name || '-') + '</td><td><span class="rpt-badge rpt-badge-blue">' + (c.zone || '-') + '</span></td><td class="right num">' + fmtN(c.order_count) + '</td><td class="right money">' + fmt$(c.revenue) + '</td><td class="right num">' + fmtN(Math.round(c.total_weight || 0)) + '</td><td class="muted">' + (c.last_order || '').slice(0, 10) + '</td></tr>';
+      html += '<tr class="clickable" onclick="window._rptDrillSales(\'customer\',' + c.id + ')"><td>' + (c.business_name || '-') + '</td><td><span class="rpt-badge rpt-badge-blue">' + (c.location || '-') + '</span></td><td class="right num">' + fmtN(c.order_count) + '</td><td class="right money">' + fmt$(c.revenue) + '</td><td class="right num">' + fmtN(Math.round(c.total_weight || 0)) + '</td><td class="muted">' + (c.last_order || '').slice(0, 10) + '</td></tr>';
     });
     html += '</tbody></table></div>';
     html += sectionEnd();
@@ -549,7 +549,7 @@ function loadCustomers(q) {
       html += sectionStart('Dormant Customers (No Orders in Period)', 'fa-user-clock', '');
       html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Customer</th><th>Zone</th><th>Last Order</th></tr></thead><tbody>';
       d.dormant.forEach(function(c) {
-        html += '<tr><td>' + (c.business_name || '-') + '</td><td><span class="rpt-badge rpt-badge-orange">' + (c.zone || '-') + '</span></td><td class="muted">' + (c.last_order || 'Never').slice(0, 10) + '</td></tr>';
+        html += '<tr><td>' + (c.business_name || '-') + '</td><td><span class="rpt-badge rpt-badge-orange">' + (c.location || '-') + '</span></td><td class="muted">' + (c.last_order || 'Never').slice(0, 10) + '</td></tr>';
       });
       html += '</tbody></table></div>';
       html += sectionEnd();
@@ -766,7 +766,71 @@ window._rptExportPDF = function() {
 // ==================== EXPORT: EXCEL (CSV) ====================
 window._rptExportExcel = function(type) {
   type = type || _currentTab;
-  // Map tab names to export types
+
+  // Strategy: First try to export from visible tables on the page.
+  // This works for every tab that renders a table, regardless of backend export support.
+  var tables = document.querySelectorAll('#rptContent .rpt-table');
+  if (tables.length > 0) {
+    var allCsv = '';
+    tables.forEach(function(table, tIdx) {
+      if (tIdx > 0) allCsv += '\n\n';
+      // Get section title if available
+      var section = table.closest('.rpt-section');
+      if (section) {
+        var title = section.querySelector('h3');
+        if (title) allCsv += title.textContent.trim() + '\n';
+      }
+      var rows = table.querySelectorAll('tr');
+      rows.forEach(function(row) {
+        var cells = row.querySelectorAll('th, td');
+        var vals = [];
+        cells.forEach(function(cell) {
+          var val = cell.textContent.trim();
+          if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+            val = '"' + val.replace(/"/g, '""') + '"';
+          }
+          vals.push(val);
+        });
+        allCsv += vals.join(',') + '\n';
+      });
+    });
+
+    if (allCsv.trim()) {
+      var blob = new Blob(['\uFEFF' + allCsv], { type: 'text/csv;charset=utf-8;' });
+      var link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'bf-ops-' + type + '-' + _dateFrom + '-to-' + _dateTo + '.csv';
+      link.click();
+      return;
+    }
+  }
+
+  // Also export summary cards as a table
+  var cards = document.querySelectorAll('#rptContent .rpt-card');
+  if (cards.length > 0) {
+    var csv = 'Metric,Value\n';
+    cards.forEach(function(card) {
+      var label = (card.querySelector('.rpt-card-label') || {}).textContent || '';
+      var value = (card.querySelector('.rpt-card-value') || {}).textContent || '';
+      label = label.trim();
+      value = value.trim();
+      if (label) {
+        if (label.includes(',') || value.includes(',')) {
+          label = '"' + label.replace(/"/g, '""') + '"';
+          value = '"' + value.replace(/"/g, '""') + '"';
+        }
+        csv += label + ',' + value + '\n';
+      }
+    });
+    var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    var link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'bf-ops-' + type + '-summary-' + _dateFrom + '-to-' + _dateTo + '.csv';
+    link.click();
+    return;
+  }
+
+  // Fallback: try API export for raw data dump
   var typeMap = { financial: 'orders', sales: 'orders', products: 'products', purchasing: 'bills', delivery: 'orders', returns: 'returns', customers: 'customers', inventory: 'inventory', fleet: 'orders', warehouse: 'orders' };
   var exportType = typeMap[type] || type;
 
@@ -778,9 +842,8 @@ window._rptExportExcel = function(type) {
 
   API.get('/reports/export?' + q).then(function(r) {
     var data = r.data.data;
-    if (!data || data.length === 0) { alert('No data to export'); return; }
+    if (!data || data.length === 0) { alert('No data to export. Try loading data on this tab first.'); return; }
 
-    // Build CSV
     var headers = Object.keys(data[0]);
     var csv = headers.join(',') + '\n';
     data.forEach(function(row) {
@@ -795,8 +858,7 @@ window._rptExportExcel = function(type) {
       }).join(',') + '\n';
     });
 
-    // Download
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     var link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = 'bf-ops-' + exportType + '-' + _dateFrom + '-to-' + _dateTo + '.csv';
