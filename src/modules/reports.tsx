@@ -85,7 +85,9 @@ app.get('/api/reports/inventory/as-of', async (c) => {
       SELECT s.product_id, s.location_id, p.name as product_name, p.category,
              s.qty_on_hand, s.qty_on_hold, s.qty_reserved, s.qty_available,
              COALESCE(p.cost, 0) as unit_cost,
-             s.qty_on_hand * COALESCE(p.cost, 0) as total_value
+             COALESCE(p.price, 0) as unit_price,
+             s.qty_on_hand * COALESCE(p.cost, 0) as total_cost_value,
+             s.qty_on_hand * COALESCE(p.price, 0) as total_value
       FROM inventory_stock s
       JOIN products p ON p.id = s.product_id
       WHERE p.active = 1
@@ -100,18 +102,20 @@ app.get('/api/reports/inventory/as-of', async (c) => {
     const totalItems = live.results.length
     const totalQty = live.results.reduce((s: number, r: any) => s + r.qty_on_hand, 0)
     const totalValue = live.results.reduce((s: number, r: any) => s + (r.total_value || 0), 0)
+    const totalCostValue = live.results.reduce((s: number, r: any) => s + (r.total_cost_value || 0), 0)
     const byCategory: Record<string, any> = {}
     for (const r of live.results as any[]) {
       const cat = r.category || 'uncategorized'
-      if (!byCategory[cat]) byCategory[cat] = { category: cat, qty: 0, value: 0, products: 0 }
+      if (!byCategory[cat]) byCategory[cat] = { category: cat, qty: 0, value: 0, costValue: 0, products: 0 }
       byCategory[cat].qty += r.qty_on_hand
       byCategory[cat].value += r.total_value || 0
+      byCategory[cat].costValue += r.total_cost_value || 0
       byCategory[cat].products++
     }
     return c.json({
       date,
       source: 'live',
-      summary: { totalItems, totalQty, totalValue },
+      summary: { totalItems, totalQty, totalValue, totalCostValue },
       byCategory: Object.values(byCategory),
       items: live.results
     })

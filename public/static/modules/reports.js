@@ -180,8 +180,8 @@ function loadFinancial(q) {
       summaryCard('Purchasing Spend', fmt$(pur.total_purchasing), { icon: 'fa-cart-shopping', iconBg: '#F97316', color: 'orange', sub: fmtN(pur.po_count) + ' purchase orders' }) +
       summaryCard('Bills Paid', fmt$(bill.paid), { icon: 'fa-file-invoice-dollar', iconBg: '#059669', sub: 'Paid to suppliers' }) +
       summaryCard('Bills Pending', fmt$(bill.pending), { icon: 'fa-clock', iconBg: '#EAB308', color: 'orange', sub: 'Awaiting payment' }) +
-      summaryCard('Inventory Value (Cost)', fmt$(inv.inventory_value), { icon: 'fa-warehouse', iconBg: '#7C3AED', color: 'purple', sub: fmtN(inv.total_units) + ' units on hand' }) +
-      summaryCard('Inventory Value (Retail)', fmt$(inv.inventory_retail_value), { icon: 'fa-store', iconBg: '#2563EB', sub: 'At selling price' }) +
+      summaryCard('Inventory Value (Retail)', fmt$(inv.inventory_retail_value), { icon: 'fa-store', iconBg: '#059669', color: 'green', sub: fmtN(inv.total_units) + ' units · matches Inventory dashboard' }) +
+      summaryCard('Inventory Value (Cost)', fmt$(inv.inventory_value), { icon: 'fa-warehouse', iconBg: '#7C3AED', sub: 'At cost basis' }) +
     '</div>';
 
     // Monthly trend chart
@@ -596,7 +596,8 @@ function _rptLoadAsOfData() {
       html += '<div class="rpt-summary">' +
         summaryCard('Products', fmtN(s.totalItems), { icon: 'fa-box', iconBg: '#2563EB' }) +
         summaryCard('Total Qty', fmtN(s.totalQty), { icon: 'fa-cubes', iconBg: '#7C3AED' }) +
-        summaryCard('Total Value', fmt$(s.totalValue), { icon: 'fa-dollar-sign', iconBg: '#059669', color: 'green' }) +
+        summaryCard('Total Value (Retail)', fmt$(s.totalValue), { icon: 'fa-dollar-sign', iconBg: '#059669', color: 'green', sub: 'At selling price' }) +
+        (s.totalCostValue ? summaryCard('Total Value (Cost)', fmt$(s.totalCostValue), { icon: 'fa-warehouse', iconBg: '#7C3AED', sub: 'At cost basis' }) : '') +
       '</div>';
 
       // By category
