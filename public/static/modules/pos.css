@@ -282,6 +282,91 @@
 .pos-badge-dc-pickup { background: #E0E7FF; color: #3730A3; }
 .pos-badge-delivery-cross { background: #F0FDFA; color: #115E59; }
 
+/* ==================== CUSTOMERS VIEW ==================== */
+.pos-customers { flex-direction: column; padding: 16px; gap: 12px; overflow-y: auto; }
+.pos-cust-view-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pos-cust-view-title h2 { font-size: 18px; font-weight: 800; color: var(--pos-navy); display: flex; align-items: center; gap: 8px; margin: 0; }
+.pos-btn-add-cust { background: var(--pos-green); color: white; padding: 10px 18px; border: none; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; font-family: inherit; }
+.pos-btn-add-cust:hover { background: #047857; }
+
+/* Customer filters */
+.pos-cust-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pos-cust-filters input, .pos-cust-filters select { padding: 9px 12px; border: 2px solid var(--pos-gray-200); border-radius: 10px; font-size: 13px; font-family: inherit; outline: none; transition: border-color 0.15s; }
+.pos-cust-filters input { min-width: 240px; flex: 1; }
+.pos-cust-filters input:focus, .pos-cust-filters select:focus { border-color: var(--pos-navy-light); }
+
+/* Customer list body */
+.pos-cust-list-body { background: white; border-radius: 14px; border: 1px solid var(--pos-gray-200); overflow: hidden; overflow-x: auto; }
+.pos-cust-table td { vertical-align: middle; }
+.pos-cust-list-name { font-size: 13px; font-weight: 700; color: var(--pos-navy); }
+.pos-cust-list-sub { font-size: 11px; color: var(--pos-gray-400); }
+.pos-cust-tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; background: #EDE9FE; color: #5B21B6; margin-right: 3px; margin-bottom: 2px; }
+.pos-cust-edit-btn { background: none; border: 1px solid var(--pos-gray-200); border-radius: 6px; padding: 5px 8px; cursor: pointer; color: var(--pos-gray-500); font-size: 12px; }
+.pos-cust-edit-btn:hover { background: var(--pos-gray-100); color: var(--pos-navy); }
+
+/* Pagination */
+.pos-cust-pagination { display: flex; align-items: center; gap: 6px; justify-content: center; flex-wrap: wrap; }
+.pos-cust-page-btn { padding: 6px 12px; border: 1px solid var(--pos-gray-200); border-radius: 6px; background: white; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--pos-gray-600); }
+.pos-cust-page-btn.active { background: var(--pos-navy); color: white; border-color: var(--pos-navy); }
+.pos-cust-page-btn:hover:not(.active) { background: var(--pos-gray-100); }
+.pos-cust-page-info { font-size: 12px; color: var(--pos-gray-400); margin-right: 8px; }
+
+/* ==================== CUSTOMER SHEET (modal) ==================== */
+.pos-cust-sheet { background: white; border-radius: 16px; max-width: 800px; width: 100%; max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 25px 60px rgba(0,0,0,0.2); }
+.pos-cust-sheet-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--pos-gray-200); flex-shrink: 0; }
+.pos-cust-sheet-header h3 { font-size: 18px; font-weight: 700; color: var(--pos-navy); display: flex; align-items: center; gap: 8px; margin: 0; }
+.pos-cust-sheet-body { overflow-y: auto; flex: 1; }
+.pos-cust-sheet-footer { padding: 12px 20px; border-top: 1px solid var(--pos-gray-200); display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+
+/* Tabs */
+.pos-cust-sheet-tabs { display: flex; gap: 0; border-bottom: 2px solid var(--pos-gray-200); padding: 0 20px; flex-shrink: 0; }
+.pos-cust-tab { padding: 10px 16px; border: none; background: none; font-size: 13px; font-weight: 600; color: var(--pos-gray-400); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; display: flex; align-items: center; gap: 6px; font-family: inherit; }
+.pos-cust-tab:hover { color: var(--pos-gray-700); }
+.pos-cust-tab.active { color: var(--pos-navy); border-bottom-color: var(--pos-navy); }
+.pos-cust-tab-content { display: none; padding: 20px; }
+.pos-cust-tab-content.active { display: block; }
+
+/* Form grid */
+.pos-cust-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pos-cust-form-group { display: flex; flex-direction: column; gap: 4px; }
+.pos-cust-form-group.full { grid-column: 1 / -1; }
+.pos-cust-form-group label { font-size: 12px; font-weight: 600; color: var(--pos-gray-600); }
+.pos-cust-form-group input, .pos-cust-form-group select, .pos-cust-form-group textarea { padding: 9px 12px; border: 2px solid var(--pos-gray-200); border-radius: 8px; font-size: 13px; font-family: inherit; outline: none; transition: border-color 0.15s; }
+.pos-cust-form-group input:focus, .pos-cust-form-group select:focus, .pos-cust-form-group textarea:focus { border-color: var(--pos-navy-light); }
+.pos-cust-form-group textarea { resize: vertical; }
+.pos-cust-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--pos-gray-700); cursor: pointer; }
+.pos-cust-toggle input[type="checkbox"] { accent-color: var(--pos-navy); width: 16px; height: 16px; }
+
+/* Tags input */
+.pos-cust-tags-input-wrap { position: relative; }
+.pos-cust-tags-suggestions { display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid var(--pos-gray-200); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); max-height: 150px; overflow-y: auto; z-index: 20; }
+.pos-cust-tag-sug { padding: 8px 12px; font-size: 12px; cursor: pointer; color: var(--pos-gray-700); }
+.pos-cust-tag-sug:hover { background: #EFF6FF; }
+
+/* Address cards */
+.pos-cust-addr-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.pos-cust-addr-header strong { font-size: 14px; color: var(--pos-navy); }
+.pos-btn-sm { padding: 6px 12px; font-size: 12px; }
+.pos-cust-addr-empty { text-align: center; padding: 30px; color: var(--pos-gray-400); }
+.pos-cust-addr-empty i { font-size: 28px; display: block; margin-bottom: 8px; }
+.pos-cust-addr-empty p { font-size: 13px; margin: 0; }
+.pos-cust-addr-card { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border: 1px solid var(--pos-gray-200); border-radius: 10px; margin-bottom: 8px; background: var(--pos-gray-50); }
+.pos-cust-addr-main { flex: 1; }
+.pos-cust-addr-label { font-size: 12px; font-weight: 700; color: var(--pos-navy); margin-bottom: 2px; }
+.pos-cust-addr-street { font-size: 13px; font-weight: 600; color: var(--pos-gray-800); }
+.pos-cust-addr-city { font-size: 12px; color: var(--pos-gray-500); }
+.pos-cust-addr-meta { font-size: 11px; color: var(--pos-gray-400); margin-top: 3px; display: flex; align-items: center; gap: 4px; }
+.pos-cust-addr-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.pos-cust-addr-btn { background: none; border: 1px solid var(--pos-gray-200); border-radius: 6px; padding: 5px 8px; cursor: pointer; color: var(--pos-gray-500); font-size: 12px; }
+.pos-cust-addr-btn:hover { background: var(--pos-gray-100); }
+.pos-cust-addr-btn.danger:hover { color: var(--pos-red); border-color: var(--pos-red); }
+.pos-cust-addr-form { background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+.pos-cust-addr-form h4 { font-size: 14px; font-weight: 700; color: var(--pos-navy); margin: 0 0 12px 0; }
+
+/* Delete button */
+.pos-cust-delete-btn { background: rgba(220,38,38,0.1); color: var(--pos-red); border: 1px solid rgba(220,38,38,0.2); }
+.pos-cust-delete-btn:hover { background: rgba(220,38,38,0.2); }
+
 /* ==================== RESPONSIVE ==================== */
 @media (max-width: 900px) {
   .pos-register { flex-direction: column; }
@@ -299,4 +384,7 @@
   .pos-dash-cards { grid-template-columns: 1fr 1fr; }
   .hide-mobile { display: none !important; }
   .pos-cross-loc-opt { padding: 6px 8px; font-size: 12px; }
+  .pos-cust-sheet { max-width: 100%; border-radius: 0; max-height: 100vh; }
+  .pos-cust-form-grid { grid-template-columns: 1fr; }
+  .pos-cust-filters input { min-width: 150px; }
 }

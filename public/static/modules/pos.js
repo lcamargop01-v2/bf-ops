@@ -24,7 +24,14 @@ var _s = {
   warnings: [],
   payMethod: 'cash',
   splitPayments: [],
-  productCache: {} // keyed by id for click lookups
+  productCache: {}, // keyed by id for click lookups
+  custPage: 1,
+  custSearch: '',
+  custTagFilter: '',
+  custTypeFilter: '',
+  custAllTags: [],
+  custUsers: [],
+  custEditing: null // customer being edited in sheet
 };
 
 // ==================== INIT ====================
@@ -164,17 +171,20 @@ function renderRegisterView() {
         '<button class="pos-topbar-btn" id="posBtnDash"><i class="fas fa-chart-bar"></i> <span class="hide-mobile">Dashboard</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnReg"><i class="fas fa-cash-register"></i> <span class="hide-mobile">Register</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnHist"><i class="fas fa-clock-rotate-left"></i> <span class="hide-mobile">History</span></button>' +
+        '<button class="pos-topbar-btn" id="posBtnCust"><i class="fas fa-address-book"></i> <span class="hide-mobile">Customers</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnHeld"><i class="fas fa-pause-circle"></i> <span class="hide-mobile">Held</span> <span id="posHeldBadge" class="pos-held-badge" style="display:none">0</span></button>' +
         '<button class="pos-topbar-btn danger" id="posBtnClose"><i class="fas fa-power-off"></i> <span class="hide-mobile">Close</span></button>' +
       '</div>' +
     '</div>' +
     '<div id="posViewDashboard" class="pos-view pos-dashboard"></div>' +
     '<div id="posViewRegister" class="pos-view pos-register"></div>' +
-    '<div id="posViewHistory" class="pos-view pos-history"></div>';
+    '<div id="posViewHistory" class="pos-view pos-history"></div>' +
+    '<div id="posViewCustomers" class="pos-view pos-customers"></div>';
 
   on('posBtnDash', 'click', function() { switchView('dashboard'); });
   on('posBtnReg', 'click', function() { switchView('register'); });
   on('posBtnHist', 'click', function() { switchView('history'); });
+  on('posBtnCust', 'click', function() { switchView('customers'); });
   on('posBtnHeld', 'click', showHeld);
   on('posBtnClose', 'click', closeSession);
 
@@ -191,6 +201,7 @@ function switchView(view) {
   if (view === 'register') renderRegisterContent();
   else if (view === 'dashboard') loadDashboard();
   else if (view === 'history') loadHistory();
+  else if (view === 'customers') loadCustomerList();
 }
 
 // ==================== REGISTER CONTENT ====================
@@ -1437,6 +1448,599 @@ function closeModal() {
 }
 // Keep global for any legacy references
 window.closePosModal = closeModal;
+
+// ==================== CUSTOMER MANAGEMENT VIEW ====================
+
+function loadCustomerList(resetPage) {
+  if (resetPage) _s.custPage = 1;
+  var view = document.getElementById('posViewCustomers');
+  if (!view) return;
+
+  // Load tags + users once
+  if (_s.custAllTags.length === 0) {
+    API.get('/pos/customer-tags').then(function(r) { _s.custAllTags = r.data || []; renderCustFilters(); }).catch(function(){});
+  }
+  if (_s.custUsers.length === 0) {
+    API.get('/pos/users').then(function(r) { _s.custUsers = r.data || []; }).catch(function(){});
+  }
+
+  var params = 'page=' + _s.custPage + '&limit=50';
+  if (_s.custSearch) params += '&search=' + encodeURIComponent(_s.custSearch);
+  if (_s.custTagFilter) params += '&tag=' + encodeURIComponent(_s.custTagFilter);
+  if (_s.custTypeFilter) params += '&type=' + encodeURIComponent(_s.custTypeFilter);
+
+  // Render shell first
+  if (!document.getElementById('posCustListBody')) {
+    view.innerHTML =
+      '<div class="pos-cust-view-header">' +
+        '<div class="pos-cust-view-title"><h2><i class="fas fa-address-book"></i> Customer Management</h2></div>' +
+        '<div class="pos-cust-view-actions">' +
+          '<button class="pos-btn pos-btn-add-cust" id="posCustAddBtn"><i class="fas fa-plus"></i> New Customer</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="pos-cust-filters" id="posCustFilters">' +
+        '<input type="text" id="posCustSearchInput" placeholder="Search name, phone, email..." value="' + esc(_s.custSearch) + '">' +
+        '<select id="posCustTypeSelect"><option value="">All Types</option>' +
+          '<option value="farm"' + (_s.custTypeFilter==='farm'?' selected':'') + '>Farm</option>' +
+          '<option value="ranch"' + (_s.custTypeFilter==='ranch'?' selected':'') + '>Ranch</option>' +
+          '<option value="retail"' + (_s.custTypeFilter==='retail'?' selected':'') + '>Retail</option>' +
+          '<option value="equestrian"' + (_s.custTypeFilter==='equestrian'?' selected':'') + '>Equestrian</option>' +
+          '<option value="other"' + (_s.custTypeFilter==='other'?' selected':'') + '>Other</option>' +
+        '</select>' +
+        '<select id="posCustTagSelect"><option value="">All Tags</option></select>' +
+      '</div>' +
+      '<div id="posCustListBody" class="pos-cust-list-body"><div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div></div>' +
+      '<div id="posCustPagination" class="pos-cust-pagination"></div>';
+
+    on('posCustAddBtn', 'click', function() { openCustomerSheet(null); });
+    var searchInput = document.getElementById('posCustSearchInput');
+    if (searchInput) searchInput.addEventListener('input', function() {
+      clearTimeout(_s.searchTimer);
+      _s.searchTimer = setTimeout(function() { _s.custSearch = searchInput.value; loadCustomerList(true); }, 400);
+    });
+    on('posCustTypeSelect', 'change', function() { _s.custTypeFilter = gv('posCustTypeSelect'); loadCustomerList(true); });
+    on('posCustTagSelect', 'change', function() { _s.custTagFilter = gv('posCustTagSelect'); loadCustomerList(true); });
+    renderCustFilters();
+  }
+
+  var body = document.getElementById('posCustListBody');
+  if (body) body.innerHTML = '<div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+
+  API.get('/pos/customer-list?' + params).then(function(r) {
+    var data = r.data;
+    var custs = data.customers || [];
+    if (custs.length === 0) {
+      body.innerHTML = '<div class="pos-loading">No customers found</div>';
+      document.getElementById('posCustPagination').innerHTML = '';
+      return;
+    }
+
+    var html = '<table class="pos-table pos-cust-table"><thead><tr>' +
+      '<th>Customer</th><th>Contact</th><th>Phone / Email</th>' +
+      '<th>Type</th><th>Tags</th><th>Salesperson</th>' +
+      '<th class="right">Orders</th><th class="right">Spent</th><th></th>' +
+    '</tr></thead><tbody>';
+
+    custs.forEach(function(c) {
+      var tags = (c.tags || '').split(',').filter(function(t) { return t.trim(); }).map(function(t) {
+        return '<span class="pos-cust-tag">' + esc(t.trim()) + '</span>';
+      }).join(' ');
+
+      html += '<tr class="clickable" data-cust-sheet="' + c.id + '">' +
+        '<td><div class="pos-cust-list-name">' + esc(c.business_name || '-') + '</div>' +
+          '<div class="pos-cust-list-sub">' + esc(c.location_name || '') + '</div></td>' +
+        '<td>' + esc(c.contact_name || '-') + '</td>' +
+        '<td><div>' + esc(c.phone || '-') + '</div><div class="pos-cust-list-sub">' + esc(c.email || '') + '</div></td>' +
+        '<td><span class="pos-badge pos-badge-blue">' + esc(c.customer_type || '-') + '</span></td>' +
+        '<td>' + (tags || '<span style="color:var(--pos-gray-400)">—</span>') + '</td>' +
+        '<td>' + esc(c.salesperson_name || '-') + '</td>' +
+        '<td class="right">' + ((c.order_count || 0) + (c.sale_count || 0)) + '</td>' +
+        '<td class="right money">$' + (c.total_spent || 0).toFixed(2) + '</td>' +
+        '<td><button class="pos-cust-edit-btn" data-cust-edit="' + c.id + '" title="Edit"><i class="fas fa-pen"></i></button></td>' +
+      '</tr>';
+    });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+
+    // Click row to open sheet
+    body.querySelectorAll('[data-cust-sheet]').forEach(function(row) {
+      row.addEventListener('click', function(e) {
+        if (e.target.closest('[data-cust-edit]')) return;
+        openCustomerSheet(parseInt(row.dataset.custSheet));
+      });
+    });
+    body.querySelectorAll('[data-cust-edit]').forEach(function(btn) {
+      btn.addEventListener('click', function() { openCustomerSheet(parseInt(btn.dataset.custEdit)); });
+    });
+
+    // Pagination
+    var pag = document.getElementById('posCustPagination');
+    if (pag && data.pages > 1) {
+      var ph = '';
+      for (var p = 1; p <= data.pages; p++) {
+        ph += '<button class="pos-cust-page-btn' + (p === data.page ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>';
+      }
+      pag.innerHTML = '<span class="pos-cust-page-info">' + data.total + ' customers</span>' + ph;
+      pag.querySelectorAll('[data-page]').forEach(function(btn) {
+        btn.addEventListener('click', function() { _s.custPage = parseInt(btn.dataset.page); loadCustomerList(); });
+      });
+    } else if (pag) {
+      pag.innerHTML = '<span class="pos-cust-page-info">' + data.total + ' customers</span>';
+    }
+  }).catch(function(err) {
+    if (body) body.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)">Error loading customers: ' + errMsg(err) + '</div>';
+  });
+}
+
+function renderCustFilters() {
+  var sel = document.getElementById('posCustTagSelect');
+  if (!sel) return;
+  var val = _s.custTagFilter;
+  var html = '<option value="">All Tags</option>';
+  _s.custAllTags.forEach(function(t) {
+    html += '<option value="' + esc(t) + '"' + (val === t ? ' selected' : '') + '>' + esc(t) + '</option>';
+  });
+  sel.innerHTML = html;
+}
+
+// ==================== CUSTOMER SHEET (full detail / edit modal) ====================
+function openCustomerSheet(id) {
+  // Remove any existing sheet
+  var old = document.getElementById('posCustSheetOverlay');
+  if (old) old.remove();
+
+  if (!id) {
+    // New customer — blank form
+    renderCustomerSheet({
+      id: null, business_name: '', contact_name: '', phone: '', email: '',
+      customer_type: 'other', notes: '', tax_exempt: 0, sponsor_discount: 0,
+      priority_rank: 0, location_id: null, tags: '', salesperson_id: null, salesperson_name: ''
+    }, [], []);
+    return;
+  }
+
+  // Load full customer data
+  API.get('/pos/customers/' + id).then(function(r) {
+    var c = r.data.customer;
+    var addrs = r.data.addresses || [];
+    var orders = r.data.recentOrders || [];
+    var sales = r.data.recentSales || [];
+    var rules = r.data.priceRules || [];
+    var acct = r.data.account || {};
+    renderCustomerSheet(c, addrs, orders.concat(sales).sort(function(a, b) {
+      return (b.created_at || '').localeCompare(a.created_at || '');
+    }), rules, acct);
+  }).catch(function(err) { toast('Failed to load customer: ' + errMsg(err), 'error'); });
+}
+
+function renderCustomerSheet(c, addrs, history, rules, acct) {
+  var isNew = !c.id;
+  var locOpts = '<option value="">None</option>';
+  _s.locations.forEach(function(l) {
+    locOpts += '<option value="' + l.id + '"' + (c.location_id == l.id ? ' selected' : '') + '>' + esc(l.name) + '</option>';
+  });
+  var spOpts = '<option value="">None</option>';
+  _s.custUsers.forEach(function(u) {
+    spOpts += '<option value="' + u.id + '"' + (c.salesperson_id == u.id ? ' selected' : '') + '>' + esc(u.name) + ' (' + u.role + ')</option>';
+  });
+  var typeOpts = ['farm','ranch','retail','equestrian','other'].map(function(t) {
+    return '<option value="' + t + '"' + (c.customer_type === t ? ' selected' : '') + '>' + t.charAt(0).toUpperCase() + t.slice(1) + '</option>';
+  }).join('');
+
+  var html = '<div class="pos-modal-overlay" id="posCustSheetOverlay">' +
+    '<div class="pos-cust-sheet">' +
+      '<div class="pos-cust-sheet-header">' +
+        '<h3><i class="fas fa-' + (isNew ? 'user-plus' : 'user-edit') + '"></i> ' + (isNew ? 'New Customer' : esc(c.business_name || c.contact_name)) + '</h3>' +
+        '<button class="pos-modal-close" id="posCustSheetClose"><i class="fas fa-times"></i></button>' +
+      '</div>' +
+      '<div class="pos-cust-sheet-body">' +
+        '<div class="pos-cust-sheet-tabs">' +
+          '<button class="pos-cust-tab active" data-tab="details"><i class="fas fa-id-card"></i> Details</button>' +
+          '<button class="pos-cust-tab" data-tab="addresses"><i class="fas fa-map-marker-alt"></i> Addresses' + (addrs && addrs.length ? ' (' + addrs.length + ')' : '') + '</button>' +
+          (isNew ? '' : '<button class="pos-cust-tab" data-tab="history"><i class="fas fa-receipt"></i> Orders</button>') +
+          (isNew ? '' : '<button class="pos-cust-tab" data-tab="account"><i class="fas fa-credit-card"></i> Account</button>') +
+        '</div>' +
+
+        // === DETAILS TAB ===
+        '<div class="pos-cust-tab-content active" data-content="details">' +
+          '<div class="pos-cust-form-grid">' +
+            '<div class="pos-cust-form-group full">' +
+              '<label>Business Name *</label>' +
+              '<input type="text" id="posCustBizName" value="' + esc(c.business_name || '') + '" placeholder="Business or farm name">' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Contact Name</label>' +
+              '<input type="text" id="posCustContactName" value="' + esc(c.contact_name || '') + '" placeholder="Contact person">' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Phone</label>' +
+              '<input type="tel" id="posCustPhone" value="' + esc(c.phone || '') + '" placeholder="(555) 123-4567">' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Email</label>' +
+              '<input type="email" id="posCustEmail" value="' + esc(c.email || '') + '" placeholder="email@example.com">' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Customer Type</label>' +
+              '<select id="posCustType">' + typeOpts + '</select>' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Location</label>' +
+              '<select id="posCustLocation">' + locOpts + '</select>' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Salesperson</label>' +
+              '<select id="posCustSalesperson">' + spOpts + '</select>' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Priority Rank</label>' +
+              '<select id="posCustPriority">' +
+                '<option value="0"' + (!c.priority_rank ? ' selected' : '') + '>Normal</option>' +
+                '<option value="1"' + (c.priority_rank==1 ? ' selected' : '') + '>1 — VIP</option>' +
+                '<option value="2"' + (c.priority_rank==2 ? ' selected' : '') + '>2 — High</option>' +
+                '<option value="3"' + (c.priority_rank==3 ? ' selected' : '') + '>3 — Low</option>' +
+              '</select>' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Sponsor Discount %</label>' +
+              '<input type="number" id="posCustDiscount" value="' + (c.sponsor_discount || 0) + '" min="0" max="100" step="0.5">' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Tax Exempt</label>' +
+              '<label class="pos-cust-toggle"><input type="checkbox" id="posCustTaxExempt"' + (c.tax_exempt ? ' checked' : '') + '> <span>Tax Exempt</span></label>' +
+            '</div>' +
+            '<div class="pos-cust-form-group full">' +
+              '<label>Tags <span style="font-weight:400;color:var(--pos-gray-400)">(comma separated)</span></label>' +
+              '<div class="pos-cust-tags-input-wrap">' +
+                '<input type="text" id="posCustTags" value="' + esc(c.tags || '') + '" placeholder="e.g. wholesale, vip, seasonal">' +
+                '<div class="pos-cust-tags-suggestions" id="posCustTagSuggestions"></div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="pos-cust-form-group full">' +
+              '<label>Notes</label>' +
+              '<textarea id="posCustNotes" rows="3" placeholder="Internal notes about this customer...">' + esc(c.notes || '') + '</textarea>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+
+        // === ADDRESSES TAB ===
+        '<div class="pos-cust-tab-content" data-content="addresses">' +
+          '<div class="pos-cust-addr-header">' +
+            '<strong>Delivery Addresses</strong>' +
+            '<button class="pos-btn pos-btn-sm" id="posCustAddAddr"><i class="fas fa-plus"></i> Add Address</button>' +
+          '</div>' +
+          '<div id="posCustAddrList">' + renderAddrList(addrs, c.id) + '</div>' +
+        '</div>' +
+
+        // === HISTORY TAB (orders/sales) ===
+        (isNew ? '' :
+        '<div class="pos-cust-tab-content" data-content="history">' +
+          renderCustHistory(history, rules) +
+        '</div>') +
+
+        // === ACCOUNT TAB ===
+        (isNew ? '' :
+        '<div class="pos-cust-tab-content" data-content="account">' +
+          renderCustAccount(acct || {}) +
+        '</div>') +
+
+      '</div>' +
+      '<div class="pos-cust-sheet-footer">' +
+        (isNew ? '' : '<button class="pos-btn pos-cust-delete-btn" id="posCustDeleteBtn"><i class="fas fa-trash"></i> Deactivate</button>') +
+        '<div style="flex:1"></div>' +
+        '<button class="pos-btn pos-btn-hold" id="posCustCancelBtn">Cancel</button>' +
+        '<button class="pos-btn pos-btn-pay" id="posCustSaveBtn"><i class="fas fa-save"></i> ' + (isNew ? 'Create Customer' : 'Save Changes') + '</button>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+
+  document.body.insertAdjacentHTML('beforeend', html);
+
+  // Tab switching
+  document.querySelectorAll('.pos-cust-tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      document.querySelectorAll('.pos-cust-tab').forEach(function(t) { t.classList.remove('active'); });
+      document.querySelectorAll('.pos-cust-tab-content').forEach(function(tc) { tc.classList.remove('active'); });
+      tab.classList.add('active');
+      var content = document.querySelector('[data-content="' + tab.dataset.tab + '"]');
+      if (content) content.classList.add('active');
+    });
+  });
+
+  // Tag suggestions
+  var tagsInput = document.getElementById('posCustTags');
+  if (tagsInput) tagsInput.addEventListener('focus', function() { showTagSuggestions(); });
+  if (tagsInput) tagsInput.addEventListener('input', function() { showTagSuggestions(); });
+  document.addEventListener('click', function hideTagSugg(e) {
+    if (!e.target.closest('.pos-cust-tags-input-wrap')) {
+      var sg = document.getElementById('posCustTagSuggestions');
+      if (sg) sg.style.display = 'none';
+    }
+  });
+
+  // Close
+  on('posCustSheetClose', 'click', closeCustomerSheet);
+  on('posCustCancelBtn', 'click', closeCustomerSheet);
+  document.getElementById('posCustSheetOverlay').addEventListener('click', function(e) {
+    if (e.target === this) closeCustomerSheet();
+  });
+
+  // Save
+  on('posCustSaveBtn', 'click', function() { saveCustomer(c.id); });
+
+  // Delete
+  if (!isNew) {
+    on('posCustDeleteBtn', 'click', function() {
+      if (!confirm('Deactivate ' + (c.business_name || c.contact_name) + '? This will hide them from active lists.')) return;
+      API.delete('/pos/customer-manage/' + c.id).then(function() {
+        toast('Customer deactivated');
+        closeCustomerSheet();
+        loadCustomerList();
+      }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+  }
+
+  // Add address button
+  if (c.id) {
+    on('posCustAddAddr', 'click', function() { openAddressForm(c.id, null); });
+  } else {
+    on('posCustAddAddr', 'click', function() { toast('Save the customer first, then add addresses', 'error'); });
+  }
+
+  // Wire address edit/delete buttons
+  wireAddrButtons(c.id);
+}
+
+function showTagSuggestions() {
+  var input = document.getElementById('posCustTags');
+  var sg = document.getElementById('posCustTagSuggestions');
+  if (!input || !sg) return;
+
+  var current = input.value.split(',').map(function(t) { return t.trim().toLowerCase(); });
+  var lastPart = current[current.length - 1] || '';
+  var available = _s.custAllTags.filter(function(t) {
+    return !current.includes(t.toLowerCase()) && t.toLowerCase().indexOf(lastPart) >= 0;
+  });
+
+  if (available.length === 0) { sg.style.display = 'none'; return; }
+
+  sg.style.display = 'block';
+  sg.innerHTML = available.map(function(t) {
+    return '<div class="pos-cust-tag-sug" data-tag="' + esc(t) + '">' + esc(t) + '</div>';
+  }).join('');
+
+  sg.querySelectorAll('.pos-cust-tag-sug').forEach(function(el) {
+    el.addEventListener('click', function() {
+      var parts = input.value.split(',').map(function(t) { return t.trim(); }).filter(function(t) { return t; });
+      parts[parts.length - 1] = el.dataset.tag;
+      input.value = parts.join(', ') + ', ';
+      input.focus();
+      sg.style.display = 'none';
+    });
+  });
+}
+
+function saveCustomer(id) {
+  var sp = document.getElementById('posCustSalesperson');
+  var spName = '';
+  if (sp && sp.selectedIndex > 0) spName = sp.options[sp.selectedIndex].text.split(' (')[0];
+
+  var body = {
+    business_name: gv('posCustBizName'),
+    contact_name: gv('posCustContactName'),
+    phone: gv('posCustPhone'),
+    email: gv('posCustEmail'),
+    customer_type: gv('posCustType'),
+    location_id: gv('posCustLocation') ? parseInt(gv('posCustLocation')) : null,
+    salesperson_id: gv('posCustSalesperson') ? parseInt(gv('posCustSalesperson')) : null,
+    salesperson_name: spName,
+    priority_rank: parseInt(gv('posCustPriority') || '0'),
+    sponsor_discount: parseFloat(gv('posCustDiscount') || '0'),
+    tax_exempt: document.getElementById('posCustTaxExempt') && document.getElementById('posCustTaxExempt').checked ? 1 : 0,
+    tags: gv('posCustTags'),
+    notes: gv('posCustNotes')
+  };
+
+  if (!body.business_name && !body.contact_name) {
+    toast('Business name or contact name required', 'error');
+    return;
+  }
+
+  var req = id ? API.put('/pos/customer-manage/' + id, body) : API.post('/pos/customer-manage', body);
+  req.then(function(r) {
+    toast(id ? 'Customer updated' : 'Customer created');
+    if (!id && r.data.id) {
+      // Re-open the sheet for the new customer so they can add addresses
+      closeCustomerSheet();
+      openCustomerSheet(r.data.id);
+    } else {
+      closeCustomerSheet();
+    }
+    loadCustomerList();
+    // Refresh tags
+    API.get('/pos/customer-tags').then(function(r2) { _s.custAllTags = r2.data || []; }).catch(function(){});
+  }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+}
+
+function closeCustomerSheet() {
+  var overlay = document.getElementById('posCustSheetOverlay');
+  if (overlay) overlay.remove();
+}
+
+// ==================== ADDRESS LIST / FORM ====================
+function renderAddrList(addrs, custId) {
+  if (!addrs || addrs.length === 0) {
+    return '<div class="pos-cust-addr-empty"><i class="fas fa-map-marker-alt"></i><p>No addresses yet</p></div>';
+  }
+  var html = '';
+  addrs.forEach(function(a) {
+    html += '<div class="pos-cust-addr-card">' +
+      '<div class="pos-cust-addr-main">' +
+        (a.label ? '<div class="pos-cust-addr-label">' + esc(a.label) + (a.is_primary ? ' <span class="pos-badge pos-badge-green">Primary</span>' : '') + '</div>' : '') +
+        '<div class="pos-cust-addr-street">' + esc(a.street || '') + '</div>' +
+        '<div class="pos-cust-addr-city">' + esc((a.city || '') + (a.state ? ', ' + a.state : '') + ' ' + (a.zip || '')) + '</div>' +
+        (a.gate_code ? '<div class="pos-cust-addr-meta"><i class="fas fa-key"></i> Gate: ' + esc(a.gate_code) + '</div>' : '') +
+        (a.driver_notes ? '<div class="pos-cust-addr-meta"><i class="fas fa-sticky-note"></i> ' + esc(a.driver_notes) + '</div>' : '') +
+      '</div>' +
+      '<div class="pos-cust-addr-actions">' +
+        '<button class="pos-cust-addr-btn" data-addr-edit="' + a.id + '" title="Edit"><i class="fas fa-pen"></i></button>' +
+        '<button class="pos-cust-addr-btn danger" data-addr-del="' + a.id + '" title="Delete"><i class="fas fa-trash"></i></button>' +
+      '</div>' +
+    '</div>';
+  });
+  return html;
+}
+
+function wireAddrButtons(custId) {
+  var list = document.getElementById('posCustAddrList');
+  if (!list) return;
+  list.querySelectorAll('[data-addr-edit]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var addrId = parseInt(btn.dataset.addrEdit);
+      API.get('/pos/customer-addresses/' + custId).then(function(r) {
+        var addr = (r.data || []).find(function(a) { return a.id === addrId; });
+        if (addr) openAddressForm(custId, addr);
+      });
+    });
+  });
+  list.querySelectorAll('[data-addr-del]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      if (!confirm('Delete this address?')) return;
+      API.delete('/pos/customer-addresses/' + custId + '/' + btn.dataset.addrDel).then(function() {
+        toast('Address deleted');
+        refreshAddrList(custId);
+      }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+  });
+}
+
+function refreshAddrList(custId) {
+  API.get('/pos/customer-addresses/' + custId).then(function(r) {
+    var list = document.getElementById('posCustAddrList');
+    if (list) { list.innerHTML = renderAddrList(r.data || [], custId); wireAddrButtons(custId); }
+  });
+}
+
+function openAddressForm(custId, addr) {
+  var isEdit = !!addr;
+  var a = addr || { label: '', street: '', city: '', state: 'FL', zip: '', gate_code: '', driver_notes: '', is_primary: 0 };
+
+  var formHtml = '<div class="pos-cust-addr-form" id="posCustAddrForm">' +
+    '<h4>' + (isEdit ? 'Edit Address' : 'New Address') + '</h4>' +
+    '<div class="pos-cust-form-grid">' +
+      '<div class="pos-cust-form-group">' +
+        '<label>Label</label><input type="text" id="posAddrLabel" value="' + esc(a.label) + '" placeholder="e.g. Home, Barn, Office">' +
+      '</div>' +
+      '<div class="pos-cust-form-group">' +
+        '<label><input type="checkbox" id="posAddrPrimary"' + (a.is_primary ? ' checked' : '') + '> Primary Address</label>' +
+      '</div>' +
+      '<div class="pos-cust-form-group full">' +
+        '<label>Street</label><input type="text" id="posAddrStreet" value="' + esc(a.street) + '" placeholder="123 Main St">' +
+      '</div>' +
+      '<div class="pos-cust-form-group">' +
+        '<label>City</label><input type="text" id="posAddrCity" value="' + esc(a.city) + '" placeholder="City">' +
+      '</div>' +
+      '<div class="pos-cust-form-group">' +
+        '<label>State</label><input type="text" id="posAddrState" value="' + esc(a.state) + '" placeholder="FL" maxlength="2">' +
+      '</div>' +
+      '<div class="pos-cust-form-group">' +
+        '<label>Zip</label><input type="text" id="posAddrZip" value="' + esc(a.zip) + '" placeholder="33470">' +
+      '</div>' +
+      '<div class="pos-cust-form-group">' +
+        '<label>Gate Code</label><input type="text" id="posAddrGate" value="' + esc(a.gate_code) + '" placeholder="Gate code">' +
+      '</div>' +
+      '<div class="pos-cust-form-group full">' +
+        '<label>Driver Notes</label><textarea id="posAddrNotes" rows="2" placeholder="Delivery instructions...">' + esc(a.driver_notes) + '</textarea>' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;margin-top:12px">' +
+      '<button class="pos-btn pos-btn-hold" id="posAddrCancelBtn">Cancel</button>' +
+      '<button class="pos-btn pos-btn-pay" id="posAddrSaveBtn"><i class="fas fa-save"></i> ' + (isEdit ? 'Update' : 'Add') + '</button>' +
+    '</div>' +
+  '</div>';
+
+  var list = document.getElementById('posCustAddrList');
+  if (list) {
+    var existing = document.getElementById('posCustAddrForm');
+    if (existing) existing.remove();
+    list.insertAdjacentHTML('afterbegin', formHtml);
+  }
+
+  on('posAddrCancelBtn', 'click', function() {
+    var f = document.getElementById('posCustAddrForm');
+    if (f) f.remove();
+  });
+
+  on('posAddrSaveBtn', 'click', function() {
+    var body = {
+      label: gv('posAddrLabel'),
+      street: gv('posAddrStreet'),
+      city: gv('posAddrCity'),
+      state: gv('posAddrState'),
+      zip: gv('posAddrZip'),
+      gate_code: gv('posAddrGate'),
+      driver_notes: gv('posAddrNotes'),
+      is_primary: document.getElementById('posAddrPrimary') && document.getElementById('posAddrPrimary').checked ? 1 : 0
+    };
+
+    if (!body.street) { toast('Street address required', 'error'); return; }
+
+    var req = isEdit
+      ? API.put('/pos/customer-addresses/' + custId + '/' + addr.id, body)
+      : API.post('/pos/customer-addresses/' + custId, body);
+
+    req.then(function() {
+      toast(isEdit ? 'Address updated' : 'Address added');
+      refreshAddrList(custId);
+    }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+  });
+}
+
+// ==================== HISTORY + ACCOUNT SUB-RENDERERS ====================
+function renderCustHistory(items, rules) {
+  var html = '';
+  if (rules && rules.length > 0) {
+    html += '<div class="pos-cust-section"><h4><i class="fas fa-tag"></i> Price Rules</h4>';
+    rules.forEach(function(r) {
+      html += '<div class="pos-cust-field"><span class="pos-cust-field-label">' + esc(r.product_name || 'Product #' + r.product_id) + '</span>' +
+        '<span class="pos-cust-field-value">' + (r.price ? '$' + r.price.toFixed(2) : r.discount_pct + '% off') + ' (' + r.rule_type + ')</span></div>';
+    });
+    html += '</div>';
+  }
+
+  if (!items || items.length === 0) {
+    html += '<div class="pos-cust-addr-empty"><i class="fas fa-receipt"></i><p>No order history</p></div>';
+    return html;
+  }
+
+  html += '<table class="pos-table"><thead><tr><th>Number</th><th>Date</th><th>Items</th><th>Status</th><th class="right">Total</th></tr></thead><tbody>';
+  items.forEach(function(o) {
+    var num = o.sale_number || o.order_number || '#' + o.id;
+    var status = o.status || '';
+    var statusClass = status === 'completed' ? 'status-completed' : status === 'voided' ? 'status-voided' : 'status-draft';
+    html += '<tr>' +
+      '<td>' + esc(num) + '</td>' +
+      '<td>' + (o.created_at || '').slice(0, 10) + '</td>' +
+      '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(o.items || '-') + '</td>' +
+      '<td><span class="status-badge ' + statusClass + '">' + esc(status) + '</span></td>' +
+      '<td class="right money">$' + (o.total || o.total_weight || 0).toFixed(2) + '</td>' +
+    '</tr>';
+  });
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderCustAccount(acct) {
+  return '<div class="pos-cust-section">' +
+    '<h4><i class="fas fa-credit-card"></i> Account Details</h4>' +
+    fld('Balance', '$' + (acct.balance || 0).toFixed(2)) +
+    fld('Credit Limit', acct.credit_limit ? '$' + acct.credit_limit.toFixed(2) : 'None') +
+    fld('Payment Terms', acct.payment_terms || 'COD') +
+    fld('Status', acct.status || 'active') +
+    fld('Last Payment', acct.last_payment_date || 'Never') +
+    fld('Last Payment Amount', acct.last_payment_amount ? '$' + acct.last_payment_amount.toFixed(2) : '-') +
+  '</div>';
+}
 
 function toast(msg, type) {
   if (typeof window.shellToast === 'function') { window.shellToast(msg, type || 'success'); return; }

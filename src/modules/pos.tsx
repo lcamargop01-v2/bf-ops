@@ -855,4 +855,203 @@ app.get('/api/pos/locations', async (c) => {
   return c.json(r.results)
 })
 
+// ==================== USERS LIST (for salesperson picker) ====================
+app.get('/api/pos/users', async (c) => {
+  const db = c.env.DB
+  const r = await db.prepare('SELECT id, name, role FROM users WHERE active = 1 ORDER BY name').all()
+  return c.json(r.results)
+})
+
+// ==================== CUSTOMER MANAGEMENT (full CRUD) ====================
+
+// List customers with pagination + filters
+app.get('/api/pos/customer-list', async (c) => {
+  const db = c.env.DB
+  const search = c.req.query('search') || ''
+  const tag = c.req.query('tag') || ''
+  const type = c.req.query('type') || ''
+  const salesperson = c.req.query('salesperson_id') || ''
+  const page = parseInt(c.req.query('page') || '1')
+  const limit = parseInt(c.req.query('limit') || '50')
+  const offset = (page - 1) * limit
+
+  let where = 'WHERE c.active = 1'
+  const params: any[] = []
+
+  if (search) {
+    where += ' AND (c.business_name LIKE ? OR c.contact_name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)'
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`)
+  }
+  if (tag) {
+    where += ' AND c.tags LIKE ?'
+    params.push(`%${tag}%`)
+  }
+  if (type) {
+    where += ' AND c.customer_type = ?'
+    params.push(type)
+  }
+  if (salesperson) {
+    where += ' AND c.salesperson_id = ?'
+    params.push(salesperson)
+  }
+
+  const countR = await db.prepare(`SELECT COUNT(*) as total FROM customers c ${where}`).bind(...params).first<any>()
+  const total = countR?.total || 0
+
+  const query = `
+    SELECT c.*, COALESCE(loc.name, '') as location_name,
+           ca.balance as account_balance, ca.credit_limit,
+           (SELECT COUNT(*) FROM orders WHERE customer_id = c.id AND status NOT IN ('cancelled')) as order_count,
+           (SELECT COUNT(*) FROM pos_sales WHERE customer_id = c.id AND status = 'completed') as sale_count,
+           (SELECT COALESCE(SUM(total), 0) FROM pos_sales WHERE customer_id = c.id AND status = 'completed') as total_spent,
+           (SELECT GROUP_CONCAT(label || ': ' || street || ', ' || city || ' ' || state || ' ' || zip, ' | ')
+            FROM addresses WHERE customer_id = c.id) as address_summary
+    FROM customers c
+    LEFT JOIN locations loc ON loc.id = c.location_id
+    LEFT JOIN customer_accounts ca ON ca.customer_id = c.id
+    ${where}
+    ORDER BY c.business_name ASC
+    LIMIT ? OFFSET ?
+  `
+  params.push(limit, offset)
+
+  const r = await db.prepare(query).bind(...params).all()
+  return c.json({ customers: r.results, total, page, limit, pages: Math.ceil(total / limit) })
+})
+
+// Get all distinct tags across customers
+app.get('/api/pos/customer-tags', async (c) => {
+  const db = c.env.DB
+  const r = await db.prepare("SELECT tags FROM customers WHERE tags IS NOT NULL AND tags != '' AND active = 1").all()
+  const tagSet = new Set<string>()
+  for (const row of r.results as any[]) {
+    if (row.tags) {
+      row.tags.split(',').forEach((t: string) => {
+        const trimmed = t.trim()
+        if (trimmed) tagSet.add(trimmed)
+      })
+    }
+  }
+  return c.json(Array.from(tagSet).sort())
+})
+
+// Create customer
+app.post('/api/pos/customer-manage', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+
+  if (!body.business_name && !body.contact_name) {
+    return c.json({ error: 'Business name or contact name required' }, 400)
+  }
+
+  const r = await db.prepare(`
+    INSERT INTO customers (business_name, contact_name, phone, email, customer_type, notes, tax_exempt, sponsor_discount, priority_rank, location_id, tags, salesperson_id, salesperson_name)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    body.business_name || '', body.contact_name || '', body.phone || '', body.email || '',
+    body.customer_type || 'other', body.notes || '', body.tax_exempt ? 1 : 0,
+    body.sponsor_discount || 0, body.priority_rank || 0,
+    body.location_id || null, body.tags || '', body.salesperson_id || null, body.salesperson_name || ''
+  ).run()
+
+  return c.json({ id: r.meta.last_row_id, success: true }, 201)
+})
+
+// Update customer
+app.put('/api/pos/customer-manage/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+
+  const existing = await db.prepare('SELECT id FROM customers WHERE id = ?').bind(id).first()
+  if (!existing) return c.json({ error: 'Customer not found' }, 404)
+
+  await db.prepare(`
+    UPDATE customers SET
+      business_name = ?, contact_name = ?, phone = ?, email = ?,
+      customer_type = ?, notes = ?, tax_exempt = ?, sponsor_discount = ?,
+      priority_rank = ?, location_id = ?, tags = ?,
+      salesperson_id = ?, salesperson_name = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(
+    body.business_name || '', body.contact_name || '', body.phone || '', body.email || '',
+    body.customer_type || 'other', body.notes || '', body.tax_exempt ? 1 : 0,
+    body.sponsor_discount || 0, body.priority_rank || 0,
+    body.location_id || null, body.tags || '',
+    body.salesperson_id || null, body.salesperson_name || '',
+    id
+  ).run()
+
+  return c.json({ success: true })
+})
+
+// Soft-delete customer (set active = 0)
+app.delete('/api/pos/customer-manage/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  await db.prepare('UPDATE customers SET active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+// ==================== ADDRESS MANAGEMENT ====================
+app.get('/api/pos/customer-addresses/:customerId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  const r = await db.prepare('SELECT * FROM addresses WHERE customer_id = ? ORDER BY is_primary DESC, id DESC').bind(customerId).all()
+  return c.json(r.results)
+})
+
+app.post('/api/pos/customer-addresses/:customerId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  const body = await c.req.json() as any
+
+  // If this is marked primary, unset any other primary
+  if (body.is_primary) {
+    await db.prepare('UPDATE addresses SET is_primary = 0 WHERE customer_id = ?').bind(customerId).run()
+  }
+
+  const r = await db.prepare(`
+    INSERT INTO addresses (customer_id, label, street, city, state, zip, gate_code, driver_notes, is_primary, zone_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    customerId, body.label || '', body.street || '', body.city || '', body.state || '', body.zip || '',
+    body.gate_code || '', body.driver_notes || '', body.is_primary ? 1 : 0, body.zone_id || null
+  ).run()
+
+  return c.json({ id: r.meta.last_row_id, success: true }, 201)
+})
+
+app.put('/api/pos/customer-addresses/:customerId/:addrId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  const addrId = parseInt(c.req.param('addrId'))
+  const body = await c.req.json() as any
+
+  if (body.is_primary) {
+    await db.prepare('UPDATE addresses SET is_primary = 0 WHERE customer_id = ?').bind(customerId).run()
+  }
+
+  await db.prepare(`
+    UPDATE addresses SET label = ?, street = ?, city = ?, state = ?, zip = ?,
+      gate_code = ?, driver_notes = ?, is_primary = ?, zone_id = ?
+    WHERE id = ? AND customer_id = ?
+  `).bind(
+    body.label || '', body.street || '', body.city || '', body.state || '', body.zip || '',
+    body.gate_code || '', body.driver_notes || '', body.is_primary ? 1 : 0, body.zone_id || null,
+    addrId, customerId
+  ).run()
+
+  return c.json({ success: true })
+})
+
+app.delete('/api/pos/customer-addresses/:customerId/:addrId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  const addrId = parseInt(c.req.param('addrId'))
+  await db.prepare('DELETE FROM addresses WHERE id = ? AND customer_id = ?').bind(addrId, customerId).run()
+  return c.json({ success: true })
+})
+
 export { app as posApp }
