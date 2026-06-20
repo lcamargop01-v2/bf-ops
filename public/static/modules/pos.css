@@ -252,6 +252,36 @@
 .pos-delivery-opts label { font-size: 12px; font-weight: 600; color: var(--pos-navy); display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .pos-delivery-opts select, .pos-delivery-opts input { padding: 8px 10px; border: 1px solid var(--pos-gray-200); border-radius: 6px; font-size: 13px; font-family: inherit; width: 100%; margin-bottom: 6px; }
 
+/* ==================== CROSS-LOCATION FULFILLMENT OPTIONS ==================== */
+.pos-cross-loc { background: linear-gradient(135deg, #EFF6FF, #F0FDFA); border: 1px solid #93C5FD; border-radius: 10px; padding: 12px; margin-top: 10px; }
+.pos-cross-loc-header { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--pos-navy); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.pos-cross-loc-header i { font-size: 14px; color: var(--pos-navy-light); }
+.pos-cross-loc-opt { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; transition: background 0.15s; font-size: 13px; color: var(--pos-gray-700); }
+.pos-cross-loc-opt:hover { background: rgba(255,255,255,0.7); }
+.pos-cross-loc-opt input[type="radio"] { accent-color: var(--pos-navy); width: 16px; height: 16px; flex-shrink: 0; }
+.pos-cross-loc-opt.active { background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.08); font-weight: 600; }
+.pos-cross-loc-opt .opt-label { flex: 1; }
+.pos-cross-loc-opt .opt-desc { font-size: 11px; color: var(--pos-gray-400); font-weight: 400; display: block; margin-top: 1px; }
+
+/* ==================== HELD SALES LIST ==================== */
+.pos-held-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--pos-gray-100); cursor: pointer; transition: background 0.15s; }
+.pos-held-row:hover { background: #EFF6FF; }
+.pos-held-row:last-child { border-bottom: none; }
+.pos-held-row .held-info { flex: 1; min-width: 0; }
+.pos-held-row .held-name { font-size: 13px; font-weight: 600; color: var(--pos-gray-800); }
+.pos-held-row .held-meta { font-size: 11px; color: var(--pos-gray-400); }
+.pos-held-row .held-total { font-size: 14px; font-weight: 700; color: var(--pos-green); white-space: nowrap; }
+.pos-held-row .held-action { background: var(--pos-navy-light); color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.pos-held-row .held-action:hover { background: var(--pos-navy); }
+
+/* ==================== HIDE ON MOBILE ==================== */
+.hide-mobile { }
+
+/* ==================== TRANSFER/CROSS-LOCATION BADGES ==================== */
+.pos-badge-transfer { background: #DBEAFE; color: #1E40AF; }
+.pos-badge-dc-pickup { background: #E0E7FF; color: #3730A3; }
+.pos-badge-delivery-cross { background: #F0FDFA; color: #115E59; }
+
 /* ==================== RESPONSIVE ==================== */
 @media (max-width: 900px) {
   .pos-register { flex-direction: column; }
@@ -267,4 +297,6 @@
   .pos-product-grid { grid-template-columns: repeat(2, 1fr); }
   .pos-pay-methods { grid-template-columns: repeat(2, 1fr); }
   .pos-dash-cards { grid-template-columns: 1fr 1fr; }
+  .hide-mobile { display: none !important; }
+  .pos-cross-loc-opt { padding: 6px 8px; font-size: 12px; }
 }

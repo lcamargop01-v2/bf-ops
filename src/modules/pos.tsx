@@ -14,6 +14,22 @@ function genRefundNumber() {
   const d = new Date()
   return 'R' + d.getFullYear().toString().slice(2) + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '-' + Math.random().toString(36).substring(2,7).toUpperCase()
 }
+function genTransferNumber() {
+  const d = new Date()
+  return 'TRF' + d.getFullYear().toString().slice(2) + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '-' + Math.random().toString(36).substring(2,7).toUpperCase()
+}
+
+// Map frontend fulfillment types to valid sale_type values
+function mapSaleType(fulfillment: string, baseSaleType: string): string {
+  const validTypes = ['walk_in','delivery','pickup','wholesale','phone_order']
+  // If base sale type is already valid, use it
+  if (validTypes.includes(baseSaleType)) return baseSaleType
+  // Map fulfillment-based types
+  if (fulfillment === 'dc_pickup') return 'pickup'
+  if (fulfillment === 'delivery') return 'delivery'
+  if (fulfillment === 'reserve_retail') return 'walk_in' // Transfer is tracked separately
+  return 'walk_in'
+}
 
 // ==================== PRODUCTS: Quick search for POS ====================
 app.get('/api/pos/products', async (c) => {
@@ -261,7 +277,7 @@ app.put('/api/pos/sessions/:id/close', async (c) => {
   return c.json({ success: true })
 })
 
-// ==================== CREATE SALE ====================
+// ==================== CREATE SALE (with cross-location support) ====================
 app.post('/api/pos/sales', async (c) => {
   const db = c.env.DB
   const body = await c.req.json() as any
@@ -269,6 +285,18 @@ app.post('/api/pos/sales', async (c) => {
   const saleNumber = genSaleNumber()
   const items = body.items || []
   if (items.length === 0) return c.json({ error: 'No items in sale' }, 400)
+
+  // Cross-location fields from frontend
+  const fulfillment = body.fulfillment || 'local'   // local | dc_pickup | delivery | reserve_retail
+  const sourceLocationId = body.source_location_id ? parseInt(body.source_location_id) : null
+  const saleLocationId = parseInt(body.location_id || '1')
+
+  // Determine which location inventory gets deducted from
+  // - local: deduct from sale location
+  // - dc_pickup: customer at retail, product ships from DC → deduct from DC (source)
+  // - delivery: product delivered from DC → deduct from DC (source)
+  // - reserve_retail: DC reserving from retail → deduct from retail (source), create transfer
+  const deductLocationId = (fulfillment !== 'local' && sourceLocationId) ? sourceLocationId : saleLocationId
 
   // Calculate totals
   let subtotal = 0
@@ -296,14 +324,13 @@ app.post('/api/pos/sales', async (c) => {
     }
     const lineTax = lineSubtotal * (taxRate / 100)
 
-    // Check stock
-    const locationId = item.location_id || body.location_id || 1
+    // Check stock at the location we're deducting from
     const stock = await db.prepare('SELECT qty_available FROM inventory_stock WHERE product_id = ? AND location_id = ?')
-      .bind(product.id, locationId).first<any>()
+      .bind(product.id, deductLocationId).first<any>()
 
     if (!stock || stock.qty_available < qty) {
       const avail = stock?.qty_available || 0
-      warnings.push(`${product.name}: Only ${avail} available (requested ${qty})`)
+      warnings.push(`${product.name}: Only ${avail} available at deduct location (requested ${qty})`)
       if (!body.allow_negative_stock) continue
     }
 
@@ -320,7 +347,7 @@ app.post('/api/pos/sales', async (c) => {
       tax_rate: taxRate,
       tax_amount: lineTax,
       line_total: lineSubtotal + lineTax,
-      location_id: locationId
+      location_id: deductLocationId  // inventory deducted from this location
     })
 
     subtotal += lineSubtotal
@@ -334,43 +361,51 @@ app.post('/api/pos/sales', async (c) => {
   const amountPaid = parseFloat(body.amount_paid || total)
   const changeDue = Math.max(0, amountPaid - total)
 
-  // Insert sale
+  // Map sale_type to valid CHECK values
+  const saleType = mapSaleType(fulfillment, body.sale_type || 'walk_in')
+
+  // Insert sale with cross-location columns
   const saleRes = await db.prepare(`
     INSERT INTO pos_sales (sale_number, session_id, location_id, customer_id, sale_type, status,
       subtotal, tax_amount, discount_amount, discount_reason, total, amount_paid, change_due,
       notes, internal_notes, delivery_requested, delivery_date, delivery_address_id,
-      cashier_id, cashier_name)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      cashier_id, cashier_name, source_location_id, fulfillment_type)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(
-    saleNumber, body.session_id || null, body.location_id || 1, body.customer_id || null,
-    body.sale_type || 'walk_in', body.status || 'completed',
+    saleNumber, body.session_id || null, saleLocationId, body.customer_id || null,
+    saleType, body.status || 'completed',
     subtotal, taxTotal, discountTotal, body.discount_reason || null,
     total, amountPaid, changeDue,
     body.notes || null, body.internal_notes || null,
     body.delivery_requested ? 1 : 0, body.delivery_date || null, body.delivery_address_id || null,
-    body.cashier_id || null, body.cashier_name || null
+    body.cashier_id || null, body.cashier_name || null,
+    sourceLocationId, fulfillment
   ).run()
 
   const saleId = saleRes.meta.last_row_id
 
-  // Insert line items
+  // Insert line items & deduct inventory
   for (const item of processedItems) {
     await db.prepare(`
       INSERT INTO pos_sale_items (sale_id, product_id, product_name, sku, category, quantity, unit_price, unit_cost, discount_pct, discount_amount, tax_rate, tax_amount, line_total, location_id)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(saleId, item.product_id, item.product_name, item.sku, item.category, item.quantity, item.unit_price, item.unit_cost, item.discount_pct, item.discount_amount, item.tax_rate, item.tax_amount, item.line_total, item.location_id).run()
 
-    // Deduct inventory
+    // Deduct inventory from the correct location
     await db.prepare(`
       UPDATE inventory_stock SET qty_on_hand = qty_on_hand - ?, updated_at = CURRENT_TIMESTAMP
       WHERE product_id = ? AND location_id = ?
     `).bind(item.quantity, item.product_id, item.location_id).run()
 
     // Audit trail
+    const auditAction = fulfillment === 'reserve_retail' ? 'transfer_out' : 'sale'
+    const auditReason = fulfillment !== 'local'
+      ? `POS ${fulfillment} (from loc ${item.location_id} for sale at loc ${saleLocationId})`
+      : 'POS Sale'
     await db.prepare(`
       INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
-      VALUES (?, ?, 'sale', ?, 'POS Sale', 'pos_sale', ?, ?, ?)
-    `).bind(item.product_id, item.location_id, -item.quantity, saleId, 'Sale #' + saleNumber, body.cashier_name || '').run()
+      VALUES (?, ?, ?, ?, ?, 'pos_sale', ?, ?, ?)
+    `).bind(item.product_id, item.location_id, auditAction, -item.quantity, auditReason, saleId, 'Sale #' + saleNumber, body.cashier_name || '').run()
   }
 
   // Insert payments
@@ -396,9 +431,70 @@ app.post('/api/pos/sales', async (c) => {
     `).bind(body.customer_id, onAccountPmt.amount, 'Sale #' + saleNumber, saleId, body.cashier_id || null).run()
   }
 
-  // If delivery requested, create logistics order
+  // ===== CROSS-LOCATION WORKFLOWS =====
   let orderId = null
-  if (body.delivery_requested && body.customer_id) {
+  let transferId = null
+
+  if (fulfillment === 'reserve_retail') {
+    // DC is reserving inventory FROM retail → Create inventory transfer (retail → DC)
+    const transferNumber = genTransferNumber()
+    const tRes = await db.prepare(`
+      INSERT INTO inventory_transfers (transfer_number, from_location_id, to_location_id, status, notes, created_by)
+      VALUES (?, ?, ?, 'pending', ?, ?)
+    `).bind(transferNumber, sourceLocationId, saleLocationId,
+      'POS reserve from retail — Sale #' + saleNumber, body.cashier_id || null).run()
+    transferId = tRes.meta.last_row_id
+
+    // Add transfer items
+    for (const item of processedItems) {
+      await db.prepare(`
+        INSERT INTO inventory_transfer_items (transfer_id, product_id, qty_requested, qty_shipped, qty_received)
+        VALUES (?, ?, ?, 0, 0)
+      `).bind(transferId, item.product_id, item.quantity).run()
+    }
+
+    // Link transfer to sale
+    await db.prepare('UPDATE pos_sales SET transfer_id = ? WHERE id = ?').bind(transferId, saleId).run()
+
+  } else if (fulfillment === 'dc_pickup' && body.customer_id) {
+    // Retail customer picking up at DC — create a pickup order linked to DC
+    const orderNumber = 'POS-PU-' + saleNumber
+    const orderRes = await db.prepare(`
+      INSERT INTO orders (order_number, customer_id, address_id, status, priority, scheduled_date, special_instructions, created_by)
+      VALUES (?,?,?,?,?,?,?,?)
+    `).bind(orderNumber, body.customer_id, null, 'new', 'normal',
+      body.delivery_date || null,
+      'POS Pickup at DC — Sale #' + saleNumber + (body.notes ? ' — ' + body.notes : ''),
+      body.cashier_id || null).run()
+    orderId = orderRes.meta.last_row_id
+
+    for (const item of processedItems) {
+      await db.prepare('INSERT INTO order_items (order_id, product_id, quantity) VALUES (?,?,?)')
+        .bind(orderId, item.product_id, item.quantity).run()
+    }
+    await db.prepare('UPDATE pos_sales SET order_id = ? WHERE id = ?').bind(orderId, saleId).run()
+
+  } else if (fulfillment === 'delivery' && body.customer_id) {
+    // Delivery from DC (or same-location delivery)
+    const orderNumber = 'POS-DLV-' + saleNumber
+    const orderRes = await db.prepare(`
+      INSERT INTO orders (order_number, customer_id, address_id, status, priority, scheduled_date, special_instructions, created_by)
+      VALUES (?,?,?,?,?,?,?,?)
+    `).bind(orderNumber, body.customer_id, body.delivery_address_id || null, 'new', 'normal',
+      body.delivery_date || null,
+      (sourceLocationId ? 'Cross-location delivery from loc ' + sourceLocationId + ' — ' : '') +
+      'POS Sale #' + saleNumber + (body.notes ? ' — ' + body.notes : ''),
+      body.cashier_id || null).run()
+    orderId = orderRes.meta.last_row_id
+
+    for (const item of processedItems) {
+      await db.prepare('INSERT INTO order_items (order_id, product_id, quantity) VALUES (?,?,?)')
+        .bind(orderId, item.product_id, item.quantity).run()
+    }
+    await db.prepare('UPDATE pos_sales SET order_id = ? WHERE id = ?').bind(orderId, saleId).run()
+
+  } else if (body.delivery_requested && body.customer_id) {
+    // Legacy: simple same-location delivery
     const orderNumber = 'POS-' + saleNumber
     const orderRes = await db.prepare(`
       INSERT INTO orders (order_number, customer_id, address_id, status, priority, scheduled_date, special_instructions, created_by)
@@ -407,13 +503,10 @@ app.post('/api/pos/sales', async (c) => {
       body.delivery_date || null, 'POS Sale #' + saleNumber + (body.notes ? ' - ' + body.notes : ''), body.cashier_id || null).run()
     orderId = orderRes.meta.last_row_id
 
-    // Add order items
     for (const item of processedItems) {
       await db.prepare('INSERT INTO order_items (order_id, product_id, quantity) VALUES (?,?,?)')
         .bind(orderId, item.product_id, item.quantity).run()
     }
-
-    // Link order to sale
     await db.prepare('UPDATE pos_sales SET order_id = ? WHERE id = ?').bind(orderId, saleId).run()
   }
 
@@ -424,6 +517,8 @@ app.post('/api/pos/sales', async (c) => {
     amount_paid: amountPaid, change_due: changeDue,
     items_count: processedItems.length,
     order_id: orderId,
+    transfer_id: transferId,
+    fulfillment_type: fulfillment,
     warnings
   }, 201)
 })
@@ -448,7 +543,13 @@ app.get('/api/pos/sales/:id', async (c) => {
     ? await db.prepare('SELECT id, business_name, contact_name, phone, email, tax_exempt FROM customers WHERE id = ?').bind((sale as any).customer_id).first()
     : null
 
-  return c.json({ sale, items: items.results, payments: payments.results, customer })
+  // Include transfer info if linked
+  let transfer = null
+  if ((sale as any).transfer_id) {
+    transfer = await db.prepare('SELECT * FROM inventory_transfers WHERE id = ?').bind((sale as any).transfer_id).first()
+  }
+
+  return c.json({ sale, items: items.results, payments: payments.results, customer, transfer })
 })
 
 // ==================== LIST SALES (with filters) ====================
@@ -515,6 +616,18 @@ app.put('/api/pos/sales/:id/void', async (c) => {
       await db.prepare("INSERT INTO customer_account_transactions (customer_id, transaction_type, amount, description, reference_type, reference_id) VALUES (?, 'adjustment', ?, ?, 'pos_sale', ?)")
         .bind(sale.customer_id, -acctPmt.total, 'Void: ' + sale.sale_number, id).run()
     }
+  }
+
+  // Cancel linked transfer if exists
+  if (sale.transfer_id) {
+    await db.prepare("UPDATE inventory_transfers SET status = 'cancelled' WHERE id = ? AND status = 'pending'")
+      .bind(sale.transfer_id).run()
+  }
+
+  // Cancel linked order if exists
+  if (sale.order_id) {
+    await db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ? AND status IN ('new','pending')")
+      .bind(sale.order_id).run()
   }
 
   await db.prepare("UPDATE pos_sales SET status = 'voided', internal_notes = COALESCE(internal_notes, '') || '\nVoided: ' || ? WHERE id = ?")
@@ -663,7 +776,7 @@ app.get('/api/pos/dashboard', async (c) => {
 
   let locFilter = ''
   const params: any[] = [today]
-  if (locationId) { locFilter = ' AND location_id = ?'; params.push(locationId) }
+  if (locationId) { locFilter = ' AND s.location_id = ?'; params.push(locationId) }
 
   const todayStats = await db.prepare(`
     SELECT COUNT(*) as transactions,
@@ -671,8 +784,10 @@ app.get('/api/pos/dashboard', async (c) => {
            COALESCE(SUM(CASE WHEN sale_type = 'walk_in' THEN total ELSE 0 END), 0) as walk_in_revenue,
            COALESCE(SUM(CASE WHEN sale_type = 'delivery' THEN total ELSE 0 END), 0) as delivery_revenue,
            COALESCE(SUM(CASE WHEN sale_type = 'wholesale' THEN total ELSE 0 END), 0) as wholesale_revenue,
+           COALESCE(SUM(CASE WHEN fulfillment_type = 'reserve_retail' THEN total ELSE 0 END), 0) as transfer_revenue,
+           COALESCE(SUM(CASE WHEN fulfillment_type = 'dc_pickup' THEN total ELSE 0 END), 0) as dc_pickup_revenue,
            COALESCE(AVG(total), 0) as avg_transaction
-    FROM pos_sales WHERE DATE(created_at) = ? AND status = 'completed' ${locFilter}
+    FROM pos_sales s WHERE DATE(s.created_at) = ? AND s.status = 'completed' ${locFilter}
   `).bind(...params).first<any>()
 
   // Payment method breakdown
@@ -695,7 +810,7 @@ app.get('/api/pos/dashboard', async (c) => {
 
   // Held sales count
   const heldCount = await db.prepare(`
-    SELECT COUNT(*) as cnt FROM pos_sales WHERE status = 'hold' ${locFilter.replace('location_id', 'location_id')}
+    SELECT COUNT(*) as cnt FROM pos_sales s WHERE s.status = 'hold' ${locFilter}
   `).bind(...(locationId ? [locationId] : [])).first<any>()
 
   // Low stock warnings (< reorder point)
@@ -710,12 +825,26 @@ app.get('/api/pos/dashboard', async (c) => {
     ORDER BY s.qty_available ASC LIMIT 20
   `).bind(...lowStockParams).all()
 
+  // Pending transfers for this location
+  const pendingTransfers = await db.prepare(`
+    SELECT t.*, 
+           fl.name as from_location_name, tl.name as to_location_name,
+           (SELECT COUNT(*) FROM inventory_transfer_items WHERE transfer_id = t.id) as item_count
+    FROM inventory_transfers t
+    LEFT JOIN locations fl ON fl.id = t.from_location_id
+    LEFT JOIN locations tl ON tl.id = t.to_location_id
+    WHERE t.status IN ('pending','in_transit')
+    ${locationId ? 'AND (t.from_location_id = ? OR t.to_location_id = ?)' : ''}
+    ORDER BY t.created_at DESC LIMIT 10
+  `).bind(...(locationId ? [locationId, locationId] : [])).all()
+
   return c.json({
     today: todayStats,
     paymentBreakdown: paymentBreakdown.results,
     topProducts: topProducts.results,
     heldCount: heldCount?.cnt || 0,
-    lowStock: lowStock.results
+    lowStock: lowStock.results,
+    pendingTransfers: pendingTransfers.results
   })
 })
 
