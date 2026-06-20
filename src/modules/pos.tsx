@@ -1054,4 +1054,571 @@ app.delete('/api/pos/customer-addresses/:customerId/:addrId', async (c) => {
   return c.json({ success: true })
 })
 
+// ==================== STOCK CHECK (cross-location inventory popup) ====================
+app.get('/api/pos/stock-check/:productId', async (c) => {
+  const db = c.env.DB
+  const productId = parseInt(c.req.param('productId'))
+
+  const product = await db.prepare('SELECT id, name, sku, category, price FROM products WHERE id = ?').bind(productId).first()
+  if (!product) return c.json({ error: 'Product not found' }, 404)
+
+  const stock = await db.prepare(`
+    SELECT s.location_id, l.name as location_name, l.code as location_code, l.type as location_type,
+           s.qty_on_hand, s.qty_available, s.qty_on_hold, s.qty_reserved, s.reorder_point
+    FROM inventory_stock s
+    JOIN locations l ON l.id = s.location_id
+    WHERE s.product_id = ? AND l.active = 1
+    ORDER BY l.name
+  `).bind(productId).all()
+
+  // Pending reservations for this product
+  const reservations = await db.prepare(`
+    SELECT r.*, fl.name as from_name, tl.name as to_name
+    FROM pos_stock_reservations r
+    JOIN locations fl ON fl.id = r.from_location_id
+    JOIN locations tl ON tl.id = r.to_location_id
+    WHERE r.product_id = ? AND r.status IN ('pending','confirmed')
+    ORDER BY r.created_at DESC
+  `).bind(productId).all()
+
+  return c.json({ product, stock: stock.results, reservations: reservations.results })
+})
+
+// Reserve stock for transfer
+app.post('/api/pos/stock-reserve', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+
+  if (!body.product_id || !body.from_location_id || !body.to_location_id || !body.quantity) {
+    return c.json({ error: 'product_id, from_location_id, to_location_id, and quantity required' }, 400)
+  }
+
+  // Check available stock at source
+  const stock = await db.prepare('SELECT qty_available FROM inventory_stock WHERE product_id = ? AND location_id = ?')
+    .bind(body.product_id, body.from_location_id).first<any>()
+
+  if (!stock || stock.qty_available < body.quantity) {
+    return c.json({ error: `Insufficient stock. Available: ${stock?.qty_available || 0}` }, 400)
+  }
+
+  // Create reservation
+  const res = await db.prepare(`
+    INSERT INTO pos_stock_reservations (product_id, from_location_id, to_location_id, quantity, status, requested_by, requested_by_name, notes)
+    VALUES (?,?,?,?,?,?,?,?)
+  `).bind(body.product_id, body.from_location_id, body.to_location_id, body.quantity,
+    'pending', body.requested_by || null, body.requested_by_name || '', body.notes || '').run()
+
+  // Update reserved qty
+  await db.prepare('UPDATE inventory_stock SET qty_reserved = qty_reserved + ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND location_id = ?')
+    .bind(body.quantity, body.product_id, body.from_location_id).run()
+
+  // Create transfer request
+  const transferNumber = genTransferNumber()
+  const tRes = await db.prepare(`
+    INSERT INTO inventory_transfers (transfer_number, from_location_id, to_location_id, status, notes, created_by)
+    VALUES (?, ?, ?, 'pending', ?, ?)
+  `).bind(transferNumber, body.from_location_id, body.to_location_id,
+    'Stock reservation from POS' + (body.notes ? ' — ' + body.notes : ''), body.requested_by || null).run()
+
+  const transferId = tRes.meta.last_row_id
+  await db.prepare('INSERT INTO inventory_transfer_items (transfer_id, product_id, qty_requested) VALUES (?,?,?)')
+    .bind(transferId, body.product_id, body.quantity).run()
+
+  // Link reservation to transfer
+  await db.prepare('UPDATE pos_stock_reservations SET transfer_id = ?, status = ? WHERE id = ?')
+    .bind(transferId, 'confirmed', res.meta.last_row_id).run()
+
+  return c.json({ id: res.meta.last_row_id, transfer_id: transferId, transfer_number: transferNumber }, 201)
+})
+
+// ==================== CUSTOMER MERGE ====================
+app.post('/api/pos/customer-merge', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+  const keepId = parseInt(body.keep_id)
+  const mergeId = parseInt(body.merge_id)
+
+  if (!keepId || !mergeId || keepId === mergeId) {
+    return c.json({ error: 'keep_id and merge_id required (must be different)' }, 400)
+  }
+
+  const keep = await db.prepare('SELECT * FROM customers WHERE id = ?').bind(keepId).first()
+  const merge = await db.prepare('SELECT * FROM customers WHERE id = ?').bind(mergeId).first()
+  if (!keep || !merge) return c.json({ error: 'One or both customers not found' }, 404)
+
+  // Move all related records from merge → keep
+  await db.prepare('UPDATE addresses SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+  await db.prepare('UPDATE orders SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+  await db.prepare('UPDATE pos_sales SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+  await db.prepare('UPDATE pos_refunds SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+  await db.prepare('UPDATE pos_price_rules SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+  await db.prepare('UPDATE customer_account_transactions SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+  await db.prepare('UPDATE pos_payment_tokens SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+  await db.prepare('UPDATE pos_stock_reservations SET requested_by = ? WHERE requested_by = ?').bind(keepId, mergeId).run()
+
+  // Merge account balances
+  const mergeAcct = await db.prepare('SELECT * FROM customer_accounts WHERE customer_id = ?').bind(mergeId).first<any>()
+  if (mergeAcct) {
+    const keepAcct = await db.prepare('SELECT * FROM customer_accounts WHERE customer_id = ?').bind(keepId).first<any>()
+    if (keepAcct) {
+      await db.prepare('UPDATE customer_accounts SET balance = balance + ?, credit_limit = MAX(credit_limit, ?), updated_at = CURRENT_TIMESTAMP WHERE customer_id = ?')
+        .bind(mergeAcct.balance || 0, mergeAcct.credit_limit || 0, keepId).run()
+      await db.prepare('DELETE FROM customer_accounts WHERE customer_id = ?').bind(mergeId).run()
+    } else {
+      await db.prepare('UPDATE customer_accounts SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+    }
+  }
+
+  // CRM orgs
+  await db.prepare('UPDATE crm_organizations SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+
+  // Merge tags (combine unique tags)
+  const keepTags = ((keep as any).tags || '').split(',').map((t: string) => t.trim()).filter((t: string) => t)
+  const mergeTags = ((merge as any).tags || '').split(',').map((t: string) => t.trim()).filter((t: string) => t)
+  const allTags = Array.from(new Set([...keepTags, ...mergeTags]))
+  await db.prepare('UPDATE customers SET tags = ? WHERE id = ?').bind(allTags.join(', '), keepId).run()
+
+  // Append merge notes
+  const mergeNote = `[Merged from: ${(merge as any).business_name || (merge as any).contact_name} (ID:${mergeId}) on ${new Date().toISOString().slice(0,10)}]`
+  await db.prepare("UPDATE customers SET notes = COALESCE(notes, '') || '\n' || ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(mergeNote, keepId).run()
+
+  // Deactivate merged customer
+  await db.prepare('UPDATE customers SET active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(mergeId).run()
+
+  return c.json({ success: true, kept: keepId, merged: mergeId })
+})
+
+// ==================== ORDER DETAIL (from customer page) ====================
+app.get('/api/pos/order-detail/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const type = c.req.query('type') || 'order' // 'order' or 'sale'
+
+  if (type === 'sale') {
+    const sale = await db.prepare('SELECT * FROM pos_sales WHERE id = ?').bind(id).first()
+    if (!sale) return c.json({ error: 'Sale not found' }, 404)
+    const items = await db.prepare('SELECT * FROM pos_sale_items WHERE sale_id = ? ORDER BY id').bind(id).all()
+    const payments = await db.prepare('SELECT * FROM pos_payments WHERE sale_id = ? ORDER BY id').bind(id).all()
+    const customer = (sale as any).customer_id
+      ? await db.prepare('SELECT id, business_name, contact_name, phone, email FROM customers WHERE id = ?').bind((sale as any).customer_id).first()
+      : null
+    let transfer = null
+    if ((sale as any).transfer_id) {
+      transfer = await db.prepare('SELECT * FROM inventory_transfers WHERE id = ?').bind((sale as any).transfer_id).first()
+    }
+    const refunds = await db.prepare(`
+      SELECT r.*, GROUP_CONCAT(ri.product_name || ' x' || CAST(ri.quantity AS INTEGER), ', ') as refund_items
+      FROM pos_refunds r
+      LEFT JOIN pos_refund_items ri ON ri.refund_id = r.id
+      WHERE r.original_sale_id = ?
+      GROUP BY r.id
+    `).bind(id).all()
+    return c.json({ type: 'sale', sale, items: items.results, payments: payments.results, customer, transfer, refunds: refunds.results })
+  } else {
+    const order = await db.prepare(`
+      SELECT o.*, c.business_name, c.contact_name, c.phone,
+             a.street, a.city, a.state, a.zip, a.gate_code, a.driver_notes as addr_driver_notes,
+             l.name as route_name
+      FROM orders o
+      LEFT JOIN customers c ON c.id = o.customer_id
+      LEFT JOIN addresses a ON a.id = o.address_id
+      LEFT JOIN routes l ON l.id = o.route_id
+      WHERE o.id = ?
+    `).bind(id).first()
+    if (!order) return c.json({ error: 'Order not found' }, 404)
+    const items = await db.prepare(`
+      SELECT oi.*, p.name as product_name, p.sku, p.price as list_price
+      FROM order_items oi
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE oi.order_id = ?
+    `).bind(id).all()
+    return c.json({ type: 'order', order, items: items.results })
+  }
+})
+
+// ==================== CUSTOMER DISCOUNTS (manage price rules) ====================
+app.get('/api/pos/customer-discounts/:customerId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  const rules = await db.prepare(`
+    SELECT pr.*, p.name as product_name, p.sku
+    FROM pos_price_rules pr
+    LEFT JOIN products p ON p.id = pr.product_id
+    WHERE pr.customer_id = ? AND pr.active = 1
+    ORDER BY pr.rule_type, pr.name
+  `).bind(customerId).all()
+  return c.json(rules.results)
+})
+
+app.post('/api/pos/customer-discounts/:customerId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  const body = await c.req.json() as any
+
+  const r = await db.prepare(`
+    INSERT INTO pos_price_rules (name, rule_type, customer_id, product_id, category, min_qty, price, discount_pct, start_date, end_date, active, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,1,?)
+  `).bind(
+    body.name || 'Custom Price', body.rule_type || 'customer_price', customerId,
+    body.product_id || null, body.category || null, body.min_qty || 0,
+    body.price || null, body.discount_pct || null,
+    body.start_date || null, body.end_date || null, body.created_by || null
+  ).run()
+  return c.json({ id: r.meta.last_row_id, success: true }, 201)
+})
+
+app.put('/api/pos/customer-discounts/:customerId/:ruleId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  const ruleId = parseInt(c.req.param('ruleId'))
+  const body = await c.req.json() as any
+
+  await db.prepare(`
+    UPDATE pos_price_rules SET name=?, rule_type=?, product_id=?, category=?, min_qty=?, price=?, discount_pct=?, start_date=?, end_date=?
+    WHERE id = ? AND customer_id = ?
+  `).bind(
+    body.name || 'Custom Price', body.rule_type || 'customer_price',
+    body.product_id || null, body.category || null, body.min_qty || 0,
+    body.price || null, body.discount_pct || null,
+    body.start_date || null, body.end_date || null, ruleId, customerId
+  ).run()
+  return c.json({ success: true })
+})
+
+app.delete('/api/pos/customer-discounts/:customerId/:ruleId', async (c) => {
+  const db = c.env.DB
+  const ruleId = parseInt(c.req.param('ruleId'))
+  await db.prepare('UPDATE pos_price_rules SET active = 0 WHERE id = ?').bind(ruleId).run()
+  return c.json({ success: true })
+})
+
+// ==================== TAX CONFIGURATION ====================
+app.get('/api/pos/tax-config', async (c) => {
+  const db = c.env.DB
+  const locationId = c.req.query('location_id') || ''
+  let query = `
+    SELECT tc.*, l.name as location_name, p.name as product_name
+    FROM pos_tax_config tc
+    LEFT JOIN locations l ON l.id = tc.location_id
+    LEFT JOIN products p ON p.id = tc.product_id
+    WHERE tc.active = 1
+  `
+  const params: any[] = []
+  if (locationId) { query += ' AND (tc.location_id = ? OR tc.location_id IS NULL)'; params.push(locationId) }
+  query += ' ORDER BY tc.priority DESC, tc.name'
+  const r = await db.prepare(query).bind(...params).all()
+  return c.json(r.results)
+})
+
+app.post('/api/pos/tax-config', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+  const r = await db.prepare(`
+    INSERT INTO pos_tax_config (name, tax_type, rate, location_id, category, product_id, priority, notes)
+    VALUES (?,?,?,?,?,?,?,?)
+  `).bind(body.name, body.tax_type || 'sales_tax', body.rate || 0,
+    body.location_id || null, body.category || null, body.product_id || null,
+    body.priority || 0, body.notes || '').run()
+  return c.json({ id: r.meta.last_row_id, success: true }, 201)
+})
+
+app.put('/api/pos/tax-config/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+  await db.prepare(`
+    UPDATE pos_tax_config SET name=?, tax_type=?, rate=?, location_id=?, category=?, product_id=?, priority=?, notes=?
+    WHERE id = ?
+  `).bind(body.name, body.tax_type || 'sales_tax', body.rate || 0,
+    body.location_id || null, body.category || null, body.product_id || null,
+    body.priority || 0, body.notes || '', id).run()
+  return c.json({ success: true })
+})
+
+app.delete('/api/pos/tax-config/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  await db.prepare('UPDATE pos_tax_config SET active = 0 WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+// Effective tax rate lookup (used at POS checkout)
+app.get('/api/pos/effective-tax', async (c) => {
+  const db = c.env.DB
+  const locationId = c.req.query('location_id') || ''
+  const productId = c.req.query('product_id') || ''
+  const category = c.req.query('category') || ''
+  const customerId = c.req.query('customer_id') || ''
+
+  // Check customer tax exemption or custom rate
+  if (customerId) {
+    const cust = await db.prepare('SELECT tax_exempt, custom_tax_rate FROM customers WHERE id = ?').bind(customerId).first<any>()
+    if (cust?.tax_exempt) return c.json({ rate: 0, source: 'tax_exempt' })
+    if (cust?.custom_tax_rate !== null && cust?.custom_tax_rate !== undefined) {
+      return c.json({ rate: cust.custom_tax_rate, source: 'customer_custom' })
+    }
+  }
+
+  // Highest priority matching tax config
+  const configs = await db.prepare(`
+    SELECT * FROM pos_tax_config WHERE active = 1
+    ORDER BY priority DESC
+  `).all()
+
+  for (const cfg of configs.results as any[]) {
+    // Product-specific match (highest priority)
+    if (cfg.product_id && productId && cfg.product_id == productId) {
+      if (!cfg.location_id || cfg.location_id == locationId) {
+        return c.json({ rate: cfg.rate, source: 'product_config', config_id: cfg.id })
+      }
+    }
+    // Category match
+    if (cfg.category && category && cfg.category === category) {
+      if (!cfg.location_id || cfg.location_id == locationId) {
+        return c.json({ rate: cfg.rate, source: 'category_config', config_id: cfg.id })
+      }
+    }
+    // Location-only match
+    if (!cfg.product_id && !cfg.category && cfg.location_id && cfg.location_id == locationId) {
+      return c.json({ rate: cfg.rate, source: 'location_config', config_id: cfg.id })
+    }
+    // Global default
+    if (!cfg.product_id && !cfg.category && !cfg.location_id) {
+      return c.json({ rate: cfg.rate, source: 'global_config', config_id: cfg.id })
+    }
+  }
+
+  // Fall back to product's own tax_rate
+  if (productId) {
+    const p = await db.prepare('SELECT tax_rate FROM products WHERE id = ?').bind(productId).first<any>()
+    if (p) return c.json({ rate: p.tax_rate || 0, source: 'product_default' })
+  }
+
+  return c.json({ rate: 0, source: 'none' })
+})
+
+// ==================== PROMOTIONS CRUD ====================
+app.get('/api/pos/promotions', async (c) => {
+  const db = c.env.DB
+  const activeOnly = c.req.query('active') !== '0'
+  const locationId = c.req.query('location_id') || ''
+
+  let query = 'SELECT * FROM pos_promotions WHERE 1=1'
+  const params: any[] = []
+  if (activeOnly) { query += ' AND active = 1' }
+  if (locationId) { query += ' AND (location_id = ? OR location_id IS NULL)'; params.push(locationId) }
+  query += ' ORDER BY created_at DESC'
+
+  const r = await db.prepare(query).bind(...params).all()
+  return c.json(r.results)
+})
+
+app.post('/api/pos/promotions', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+
+  if (!body.name || !body.promo_type) return c.json({ error: 'name and promo_type required' }, 400)
+
+  const r = await db.prepare(`
+    INSERT INTO pos_promotions (name, code, promo_type, scope, discount_pct, discount_amount, flat_price,
+      buy_qty, get_qty, product_id, category, customer_type, min_purchase, max_discount,
+      start_date, end_date, days_of_week, usage_limit, per_customer_limit, stackable, location_id, active, created_by, notes)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    body.name, body.code || null, body.promo_type, body.scope || 'cart',
+    body.discount_pct || 0, body.discount_amount || 0, body.flat_price || null,
+    body.buy_qty || 0, body.get_qty || 0, body.product_id || null,
+    body.category || null, body.customer_type || null,
+    body.min_purchase || 0, body.max_discount || null,
+    body.start_date || null, body.end_date || null, body.days_of_week || null,
+    body.usage_limit || 0, body.per_customer_limit || 0, body.stackable ? 1 : 0,
+    body.location_id || null, 1, body.created_by || null, body.notes || ''
+  ).run()
+  return c.json({ id: r.meta.last_row_id, success: true }, 201)
+})
+
+app.put('/api/pos/promotions/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+
+  await db.prepare(`
+    UPDATE pos_promotions SET name=?, code=?, promo_type=?, scope=?, discount_pct=?, discount_amount=?,
+      flat_price=?, buy_qty=?, get_qty=?, product_id=?, category=?, customer_type=?,
+      min_purchase=?, max_discount=?, start_date=?, end_date=?, days_of_week=?,
+      usage_limit=?, per_customer_limit=?, stackable=?, location_id=?, active=?, notes=?
+    WHERE id = ?
+  `).bind(
+    body.name, body.code || null, body.promo_type, body.scope || 'cart',
+    body.discount_pct || 0, body.discount_amount || 0, body.flat_price || null,
+    body.buy_qty || 0, body.get_qty || 0, body.product_id || null,
+    body.category || null, body.customer_type || null,
+    body.min_purchase || 0, body.max_discount || null,
+    body.start_date || null, body.end_date || null, body.days_of_week || null,
+    body.usage_limit || 0, body.per_customer_limit || 0, body.stackable ? 1 : 0,
+    body.location_id || null, body.active !== false ? 1 : 0, body.notes || '', id
+  ).run()
+  return c.json({ success: true })
+})
+
+app.delete('/api/pos/promotions/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  await db.prepare('UPDATE pos_promotions SET active = 0 WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+// Get applicable promotions for current cart
+app.post('/api/pos/promotions/check', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+  const locationId = body.location_id || 1
+  const customerId = body.customer_id
+  const items = body.items || []
+  const today = new Date().toISOString().slice(0, 10)
+  const dayOfWeek = new Date().getDay().toString()
+
+  const promos = await db.prepare(`
+    SELECT * FROM pos_promotions
+    WHERE active = 1
+      AND (start_date IS NULL OR start_date <= ?)
+      AND (end_date IS NULL OR end_date >= ?)
+      AND (location_id IS NULL OR location_id = ?)
+      AND (usage_limit = 0 OR usage_count < usage_limit)
+  `).bind(today, today, locationId).all()
+
+  const applicable: any[] = []
+  const cartTotal = items.reduce((s: number, i: any) => s + (i.unit_price || 0) * (i.quantity || 1), 0)
+
+  for (const promo of promos.results as any[]) {
+    // Day of week check
+    if (promo.days_of_week && !promo.days_of_week.includes(dayOfWeek)) continue
+
+    // Per-customer limit check
+    if (promo.per_customer_limit > 0 && customerId) {
+      const usage = await db.prepare('SELECT COUNT(*) as cnt FROM pos_promotion_usage WHERE promotion_id = ? AND customer_id = ?')
+        .bind(promo.id, customerId).first<any>()
+      if (usage && usage.cnt >= promo.per_customer_limit) continue
+    }
+
+    // Customer type match
+    if (promo.customer_type && customerId) {
+      const cust = await db.prepare('SELECT customer_type FROM customers WHERE id = ?').bind(customerId).first<any>()
+      if (cust && cust.customer_type !== promo.customer_type) continue
+    }
+
+    // Min purchase check
+    if (promo.min_purchase > 0 && cartTotal < promo.min_purchase) continue
+
+    // Scope-specific checks
+    let matchedItems: any[] = []
+    if (promo.scope === 'product' && promo.product_id) {
+      matchedItems = items.filter((i: any) => i.product_id == promo.product_id)
+      if (matchedItems.length === 0) continue
+    } else if (promo.scope === 'category' && promo.category) {
+      matchedItems = items.filter((i: any) => i.category === promo.category)
+      if (matchedItems.length === 0) continue
+    } else {
+      matchedItems = items
+    }
+
+    // Calculate discount
+    let discountValue = 0
+    if (promo.promo_type === 'percent_off') {
+      const base = matchedItems.reduce((s: number, i: any) => s + (i.unit_price || 0) * (i.quantity || 1), 0)
+      discountValue = base * (promo.discount_pct / 100)
+    } else if (promo.promo_type === 'dollar_off') {
+      discountValue = promo.discount_amount || 0
+    } else if (promo.promo_type === 'bogo') {
+      const totalQty = matchedItems.reduce((s: number, i: any) => s + (i.quantity || 1), 0)
+      const buyQty = promo.buy_qty || 1
+      const getQty = promo.get_qty || 1
+      const freeItems = Math.floor(totalQty / (buyQty + getQty)) * getQty
+      if (freeItems > 0) {
+        const cheapest = Math.min(...matchedItems.map((i: any) => i.unit_price || 0))
+        discountValue = cheapest * freeItems
+      }
+    }
+
+    if (promo.max_discount && discountValue > promo.max_discount) discountValue = promo.max_discount
+    if (discountValue <= 0 && promo.promo_type !== 'flat_price') continue
+
+    applicable.push({
+      id: promo.id, name: promo.name, code: promo.code, promo_type: promo.promo_type,
+      scope: promo.scope, discount_value: Math.round(discountValue * 100) / 100,
+      discount_pct: promo.discount_pct, discount_amount: promo.discount_amount,
+      product_id: promo.product_id, category: promo.category, stackable: promo.stackable
+    })
+  }
+
+  return c.json(applicable)
+})
+
+// ==================== APPLY LINE-LEVEL DISCOUNT ====================
+app.post('/api/pos/apply-discount', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+  // This is a calculation endpoint — doesn't modify DB, just returns adjusted pricing
+  // discount_type: 'percent' | 'dollar' | 'override_price'
+  // scope: 'line' | 'cart'
+
+  const items = body.items || []
+  const discountType = body.discount_type || 'percent'
+  const discountValue = parseFloat(body.discount_value || 0)
+  const targetProductId = body.product_id // null = cart-wide
+  const reason = body.reason || ''
+
+  const adjusted = items.map((item: any) => {
+    const isTarget = !targetProductId || item.product_id == targetProductId
+    if (!isTarget) return item
+
+    let newPrice = item.unit_price
+    let discPct = 0
+    let discAmt = 0
+
+    if (discountType === 'percent') {
+      discPct = discountValue
+      newPrice = item.unit_price * (1 - discountValue / 100)
+      discAmt = item.unit_price * item.quantity * (discountValue / 100)
+    } else if (discountType === 'dollar') {
+      discAmt = discountValue
+      newPrice = Math.max(0, item.unit_price - discountValue / item.quantity)
+      discPct = item.unit_price > 0 ? (discountValue / (item.unit_price * item.quantity)) * 100 : 0
+    } else if (discountType === 'override_price') {
+      newPrice = discountValue
+      discAmt = (item.unit_price - discountValue) * item.quantity
+      discPct = item.unit_price > 0 ? ((item.unit_price - discountValue) / item.unit_price) * 100 : 0
+    }
+
+    return {
+      ...item,
+      effective_price: Math.round(newPrice * 100) / 100,
+      discount_pct: Math.round(discPct * 100) / 100,
+      discount_amount: Math.round(discAmt * 100) / 100,
+      discount_type: discountType,
+      discount_source: reason || 'manual',
+      price_source: 'manual_discount'
+    }
+  })
+
+  return c.json(adjusted)
+})
+
+// ==================== CANCEL STOCK RESERVATION ====================
+app.put('/api/pos/stock-reserve/:id/cancel', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const res = await db.prepare("SELECT * FROM pos_stock_reservations WHERE id = ? AND status IN ('pending','confirmed')").bind(id).first<any>()
+  if (!res) return c.json({ error: 'Reservation not found or already resolved' }, 404)
+
+  await db.prepare('UPDATE inventory_stock SET qty_reserved = MAX(0, qty_reserved - ?), updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND location_id = ?')
+    .bind(res.quantity, res.product_id, res.from_location_id).run()
+  if (res.transfer_id)
+    await db.prepare("UPDATE inventory_transfers SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(res.transfer_id).run()
+  await db.prepare("UPDATE pos_stock_reservations SET status = 'cancelled', resolved_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run()
+
+  return c.json({ success: true })
+})
+
 export { app as posApp }

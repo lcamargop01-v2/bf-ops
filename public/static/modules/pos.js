@@ -31,7 +31,11 @@ var _s = {
   custTypeFilter: '',
   custAllTags: [],
   custUsers: [],
-  custEditing: null // customer being edited in sheet
+  custEditing: null, // customer being edited in sheet
+  appliedPromo: null, // { promo_id, discount, description, code }
+  promoCode: '',
+  mergeMode: false,
+  mergeTarget: null // first customer selected for merge
 };
 
 // ==================== INIT ====================
@@ -243,11 +247,17 @@ function renderRegisterContent() {
   if (grid) {
     grid.addEventListener('click', function(e) {
       var card = e.target.closest('[data-pid]');
-      if (card) {
-        var pid = parseInt(card.dataset.pid);
-        var p = _s.productCache[pid];
-        if (p) addToCart(pid, p);
-      }
+      if (!card) return;
+      var pid = parseInt(card.dataset.pid);
+      var stockBadge = e.target.closest('.pos-product-stock');
+      if (stockBadge) { openStockCheck(pid); return; }
+      var p = _s.productCache[pid];
+      if (p) addToCart(pid, p);
+    });
+    // Right-click or long-press to check stock
+    grid.addEventListener('contextmenu', function(e) {
+      var card = e.target.closest('[data-pid]');
+      if (card) { e.preventDefault(); openStockCheck(parseInt(card.dataset.pid)); }
     });
   }
 
@@ -363,7 +373,7 @@ function checkStockWarning(item) {
   if (item.qty > item.stock) {
     var other = getOtherLocation();
     var msg = esc(item.name) + ': Only ' + item.stock + ' in stock (need ' + item.qty + ')';
-    if (other) msg += ' — check ' + esc(other.name) + '?';
+    if (other) msg += ' <a href="#" class="pos-stock-check-link" data-stock-pid="' + item.product_id + '">Check ' + esc(other.name) + '</a>';
     _s.warnings.push({ product_id: item.product_id, type: item.stock <= 0 ? 'error' : 'warning', message: msg });
   }
   renderWarnings();
@@ -415,6 +425,7 @@ function renderCart() {
         '<button data-action="qty-plus">+</button>' +
       '</div>' +
       '<div class="pos-cart-item-total">$' + lineTotal.toFixed(2) + '</div>' +
+      '<button class="pos-cart-item-disc" data-action="line-disc" title="Discount"><i class="fas fa-percent"></i></button>' +
       '<button class="pos-cart-item-remove" data-action="remove" title="Remove"><i class="fas fa-trash"></i></button>' +
     '</div>';
   });
@@ -433,6 +444,7 @@ function renderCart() {
 
     if (act === 'qty-minus') { item.qty = Math.max(1, item.qty - 1); checkStockWarning(item); if (_s.customer) priceCheckItem(item.product_id); renderCart(); renderCartFooter(); }
     else if (act === 'qty-plus') { item.qty += 1; checkStockWarning(item); if (_s.customer) priceCheckItem(item.product_id); renderCart(); renderCartFooter(); }
+    else if (act === 'line-disc') { openLineDiscount(idx); }
     else if (act === 'remove') { _s.warnings = _s.warnings.filter(function(w) { return w.product_id !== item.product_id; }); _s.cart.splice(idx, 1); renderWarnings(); renderCart(); renderCartFooter(); }
   });
 
@@ -564,6 +576,14 @@ function renderWarnings() {
     html += '<div class="pos-warning-bar ' + (w.type === 'error' ? 'error' : '') + '"><i class="fas fa-exclamation-triangle"></i><span class="pos-warning-text">' + w.message + '</span></div>';
   });
   el.innerHTML = html;
+
+  // Wire stock check links
+  el.querySelectorAll('.pos-stock-check-link').forEach(function(link) {
+    link.addEventListener('click', function(e) {
+      e.preventDefault();
+      openStockCheck(parseInt(link.dataset.stockPid));
+    });
+  });
 }
 
 // ==================== CUSTOMER SELECTOR ====================
@@ -1996,6 +2016,557 @@ function openAddressForm(custId, addr) {
   });
 }
 
+// ==================== CUSTOMER MERGE (sheet-level) ====================
+function openCustomerMerge(keepId) {
+  var html = '<div class="pos-merge-form">' +
+    '<p style="font-size:13px;color:var(--pos-gray-600);margin:0 0 12px 0">Search for the customer to merge <strong>into</strong> this one. All orders, sales, addresses, and account data will be moved to this customer. The merged customer will be deactivated.</p>' +
+    '<input type="text" id="posMergeSearch" placeholder="Search customer to merge..." class="pos-customer-search">' +
+    '<div id="posMergeResults" style="max-height:250px;overflow-y:auto;margin-top:8px"></div>' +
+    '<div id="posMergeConfirm" style="display:none;margin-top:12px;padding:12px;background:#FEF3C7;border-radius:8px">' +
+      '<p style="font-size:13px;font-weight:600;color:var(--pos-orange);margin:0 0 8px 0"><i class="fas fa-exclamation-triangle"></i> Confirm Merge</p>' +
+      '<p id="posMergeConfirmText" style="font-size:12px;color:var(--pos-gray-700);margin:0 0 8px 0"></p>' +
+      '<button class="pos-btn" id="posMergeConfirmBtn" style="background:var(--pos-orange);color:white;width:100%"><i class="fas fa-compress-arrows-alt"></i> Merge Customers</button>' +
+    '</div>' +
+  '</div>';
+
+  showModal('Merge Customer', html,
+    '<button class="pos-btn pos-btn-hold" id="posMergeCancel">Cancel</button>');
+  on('posMergeCancel', 'click', closeModal);
+
+  var mergeTarget = null;
+  var searchInput = document.getElementById('posMergeSearch');
+  if (searchInput) {
+    var timer = null;
+    searchInput.addEventListener('input', function() {
+      clearTimeout(timer);
+      var term = searchInput.value;
+      if (term.length < 2) { document.getElementById('posMergeResults').innerHTML = ''; return; }
+      timer = setTimeout(function() {
+        API.get('/pos/customers?search=' + encodeURIComponent(term)).then(function(r) {
+          var results = document.getElementById('posMergeResults');
+          var custs = (r.data || []).filter(function(c) { return c.id !== keepId; });
+          if (custs.length === 0) {
+            results.innerHTML = '<div style="padding:12px;text-align:center;color:var(--pos-gray-400);font-size:13px">No matching customers</div>';
+          } else {
+            var html = '';
+            custs.forEach(function(c) {
+              html += '<div class="pos-merge-option" data-merge-id="' + c.id + '">' +
+                '<div style="font-weight:600;font-size:13px">' + esc(c.business_name || c.contact_name || 'Unknown') + '</div>' +
+                '<div style="font-size:11px;color:var(--pos-gray-500)">' + esc(c.phone || '') + ' &middot; ' + esc(c.customer_type || '') + ' &middot; ' + (c.total_orders || 0) + ' orders</div>' +
+              '</div>';
+            });
+            results.innerHTML = html;
+
+            results.querySelectorAll('.pos-merge-option').forEach(function(opt) {
+              opt.addEventListener('click', function() {
+                results.querySelectorAll('.pos-merge-option').forEach(function(o) { o.classList.remove('selected'); });
+                opt.classList.add('selected');
+                mergeTarget = parseInt(opt.dataset.mergeId);
+                var name = opt.querySelector('div').textContent;
+                document.getElementById('posMergeConfirm').style.display = 'block';
+                document.getElementById('posMergeConfirmText').textContent = 'Merge "' + name + '" into this customer? This action cannot be undone.';
+              });
+            });
+          }
+        });
+      }, 300);
+    });
+  }
+
+  on('posMergeConfirmBtn', 'click', function() {
+    if (!mergeTarget) return;
+    var btn = document.getElementById('posMergeConfirmBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Merging...';
+
+    API.post('/pos/customer-merge', { keep_id: keepId, merge_id: mergeTarget }).then(function() {
+      closeModal();
+      toast('Customers merged successfully');
+      closeCustomerSheet();
+      loadCustomerList(true);
+    }).catch(function(err) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-compress-arrows-alt"></i> Merge Customers';
+      toast('Merge failed: ' + errMsg(err), 'error');
+    });
+  });
+}
+
+// ==================== CART DISCOUNT CONTROLS ====================
+function openCartDiscountModal() {
+  var html = '<div class="pos-discount-form">' +
+    '<div class="pos-discount-tabs">' +
+      '<button class="pos-discount-tab active" data-dtab="line">Line Item</button>' +
+      '<button class="pos-discount-tab" data-dtab="cart">Whole Cart</button>' +
+      '<button class="pos-discount-tab" data-dtab="promo">Promo Code</button>' +
+    '</div>' +
+
+    '<div class="pos-discount-panel active" data-dpanel="line">' +
+      '<label style="font-size:12px;font-weight:600;color:var(--pos-gray-600)">Select Item</label>' +
+      '<select id="posDiscLineItem" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:13px;margin-bottom:8px">';
+  _s.cart.forEach(function(item, idx) {
+    html += '<option value="' + idx + '">' + esc(item.name) + ' ($' + item.unit_price.toFixed(2) + ' x ' + item.qty + ')</option>';
+  });
+  html += '</select>' +
+      '<label style="font-size:12px;font-weight:600;color:var(--pos-gray-600)">Discount Type</label>' +
+      '<select id="posDiscLineType" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:13px;margin-bottom:8px">' +
+        '<option value="percent">% Off</option><option value="dollar">$ Off</option><option value="override_price">Override Price</option>' +
+      '</select>' +
+      '<label style="font-size:12px;font-weight:600;color:var(--pos-gray-600)">Value</label>' +
+      '<input type="number" id="posDiscLineValue" step="0.01" min="0" placeholder="Enter value" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:13px;margin-bottom:8px">' +
+      '<label style="font-size:12px;font-weight:600;color:var(--pos-gray-600)">Reason</label>' +
+      '<input type="text" id="posDiscLineReason" placeholder="e.g. Manager override, damaged..." style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:13px">' +
+    '</div>' +
+
+    '<div class="pos-discount-panel" data-dpanel="cart">' +
+      '<label style="font-size:12px;font-weight:600;color:var(--pos-gray-600)">Discount Type</label>' +
+      '<select id="posDiscCartType" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:13px;margin-bottom:8px">' +
+        '<option value="percent">% Off Entire Cart</option><option value="dollar">$ Off Entire Cart</option>' +
+      '</select>' +
+      '<label style="font-size:12px;font-weight:600;color:var(--pos-gray-600)">Value</label>' +
+      '<input type="number" id="posDiscCartValue" step="0.01" min="0" placeholder="Enter value" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:13px;margin-bottom:8px">' +
+      '<label style="font-size:12px;font-weight:600;color:var(--pos-gray-600)">Reason</label>' +
+      '<input type="text" id="posDiscCartReason" placeholder="e.g. Loyalty discount, bulk deal..." style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:13px">' +
+    '</div>' +
+
+    '<div class="pos-discount-panel" data-dpanel="promo">' +
+      '<label style="font-size:12px;font-weight:600;color:var(--pos-gray-600)">Promo Code</label>' +
+      '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+        '<input type="text" id="posPromoCode" placeholder="Enter promo code" style="flex:1;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:13px">' +
+        '<button class="pos-btn" id="posPromoCheckBtn" style="background:var(--pos-navy);color:white;padding:8px 14px;font-size:12px"><i class="fas fa-tag"></i> Check</button>' +
+      '</div>' +
+      '<div id="posPromoResults"></div>' +
+      '<div id="posActivePromos" style="margin-top:8px"></div>' +
+    '</div>' +
+  '</div>';
+
+  showModal('Apply Discount', html,
+    '<button class="pos-btn pos-btn-hold" id="posDiscCancel">Cancel</button>' +
+    '<button class="pos-btn pos-btn-pay" id="posDiscApply"><i class="fas fa-check"></i> Apply</button>');
+
+  // Tab switching
+  setTimeout(function() {
+    document.querySelectorAll('.pos-discount-tab').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        document.querySelectorAll('.pos-discount-tab').forEach(function(t) { t.classList.remove('active'); });
+        document.querySelectorAll('.pos-discount-panel').forEach(function(p) { p.classList.remove('active'); });
+        tab.classList.add('active');
+        var panel = document.querySelector('[data-dpanel="' + tab.dataset.dtab + '"]');
+        if (panel) panel.classList.add('active');
+      });
+    });
+
+    // Check active promotions
+    loadActivePromotions();
+
+    on('posPromoCheckBtn', 'click', function() {
+      var code = gv('posPromoCode');
+      if (!code) return;
+      checkPromoCode(code);
+    });
+  }, 50);
+
+  on('posDiscCancel', 'click', closeModal);
+  on('posDiscApply', 'click', function() {
+    var activeTab = document.querySelector('.pos-discount-tab.active');
+    if (!activeTab) return;
+    var tab = activeTab.dataset.dtab;
+
+    if (tab === 'line') {
+      var idx = parseInt(gv('posDiscLineItem') || '0');
+      var discType = gv('posDiscLineType');
+      var discVal = parseFloat(gv('posDiscLineValue') || '0');
+      var reason = gv('posDiscLineReason') || 'manual';
+      if (discVal <= 0) { toast('Enter a discount value', 'error'); return; }
+      applyLineDiscount(idx, discType, discVal, reason);
+    } else if (tab === 'cart') {
+      var discType = gv('posDiscCartType');
+      var discVal = parseFloat(gv('posDiscCartValue') || '0');
+      var reason = gv('posDiscCartReason') || 'manual';
+      if (discVal <= 0) { toast('Enter a discount value', 'error'); return; }
+      applyCartDiscount(discType, discVal, reason);
+    }
+    closeModal();
+  });
+}
+
+function applyLineDiscount(idx, type, value, reason) {
+  var item = _s.cart[idx];
+  if (!item) return;
+
+  if (type === 'percent') {
+    item.effective_price = item.unit_price * (1 - value / 100);
+    item.discount_pct = value;
+  } else if (type === 'dollar') {
+    item.effective_price = Math.max(0, item.unit_price - value / item.qty);
+    item.discount_pct = item.unit_price > 0 ? (value / (item.unit_price * item.qty)) * 100 : 0;
+  } else if (type === 'override_price') {
+    item.effective_price = value;
+    item.discount_pct = item.unit_price > 0 ? ((item.unit_price - value) / item.unit_price) * 100 : 0;
+  }
+  item.effective_price = Math.round(item.effective_price * 100) / 100;
+  item.price_source = 'manual_discount';
+  renderCart();
+  renderCartFooter();
+  toast('Discount applied to ' + item.name);
+}
+
+function applyCartDiscount(type, value, reason) {
+  _s.cart.forEach(function(item) {
+    if (type === 'percent') {
+      item.effective_price = item.unit_price * (1 - value / 100);
+      item.discount_pct = value;
+    } else if (type === 'dollar') {
+      var totalItems = _s.cart.reduce(function(s, i) { return s + i.unit_price * i.qty; }, 0);
+      var proportion = totalItems > 0 ? (item.unit_price * item.qty) / totalItems : 0;
+      var itemDiscount = value * proportion;
+      item.effective_price = Math.max(0, item.unit_price - itemDiscount / item.qty);
+      item.discount_pct = item.unit_price > 0 ? (itemDiscount / (item.unit_price * item.qty)) * 100 : 0;
+    }
+    item.effective_price = Math.round(item.effective_price * 100) / 100;
+    item.price_source = 'cart_discount';
+  });
+  renderCart();
+  renderCartFooter();
+  toast('Cart-wide discount applied');
+}
+
+function loadActivePromotions() {
+  var items = _s.cart.map(function(c) {
+    return { product_id: c.product_id, quantity: c.qty, unit_price: c.unit_price, category: c.category };
+  });
+  API.post('/pos/promotions/check', {
+    location_id: getLocationId(),
+    customer_id: _s.customer ? _s.customer.id : null,
+    items: items
+  }).then(function(r) {
+    var promos = r.data || [];
+    var el = document.getElementById('posActivePromos');
+    if (!el) return;
+    if (promos.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--pos-gray-400);text-align:center">No active promotions for this cart</div>'; return; }
+    var html = '<div style="font-size:11px;font-weight:700;color:var(--pos-gray-500);text-transform:uppercase;margin-bottom:4px">Available Promotions</div>';
+    promos.forEach(function(p) {
+      html += '<div class="pos-promo-available" data-apply-promo-id="' + p.id + '">' +
+        '<div style="font-weight:600;font-size:13px">' + esc(p.name) + '</div>' +
+        '<div style="font-size:11px;color:var(--pos-gray-500)">' + p.promo_type.replace(/_/g, ' ') + ' — saves $' + p.discount_value.toFixed(2) + '</div>' +
+        '<button class="pos-btn pos-btn-sm" style="background:var(--pos-green);color:white;margin-top:4px"><i class="fas fa-plus"></i> Apply</button>' +
+      '</div>';
+    });
+    el.innerHTML = html;
+    el.querySelectorAll('[data-apply-promo-id]').forEach(function(card) {
+      card.querySelector('button').addEventListener('click', function() {
+        var promo = promos.find(function(p) { return p.id == card.dataset.applyPromoId; });
+        if (promo) applyPromotion(promo);
+      });
+    });
+  }).catch(function() {});
+}
+
+function checkPromoCode(code) {
+  // Check specific promo code
+  API.get('/pos/promotions?active=1').then(function(r) {
+    var promos = r.data || [];
+    var match = promos.find(function(p) { return p.code && p.code.toLowerCase() === code.toLowerCase(); });
+    var el = document.getElementById('posPromoResults');
+    if (!el) return;
+    if (!match) {
+      el.innerHTML = '<div style="padding:8px;color:var(--pos-red);font-size:13px"><i class="fas fa-times-circle"></i> Invalid promo code</div>';
+      return;
+    }
+    el.innerHTML = '<div style="padding:8px;background:#ECFDF5;border-radius:8px;font-size:13px">' +
+      '<div style="font-weight:600;color:var(--pos-green)"><i class="fas fa-check-circle"></i> ' + esc(match.name) + '</div>' +
+      '<div style="font-size:11px;color:var(--pos-gray-600)">' + match.promo_type.replace(/_/g, ' ') +
+      (match.discount_pct ? ' — ' + match.discount_pct + '% off' : '') +
+      (match.discount_amount ? ' — $' + match.discount_amount + ' off' : '') + '</div>' +
+      '<button class="pos-btn pos-btn-sm" id="posApplyFoundPromo" style="background:var(--pos-green);color:white;margin-top:6px"><i class="fas fa-tag"></i> Apply</button></div>';
+    on('posApplyFoundPromo', 'click', function() { applyPromotion(match); });
+  }).catch(function() {});
+}
+
+function applyPromotion(promo) {
+  if (promo.promo_type === 'percent_off') {
+    if (promo.scope === 'product' && promo.product_id) {
+      var idx = _s.cart.findIndex(function(c) { return c.product_id == promo.product_id; });
+      if (idx >= 0) applyLineDiscount(idx, 'percent', promo.discount_pct, 'Promo: ' + promo.name);
+    } else if (promo.scope === 'category' && promo.category) {
+      _s.cart.forEach(function(item, i) {
+        if (item.category === promo.category) applyLineDiscount(i, 'percent', promo.discount_pct, 'Promo: ' + promo.name);
+      });
+    } else {
+      applyCartDiscount('percent', promo.discount_pct, 'Promo: ' + promo.name);
+    }
+  } else if (promo.promo_type === 'dollar_off') {
+    applyCartDiscount('dollar', promo.discount_amount, 'Promo: ' + promo.name);
+  }
+  closeModal();
+  toast('Promotion "' + promo.name + '" applied!');
+}
+
+// ==================== CUSTOMER DISCOUNTS TAB ====================
+function renderCustDiscounts(custId) {
+  var html = '<div class="pos-cust-section">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+      '<h4 style="margin:0"><i class="fas fa-tag"></i> Price Rules & Discounts</h4>' +
+      '<button class="pos-btn pos-btn-sm" id="posCustAddDiscount" style="background:var(--pos-green);color:white"><i class="fas fa-plus"></i> Add Rule</button>' +
+    '</div>' +
+    '<div id="posCustDiscountList"><div class="pos-loading"><i class="fas fa-spinner fa-spin"></i></div></div>' +
+  '</div>';
+
+  API.get('/pos/customer-discounts/' + custId).then(function(r) {
+    var rules = r.data || [];
+    var list = document.getElementById('posCustDiscountList');
+    if (!list) return;
+    if (rules.length === 0) {
+      list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--pos-gray-400);font-size:13px">No custom pricing rules</div>';
+    } else {
+      var tbl = '<table class="pos-table"><thead><tr><th>Name</th><th>Type</th><th>Product/Cat</th><th>Price/Disc</th><th>Dates</th><th></th></tr></thead><tbody>';
+      rules.forEach(function(r) {
+        tbl += '<tr><td>' + esc(r.name) + '</td>' +
+          '<td><span class="pos-badge pos-badge-purple">' + r.rule_type.replace(/_/g, ' ') + '</span></td>' +
+          '<td>' + esc(r.product_name || r.category || 'All') + '</td>' +
+          '<td>' + (r.price ? '$' + r.price.toFixed(2) : r.discount_pct ? r.discount_pct + '% off' : '-') +
+            (r.min_qty > 0 ? ' (min ' + r.min_qty + ')' : '') + '</td>' +
+          '<td style="font-size:11px">' + (r.start_date || '—') + ' / ' + (r.end_date || '—') + '</td>' +
+          '<td><button class="pos-cust-addr-btn danger" data-del-rule="' + r.id + '" title="Remove"><i class="fas fa-trash"></i></button></td></tr>';
+      });
+      tbl += '</tbody></table>';
+      list.innerHTML = tbl;
+
+      list.querySelectorAll('[data-del-rule]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          if (!confirm('Remove this pricing rule?')) return;
+          API.delete('/pos/customer-discounts/' + custId + '/' + btn.dataset.delRule).then(function() {
+            toast('Rule removed'); refreshCustDiscounts(custId);
+          }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+        });
+      });
+    }
+  }).catch(function() {});
+
+  return html;
+}
+
+function refreshCustDiscounts(custId) {
+  var container = document.querySelector('[data-content="discounts"]');
+  if (container) container.innerHTML = renderCustDiscounts(custId);
+  // Re-wire the add button
+  setTimeout(function() {
+    on('posCustAddDiscount', 'click', function() { openDiscountRuleForm(custId); });
+  }, 100);
+}
+
+function openDiscountRuleForm(custId) {
+  var catOpts = '<option value="">— All Categories —</option>';
+  _s.categories.forEach(function(c) { if (c.category) catOpts += '<option value="' + esc(c.category) + '">' + esc(c.category) + '</option>'; });
+
+  var html = '<div class="pos-cust-form-grid">' +
+    '<div class="pos-cust-form-group full"><label>Rule Name</label><input type="text" id="posRuleName" placeholder="e.g. Bulk Feed Discount"></div>' +
+    '<div class="pos-cust-form-group"><label>Rule Type</label><select id="posRuleType"><option value="customer_price">Fixed Price</option><option value="customer_discount">% Discount</option><option value="volume_discount">Volume Discount</option><option value="category_discount">Category Discount</option></select></div>' +
+    '<div class="pos-cust-form-group"><label>Product ID (optional)</label><input type="number" id="posRuleProductId" placeholder="Leave empty for all"></div>' +
+    '<div class="pos-cust-form-group"><label>Category (optional)</label><select id="posRuleCategory">' + catOpts + '</select></div>' +
+    '<div class="pos-cust-form-group"><label>Min Qty</label><input type="number" id="posRuleMinQty" value="0" min="0"></div>' +
+    '<div class="pos-cust-form-group"><label>Fixed Price ($)</label><input type="number" id="posRulePrice" step="0.01" min="0" placeholder="0.00"></div>' +
+    '<div class="pos-cust-form-group"><label>Discount %</label><input type="number" id="posRuleDiscPct" step="0.5" min="0" max="100" placeholder="0"></div>' +
+    '<div class="pos-cust-form-group"><label>Start Date</label><input type="date" id="posRuleStart"></div>' +
+    '<div class="pos-cust-form-group"><label>End Date</label><input type="date" id="posRuleEnd"></div>' +
+  '</div>';
+
+  showModal('Add Pricing Rule', html,
+    '<button class="pos-btn pos-btn-hold" id="posRuleCancel">Cancel</button>' +
+    '<button class="pos-btn pos-btn-pay" id="posRuleSave"><i class="fas fa-save"></i> Save Rule</button>');
+  on('posRuleCancel', 'click', closeModal);
+  on('posRuleSave', 'click', function() {
+    var user = getUser();
+    API.post('/pos/customer-discounts/' + custId, {
+      name: gv('posRuleName') || 'Custom Rule',
+      rule_type: gv('posRuleType'),
+      product_id: gv('posRuleProductId') ? parseInt(gv('posRuleProductId')) : null,
+      category: gv('posRuleCategory') || null,
+      min_qty: parseFloat(gv('posRuleMinQty') || '0'),
+      price: gv('posRulePrice') ? parseFloat(gv('posRulePrice')) : null,
+      discount_pct: gv('posRuleDiscPct') ? parseFloat(gv('posRuleDiscPct')) : null,
+      start_date: gv('posRuleStart') || null,
+      end_date: gv('posRuleEnd') || null,
+      created_by: user ? user.id : null
+    }).then(function() {
+      closeModal();
+      toast('Pricing rule added');
+      refreshCustDiscounts(custId);
+    }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+  });
+}
+
+// ==================== TAX CONFIG + PROMOTIONS MANAGEMENT ====================
+function openTaxConfigModal() {
+  API.get('/pos/tax-config?location_id=' + getLocationId()).then(function(r) {
+    var configs = r.data || [];
+    var html = '<div style="margin-bottom:12px"><button class="pos-btn pos-btn-sm" id="posTaxAddBtn" style="background:var(--pos-green);color:white"><i class="fas fa-plus"></i> Add Tax Rule</button></div>';
+    if (configs.length === 0) {
+      html += '<div style="text-align:center;padding:20px;color:var(--pos-gray-400)">No tax rules configured. Default product tax rates are used.</div>';
+    } else {
+      html += '<table class="pos-table"><thead><tr><th>Name</th><th>Type</th><th>Rate</th><th>Scope</th><th></th></tr></thead><tbody>';
+      configs.forEach(function(c) {
+        var scope = c.product_name ? 'Product: ' + c.product_name : c.category ? 'Category: ' + c.category : c.location_name ? 'Location: ' + c.location_name : 'Global';
+        html += '<tr><td>' + esc(c.name) + '</td><td>' + esc(c.tax_type).replace(/_/g, ' ') + '</td>' +
+          '<td style="font-weight:700">' + c.rate + '%</td>' +
+          '<td style="font-size:12px">' + esc(scope) + '</td>' +
+          '<td><button class="pos-cust-addr-btn danger" data-del-tax="' + c.id + '"><i class="fas fa-trash"></i></button></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    showModal('Tax Configuration', html, '<button class="pos-btn pos-btn-hold" id="posTaxClose">Close</button>');
+    on('posTaxClose', 'click', closeModal);
+    on('posTaxAddBtn', 'click', function() { openTaxRuleForm(); });
+    document.querySelectorAll('[data-del-tax]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        if (!confirm('Remove this tax rule?')) return;
+        API.delete('/pos/tax-config/' + btn.dataset.delTax).then(function() {
+          closeModal(); openTaxConfigModal(); toast('Tax rule removed');
+        }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+      });
+    });
+  });
+}
+
+function openTaxRuleForm() {
+  var locOpts = '<option value="">All Locations</option>';
+  _s.locations.forEach(function(l) { locOpts += '<option value="' + l.id + '">' + esc(l.name) + '</option>'; });
+  var catOpts = '<option value="">All Categories</option>';
+  _s.categories.forEach(function(c) { if (c.category) catOpts += '<option value="' + esc(c.category) + '">' + esc(c.category) + '</option>'; });
+
+  var html = '<div class="pos-cust-form-grid">' +
+    '<div class="pos-cust-form-group full"><label>Name</label><input type="text" id="posTaxRuleName" placeholder="e.g. Florida Sales Tax"></div>' +
+    '<div class="pos-cust-form-group"><label>Tax Type</label><select id="posTaxRuleType"><option value="sales_tax">Sales Tax</option><option value="county_tax">County Tax</option><option value="state_tax">State Tax</option><option value="special">Special</option></select></div>' +
+    '<div class="pos-cust-form-group"><label>Rate (%)</label><input type="number" id="posTaxRuleRate" step="0.01" min="0" placeholder="7.0"></div>' +
+    '<div class="pos-cust-form-group"><label>Location</label><select id="posTaxRuleLoc">' + locOpts + '</select></div>' +
+    '<div class="pos-cust-form-group"><label>Category</label><select id="posTaxRuleCat">' + catOpts + '</select></div>' +
+    '<div class="pos-cust-form-group"><label>Priority</label><input type="number" id="posTaxRulePri" value="0" min="0"></div>' +
+    '<div class="pos-cust-form-group full"><label>Notes</label><input type="text" id="posTaxRuleNotes" placeholder="Optional notes"></div>' +
+  '</div>';
+
+  closeModal();
+  showModal('Add Tax Rule', html,
+    '<button class="pos-btn pos-btn-hold" id="posTaxRuleCancel">Cancel</button>' +
+    '<button class="pos-btn pos-btn-pay" id="posTaxRuleSave"><i class="fas fa-save"></i> Save</button>');
+  on('posTaxRuleCancel', 'click', function() { closeModal(); openTaxConfigModal(); });
+  on('posTaxRuleSave', 'click', function() {
+    API.post('/pos/tax-config', {
+      name: gv('posTaxRuleName') || 'Tax Rule', tax_type: gv('posTaxRuleType'),
+      rate: parseFloat(gv('posTaxRuleRate') || '0'),
+      location_id: gv('posTaxRuleLoc') ? parseInt(gv('posTaxRuleLoc')) : null,
+      category: gv('posTaxRuleCat') || null, priority: parseInt(gv('posTaxRulePri') || '0'),
+      notes: gv('posTaxRuleNotes') || ''
+    }).then(function() { closeModal(); openTaxConfigModal(); toast('Tax rule added'); })
+    .catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+  });
+}
+
+function openPromotionsManager() {
+  API.get('/pos/promotions?active=0').then(function(r) {
+    var promos = r.data || [];
+    var html = '<div style="margin-bottom:12px"><button class="pos-btn pos-btn-sm" id="posPromoAddBtn" style="background:var(--pos-green);color:white"><i class="fas fa-plus"></i> New Promotion</button></div>';
+    if (promos.length === 0) {
+      html += '<div style="text-align:center;padding:20px;color:var(--pos-gray-400)">No promotions yet</div>';
+    } else {
+      html += '<table class="pos-table"><thead><tr><th>Name</th><th>Code</th><th>Type</th><th>Discount</th><th>Dates</th><th>Status</th><th></th></tr></thead><tbody>';
+      promos.forEach(function(p) {
+        var disc = p.promo_type === 'percent_off' ? p.discount_pct + '% off' :
+                   p.promo_type === 'dollar_off' ? '$' + p.discount_amount + ' off' :
+                   p.promo_type === 'bogo' ? 'Buy ' + p.buy_qty + ' Get ' + p.get_qty : p.promo_type.replace(/_/g, ' ');
+        html += '<tr><td style="font-weight:600">' + esc(p.name) + '</td>' +
+          '<td>' + (p.code ? '<code>' + esc(p.code) + '</code>' : '-') + '</td>' +
+          '<td><span class="pos-badge pos-badge-purple">' + p.promo_type.replace(/_/g, ' ') + '</span></td>' +
+          '<td>' + disc + '</td>' +
+          '<td style="font-size:11px">' + (p.start_date || '—') + '<br>' + (p.end_date || '—') + '</td>' +
+          '<td>' + (p.active ? '<span class="pos-badge pos-badge-green">Active</span>' : '<span class="pos-badge pos-badge-red">Inactive</span>') + '</td>' +
+          '<td style="white-space:nowrap">' +
+            '<button class="pos-cust-edit-btn" data-toggle-promo="' + p.id + '" data-promo-active="' + p.active + '" title="Toggle"><i class="fas fa-power-off"></i></button> ' +
+            '<button class="pos-cust-addr-btn danger" data-del-promo="' + p.id + '" title="Delete"><i class="fas fa-trash"></i></button>' +
+          '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    showModal('Promotions', html, '<button class="pos-btn pos-btn-hold" id="posPromoMgrClose">Close</button>');
+    on('posPromoMgrClose', 'click', closeModal);
+    on('posPromoAddBtn', 'click', function() { openPromoForm(); });
+    document.querySelectorAll('[data-toggle-promo]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.dataset.togglePromo;
+        var newActive = btn.dataset.promoActive == '1' ? false : true;
+        API.put('/pos/promotions/' + id, { active: newActive, name: 'x', promo_type: 'percent_off' }).then(function() {
+          closeModal(); openPromotionsManager(); toast('Promotion toggled');
+        });
+      });
+    });
+    document.querySelectorAll('[data-del-promo]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        if (!confirm('Deactivate this promotion?')) return;
+        API.delete('/pos/promotions/' + btn.dataset.delPromo).then(function() {
+          closeModal(); openPromotionsManager(); toast('Promotion removed');
+        }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+      });
+    });
+  });
+}
+
+function openPromoForm() {
+  var catOpts = '<option value="">— None —</option>';
+  _s.categories.forEach(function(c) { if (c.category) catOpts += '<option value="' + esc(c.category) + '">' + esc(c.category) + '</option>'; });
+  var locOpts = '<option value="">All Locations</option>';
+  _s.locations.forEach(function(l) { locOpts += '<option value="' + l.id + '">' + esc(l.name) + '</option>'; });
+
+  var html = '<div class="pos-cust-form-grid">' +
+    '<div class="pos-cust-form-group full"><label>Promotion Name *</label><input type="text" id="posPromoName" placeholder="e.g. Summer 15% Off Feed"></div>' +
+    '<div class="pos-cust-form-group"><label>Promo Code</label><input type="text" id="posPromoFormCode" placeholder="SUMMER15"></div>' +
+    '<div class="pos-cust-form-group"><label>Type *</label><select id="posPromoType"><option value="percent_off">% Off</option><option value="dollar_off">$ Off</option><option value="bogo">BOGO</option><option value="buy_x_get_y">Buy X Get Y</option><option value="flat_price">Flat Price</option></select></div>' +
+    '<div class="pos-cust-form-group"><label>Scope</label><select id="posPromoScope"><option value="cart">Entire Cart</option><option value="category">Category</option><option value="product">Product</option><option value="customer_type">Customer Type</option></select></div>' +
+    '<div class="pos-cust-form-group"><label>% Off</label><input type="number" id="posPromoDiscPct" step="0.5" min="0" max="100" value="0"></div>' +
+    '<div class="pos-cust-form-group"><label>$ Off</label><input type="number" id="posPromoDiscAmt" step="0.01" min="0" value="0"></div>' +
+    '<div class="pos-cust-form-group"><label>Buy Qty (BOGO)</label><input type="number" id="posPromoBuyQty" value="0" min="0"></div>' +
+    '<div class="pos-cust-form-group"><label>Get Qty (BOGO)</label><input type="number" id="posPromoGetQty" value="0" min="0"></div>' +
+    '<div class="pos-cust-form-group"><label>Product ID</label><input type="number" id="posPromoProductId" placeholder="Optional"></div>' +
+    '<div class="pos-cust-form-group"><label>Category</label><select id="posPromoCat">' + catOpts + '</select></div>' +
+    '<div class="pos-cust-form-group"><label>Customer Type</label><select id="posPromoCustType"><option value="">Any</option><option value="farm">Farm</option><option value="ranch">Ranch</option><option value="retail">Retail</option><option value="equestrian">Equestrian</option><option value="other">Other</option></select></div>' +
+    '<div class="pos-cust-form-group"><label>Min Purchase ($)</label><input type="number" id="posPromoMinPurchase" value="0" step="0.01"></div>' +
+    '<div class="pos-cust-form-group"><label>Max Discount ($)</label><input type="number" id="posPromoMaxDisc" step="0.01" placeholder="No limit"></div>' +
+    '<div class="pos-cust-form-group"><label>Location</label><select id="posPromoLoc">' + locOpts + '</select></div>' +
+    '<div class="pos-cust-form-group"><label>Start Date</label><input type="date" id="posPromoStart"></div>' +
+    '<div class="pos-cust-form-group"><label>End Date</label><input type="date" id="posPromoEnd"></div>' +
+    '<div class="pos-cust-form-group"><label>Usage Limit</label><input type="number" id="posPromoUsageLimit" value="0" min="0" placeholder="0 = unlimited"></div>' +
+    '<div class="pos-cust-form-group"><label><input type="checkbox" id="posPromoStackable"> Stackable</label></div>' +
+    '<div class="pos-cust-form-group full"><label>Notes</label><input type="text" id="posPromoNotes" placeholder="Optional notes"></div>' +
+  '</div>';
+
+  closeModal();
+  showModal('New Promotion', html,
+    '<button class="pos-btn pos-btn-hold" id="posPromoFormCancel">Cancel</button>' +
+    '<button class="pos-btn pos-btn-pay" id="posPromoFormSave"><i class="fas fa-save"></i> Create</button>');
+  on('posPromoFormCancel', 'click', function() { closeModal(); openPromotionsManager(); });
+  on('posPromoFormSave', 'click', function() {
+    var user = getUser();
+    API.post('/pos/promotions', {
+      name: gv('posPromoName'), code: gv('posPromoFormCode') || null,
+      promo_type: gv('posPromoType'), scope: gv('posPromoScope'),
+      discount_pct: parseFloat(gv('posPromoDiscPct') || '0'),
+      discount_amount: parseFloat(gv('posPromoDiscAmt') || '0'),
+      buy_qty: parseFloat(gv('posPromoBuyQty') || '0'),
+      get_qty: parseFloat(gv('posPromoGetQty') || '0'),
+      product_id: gv('posPromoProductId') ? parseInt(gv('posPromoProductId')) : null,
+      category: gv('posPromoCat') || null, customer_type: gv('posPromoCustType') || null,
+      min_purchase: parseFloat(gv('posPromoMinPurchase') || '0'),
+      max_discount: gv('posPromoMaxDisc') ? parseFloat(gv('posPromoMaxDisc')) : null,
+      location_id: gv('posPromoLoc') ? parseInt(gv('posPromoLoc')) : null,
+      start_date: gv('posPromoStart') || null, end_date: gv('posPromoEnd') || null,
+      usage_limit: parseInt(gv('posPromoUsageLimit') || '0'),
+      stackable: document.getElementById('posPromoStackable') && document.getElementById('posPromoStackable').checked,
+      created_by: user ? user.id : null, notes: gv('posPromoNotes') || ''
+    }).then(function() { closeModal(); openPromotionsManager(); toast('Promotion created!'); })
+    .catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+  });
+}
+
 // ==================== HISTORY + ACCOUNT SUB-RENDERERS ====================
 function renderCustHistory(items, rules) {
   var html = '';
@@ -2041,7 +2612,6 @@ function renderCustAccount(acct) {
     fld('Last Payment Amount', acct.last_payment_amount ? '$' + acct.last_payment_amount.toFixed(2) : '-') +
   '</div>';
 }
-
 function toast(msg, type) {
   if (typeof window.shellToast === 'function') { window.shellToast(msg, type || 'success'); return; }
   var el = document.createElement('div');
