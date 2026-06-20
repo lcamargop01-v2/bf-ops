@@ -1,5 +1,5 @@
-// BF Operations — Reports Module
-// Comprehensive reporting with drill-down, export, and inventory as-of-date
+// BF Operations — Reports Module (QB Online Style)
+// Clean, customizable reports with column toggles, filters, and export
 
 (function() {
 'use strict';
@@ -11,101 +11,131 @@ var _dateFrom = '';
 var _dateTo = '';
 var _locations = [];
 var _categories = [];
+var _activeQuick = '30d';
+
+// Column visibility state per tab
+var _colState = {
+  financial: { month:1, revenue:1, cogs:1, margin:1, margin_pct:1, orders:1 },
+  sales: {},
+  products: { name:1, category:1, price:1, cost:1, units:1, revenue:1, margin:1, margin_pct:1, stock:1 },
+  purchasing: {},
+  delivery: {},
+  returns: {},
+  customers: { name:1, zone:1, orders:1, revenue:1, weight:1, last_order:1 },
+  inventory: { name:1, category:1, on_hand:1, on_hold:1, reserved:1, available:1, cost:1, price:1, value:1 },
+  fleet: {},
+  warehouse: {}
+};
 
 // ==================== INIT ====================
 window._reportsInit = function() {
   if (!API) API = axios.create({ baseURL: '/api' });
-  // Set auth token
-  var token = localStorage.getItem('bf_token');
+  var token = localStorage.getItem('bf_token') || localStorage.getItem('bf_ops_token');
   if (token) API.defaults.headers.common['Authorization'] = 'Bearer ' + token;
 
-  // Default: last 30 days
   var now = new Date();
   var ago = new Date(now.getTime() - 30 * 86400000);
   _dateTo = now.toISOString().slice(0, 10);
   _dateFrom = ago.toISOString().slice(0, 10);
 
-  renderReportsApp();
+  renderApp();
   loadFilters();
   loadTab(_currentTab);
 };
 
-function renderReportsApp() {
+window._reportsCleanup = function() {
+  _rptData = {};
+};
+
+// ==================== MAIN RENDER ====================
+function renderApp() {
   var el = document.getElementById('reports-app');
   if (!el) return;
 
   el.innerHTML =
-    '<div class="rpt-tabs" id="rptTabs">' +
-      rptTabBtn('financial', 'fa-chart-line', 'Financial') +
-      rptTabBtn('sales', 'fa-receipt', 'Sales') +
-      rptTabBtn('products', 'fa-box', 'Products') +
-      rptTabBtn('purchasing', 'fa-cart-shopping', 'Purchasing') +
-      rptTabBtn('delivery', 'fa-truck', 'Delivery') +
-      rptTabBtn('returns', 'fa-rotate-left', 'Returns') +
-      rptTabBtn('customers', 'fa-users', 'Customers') +
-      rptTabBtn('inventory', 'fa-warehouse', 'Inventory') +
-      rptTabBtn('fleet', 'fa-truck-monster', 'Fleet') +
-      rptTabBtn('warehouse', 'fa-boxes-stacked', 'Warehouse') +
+    '<div class="qb-report-header">' +
+      '<div class="qb-report-title-row">' +
+        '<div class="qb-report-title"><i class="fas fa-chart-pie"></i> <span id="rptTitleText">Reports</span></div>' +
+        '<div class="qb-report-actions">' +
+          '<div style="position:relative">' +
+            '<button class="qb-action-btn" onclick="window._rptToggleColumns()"><i class="fas fa-columns"></i> Columns</button>' +
+            '<div id="rptColumnsDropdown" class="qb-customize-dropdown" style="display:none"></div>' +
+          '</div>' +
+          '<button class="qb-action-btn" onclick="window._rptExportExcel()"><i class="fas fa-file-csv"></i> Export</button>' +
+          '<button class="qb-action-btn" onclick="window._rptExportPDF()"><i class="fas fa-print"></i> Print</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="qb-tabs" id="rptTabs">' +
+        tabBtn('financial', 'fa-chart-line', 'Financial') +
+        tabBtn('sales', 'fa-receipt', 'Sales') +
+        tabBtn('products', 'fa-box', 'Products') +
+        tabBtn('purchasing', 'fa-cart-shopping', 'Purchasing') +
+        tabBtn('delivery', 'fa-truck', 'Delivery') +
+        tabBtn('returns', 'fa-rotate-left', 'Returns') +
+        tabBtn('customers', 'fa-users', 'Customers') +
+        tabBtn('inventory', 'fa-warehouse', 'Inventory') +
+        tabBtn('fleet', 'fa-truck-monster', 'Fleet') +
+        tabBtn('warehouse', 'fa-boxes-stacked', 'Warehouse') +
+      '</div>' +
+      '<div class="qb-filter-bar" id="rptFilterBar">' +
+        '<div class="qb-filter-group">' +
+          '<span class="qb-filter-label">Date</span>' +
+          '<input type="date" class="qb-filter-input" id="rptFrom" value="' + _dateFrom + '" onchange="window._rptSetFrom(this.value)">' +
+          '<span style="color:var(--qb-text-muted);font-size:12px">to</span>' +
+          '<input type="date" class="qb-filter-input" id="rptTo" value="' + _dateTo + '" onchange="window._rptSetTo(this.value)">' +
+        '</div>' +
+        '<div class="qb-quick-dates">' +
+          quickBtn('7d', '7d') + quickBtn('30d', '30d') + quickBtn('90d', '90d') + quickBtn('1yr', '1yr') + quickBtn('All', 'all') +
+        '</div>' +
+      '</div>' +
     '</div>' +
-    '<div class="rpt-toolbar" id="rptToolbar">' +
-      '<div class="rpt-date-range">' +
-        '<input type="date" id="rptFrom" value="' + _dateFrom + '" onchange="window._rptSetFrom(this.value)">' +
-        '<span>to</span>' +
-        '<input type="date" id="rptTo" value="' + _dateTo + '" onchange="window._rptSetTo(this.value)">' +
-      '</div>' +
-      '<div class="rpt-quick-range">' +
-        '<button class="rpt-quick-btn" onclick="window._rptQuick(7)">7d</button>' +
-        '<button class="rpt-quick-btn active" onclick="window._rptQuick(30)">30d</button>' +
-        '<button class="rpt-quick-btn" onclick="window._rptQuick(90)">90d</button>' +
-        '<button class="rpt-quick-btn" onclick="window._rptQuick(365)">1yr</button>' +
-        '<button class="rpt-quick-btn" onclick="window._rptQuickAll()">All</button>' +
-      '</div>' +
-      '<div class="rpt-toolbar-right">' +
-        '<button class="rpt-export-btn" onclick="window._rptExportPDF()"><i class="fas fa-file-pdf"></i> PDF</button>' +
-        '<button class="rpt-export-btn" onclick="window._rptExportExcel()"><i class="fas fa-file-excel"></i> Excel</button>' +
-      '</div>' +
-    '</div>' +
-    '<div id="rptContent" class="rpt-page">' +
-      '<div class="rpt-loading"><i class="fas fa-spinner fa-spin"></i> Loading report...</div>' +
+    '<div class="qb-report-body" id="rptContent">' +
+      '<div class="qb-loading"><i class="fas fa-spinner fa-spin"></i> Loading report...</div>' +
     '</div>';
 }
 
-function rptTabBtn(id, icon, label) {
-  return '<button class="rpt-tab ' + (_currentTab === id ? 'active' : '') + '" onclick="window._rptTab(\'' + id + '\')">' +
+function tabBtn(id, icon, label) {
+  return '<button class="qb-tab ' + (_currentTab === id ? 'active' : '') + '" onclick="window._rptTab(\'' + id + '\')">' +
     '<i class="fas ' + icon + '"></i> <span>' + label + '</span></button>';
+}
+
+function quickBtn(label, id) {
+  return '<button class="qb-quick-date ' + (_activeQuick === id ? 'active' : '') + '" onclick="window._rptQuick(\'' + id + '\')">' + label + '</button>';
 }
 
 // ==================== TAB SWITCHING ====================
 window._rptTab = function(tab) {
   _currentTab = tab;
-  document.querySelectorAll('.rpt-tab').forEach(function(t) { t.classList.remove('active'); });
-  var tabs = document.querySelectorAll('.rpt-tab');
+  document.querySelectorAll('.qb-tab').forEach(function(t) { t.classList.remove('active'); });
+  var tabs = document.querySelectorAll('.qb-tab');
   var tabIds = ['financial','sales','products','purchasing','delivery','returns','customers','inventory','fleet','warehouse'];
   var idx = tabIds.indexOf(tab);
   if (idx >= 0 && tabs[idx]) tabs[idx].classList.add('active');
+
+  // Update title
+  var titles = { financial:'Financial Overview', sales:'Sales Report', products:'Product Performance', purchasing:'Purchasing Report', delivery:'Delivery Report', returns:'Returns Report', customers:'Customer Report', inventory:'Inventory Valuation', fleet:'Fleet Report', warehouse:'Warehouse Activity' };
+  var titleEl = document.getElementById('rptTitleText');
+  if (titleEl) titleEl.textContent = titles[tab] || 'Reports';
+
   loadTab(tab);
 };
 
 // ==================== DATE CONTROLS ====================
-window._rptSetFrom = function(v) { _dateFrom = v; loadTab(_currentTab); };
-window._rptSetTo = function(v) { _dateTo = v; loadTab(_currentTab); };
-window._rptQuick = function(days) {
+window._rptSetFrom = function(v) { _dateFrom = v; _activeQuick = ''; loadTab(_currentTab); };
+window._rptSetTo = function(v) { _dateTo = v; _activeQuick = ''; loadTab(_currentTab); };
+window._rptQuick = function(id) {
   var now = new Date();
   _dateTo = now.toISOString().slice(0, 10);
-  _dateFrom = new Date(now.getTime() - days * 86400000).toISOString().slice(0, 10);
+  if (id === '7d') _dateFrom = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+  else if (id === '30d') _dateFrom = new Date(now.getTime() - 30 * 86400000).toISOString().slice(0, 10);
+  else if (id === '90d') _dateFrom = new Date(now.getTime() - 90 * 86400000).toISOString().slice(0, 10);
+  else if (id === '1yr') _dateFrom = new Date(now.getTime() - 365 * 86400000).toISOString().slice(0, 10);
+  else if (id === 'all') _dateFrom = '2020-01-01';
+  _activeQuick = id;
   document.getElementById('rptFrom').value = _dateFrom;
   document.getElementById('rptTo').value = _dateTo;
-  document.querySelectorAll('.rpt-quick-btn').forEach(function(b) { b.classList.remove('active'); });
-  event.target.classList.add('active');
-  loadTab(_currentTab);
-};
-window._rptQuickAll = function() {
-  _dateFrom = '2020-01-01';
-  _dateTo = new Date().toISOString().slice(0, 10);
-  document.getElementById('rptFrom').value = _dateFrom;
-  document.getElementById('rptTo').value = _dateTo;
-  document.querySelectorAll('.rpt-quick-btn').forEach(function(b) { b.classList.remove('active'); });
-  event.target.classList.add('active');
+  document.querySelectorAll('.qb-quick-date').forEach(function(b) { b.classList.remove('active'); });
+  if (event && event.target) event.target.classList.add('active');
   loadTab(_currentTab);
 };
 
@@ -114,13 +144,62 @@ function loadFilters() {
   API.get('/reports/categories').then(function(r) { _categories = r.data; }).catch(function() {});
 }
 
+// ==================== COLUMN TOGGLE ====================
+window._rptToggleColumns = function() {
+  var dd = document.getElementById('rptColumnsDropdown');
+  if (!dd) return;
+  if (dd.style.display !== 'none') { dd.style.display = 'none'; return; }
+
+  var cols = getColumnsForTab(_currentTab);
+  if (!cols || cols.length === 0) { dd.innerHTML = '<div style="font-size:12px;color:var(--qb-text-muted);padding:4px">No customizable columns</div>'; dd.style.display = 'block'; return; }
+
+  var state = _colState[_currentTab] || {};
+  var html = '<div style="font-size:12px;font-weight:700;color:var(--qb-text-muted);margin-bottom:6px;text-transform:uppercase">Show / Hide</div>';
+  cols.forEach(function(c) {
+    var checked = state[c.id] !== 0 ? 'checked' : '';
+    html += '<label class="qb-customize-item"><input type="checkbox" ' + checked + ' onchange="window._rptColToggle(\'' + c.id + '\',this.checked)"> ' + c.label + '</label>';
+  });
+  dd.innerHTML = html;
+  dd.style.display = 'block';
+
+  // Close on outside click
+  setTimeout(function() {
+    document.addEventListener('click', function handler(e) {
+      if (!dd.contains(e.target) && e.target.id !== 'rptColumnsDropdown') {
+        dd.style.display = 'none';
+        document.removeEventListener('click', handler);
+      }
+    });
+  }, 10);
+};
+
+window._rptColToggle = function(colId, show) {
+  if (!_colState[_currentTab]) _colState[_currentTab] = {};
+  _colState[_currentTab][colId] = show ? 1 : 0;
+  loadTab(_currentTab);
+};
+
+function getColumnsForTab(tab) {
+  var c = {
+    financial: [{id:'month',label:'Month'},{id:'revenue',label:'Revenue'},{id:'cogs',label:'COGS'},{id:'margin',label:'Margin'},{id:'margin_pct',label:'Margin %'},{id:'orders',label:'Orders'}],
+    products: [{id:'name',label:'Product'},{id:'category',label:'Category'},{id:'price',label:'Price'},{id:'cost',label:'Cost'},{id:'units',label:'Units Sold'},{id:'revenue',label:'Revenue'},{id:'margin',label:'Margin'},{id:'margin_pct',label:'Margin %'},{id:'stock',label:'Stock'}],
+    customers: [{id:'name',label:'Customer'},{id:'zone',label:'Zone'},{id:'orders',label:'Orders'},{id:'revenue',label:'Revenue'},{id:'weight',label:'Weight'},{id:'last_order',label:'Last Order'}],
+    inventory: [{id:'name',label:'Product'},{id:'category',label:'Category'},{id:'on_hand',label:'On Hand'},{id:'on_hold',label:'On Hold'},{id:'reserved',label:'Reserved'},{id:'available',label:'Available'},{id:'cost',label:'Unit Cost'},{id:'price',label:'Unit Price'},{id:'value',label:'Value (Retail)'}]
+  };
+  return c[tab] || [];
+}
+
+function colVisible(tab, colId) {
+  var s = _colState[tab];
+  if (!s || s[colId] === undefined) return true;
+  return s[colId] !== 0;
+}
+
 // ==================== LOAD TAB ====================
 function loadTab(tab) {
   var el = document.getElementById('rptContent');
-  el.innerHTML = '<div class="rpt-loading"><i class="fas fa-spinner fa-spin"></i> Loading report...</div>';
-
+  if (el) el.innerHTML = '<div class="qb-loading"><i class="fas fa-spinner fa-spin"></i> Loading report...</div>';
   var q = 'from=' + _dateFrom + '&to=' + _dateTo;
-
   if (tab === 'financial') loadFinancial(q);
   else if (tab === 'sales') loadSales(q);
   else if (tab === 'products') loadProducts(q);
@@ -138,29 +217,39 @@ function fmt$(v) { return '$' + (v || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d)
 function fmtN(v) { return (v || 0).toLocaleString(); }
 function fmtPct(a, b) { return b ? ((a / b) * 100).toFixed(1) + '%' : '0%'; }
 
-function summaryCard(label, value, opts) {
+function summaryItem(label, value, opts) {
   opts = opts || {};
   var cls = opts.color ? ' ' + opts.color : '';
-  var click = opts.onClick ? ' clickable" onclick="' + opts.onClick + '"' : '"';
-  var icon = opts.icon ? '<div class="rpt-card-icon" style="background:' + (opts.iconBg || '#3B82F6') + '"><i class="fas ' + opts.icon + '"></i></div>' : '';
-  var sub = opts.sub ? '<div class="rpt-card-sub">' + opts.sub + '</div>' : '';
-  return '<div class="rpt-card' + click + '>' + icon +
-    '<div class="rpt-card-label">' + label + '</div>' +
-    '<div class="rpt-card-value' + cls + '">' + value + '</div>' + sub + '</div>';
+  var sub = opts.sub ? '<div class="qb-summary-sub">' + opts.sub + '</div>' : '';
+  return '<div class="qb-summary-item"><div class="qb-summary-label">' + label + '</div><div class="qb-summary-value' + cls + '">' + value + '</div>' + sub + '</div>';
 }
 
-function sectionStart(title, icon, actionsHtml) {
-  return '<div class="rpt-section"><div class="rpt-section-header">' +
-    '<div class="rpt-section-title"><i class="fas ' + icon + '"></i> ' + title + '</div>' +
-    (actionsHtml ? '<div class="rpt-section-actions">' + actionsHtml + '</div>' : '') +
-    '</div><div class="rpt-section-body">';
+function sectionOpen(title, icon, controlsHtml) {
+  return '<div class="qb-section"><div class="qb-section-header"><div class="qb-section-title"><i class="fas ' + icon + '"></i> ' + title + '</div>' +
+    (controlsHtml ? '<div class="qb-section-controls">' + controlsHtml + '</div>' : '') +
+    '</div><div class="qb-section-body">';
 }
-function sectionEnd() { return '</div></div>'; }
+function sectionClose() { return '</div></div>'; }
 
 function groupBtns(groups, current, callbackName) {
   return groups.map(function(g) {
-    return '<button class="rpt-group-btn ' + (current === g.id ? 'active' : '') + '" onclick="window.' + callbackName + '(\'' + g.id + '\')">' + g.label + '</button>';
+    return '<button class="qb-group-btn ' + (current === g.id ? 'active' : '') + '" onclick="window.' + callbackName + '(\'' + g.id + '\')">' + g.label + '</button>';
   }).join('');
+}
+
+function th(label, opts) {
+  opts = opts || {};
+  return '<th' + (opts.right ? ' class="right"' : '') + '>' + label + '</th>';
+}
+function td(val, opts) {
+  opts = opts || {};
+  var cls = [];
+  if (opts.right) cls.push('right');
+  if (opts.money) cls.push('money');
+  if (opts.num) cls.push('num');
+  if (opts.muted) cls.push('muted');
+  if (opts.neg) cls.push('neg');
+  return '<td' + (cls.length ? ' class="' + cls.join(' ') + '"' : '') + '>' + val + '</td>';
 }
 
 // ==================== FINANCIAL OVERVIEW ====================
@@ -173,44 +262,60 @@ function loadFinancial(q) {
     var inv = d.inventoryValue || {};
     var el = document.getElementById('rptContent');
 
-    var html = '<div class="rpt-summary">' +
-      summaryCard('Revenue', fmt$(rev.total_revenue), { icon: 'fa-dollar-sign', iconBg: '#059669', color: 'green', sub: fmtN(rev.order_count) + ' orders' }) +
-      summaryCard('Cost of Goods', fmt$(rev.cogs), { icon: 'fa-tags', iconBg: '#D97706', sub: 'COGS from sold items' }) +
-      summaryCard('Gross Margin', fmt$(rev.gross_margin), { icon: 'fa-chart-line', iconBg: '#2563EB', color: rev.gross_margin >= 0 ? 'green' : 'red', sub: fmtPct(rev.gross_margin, rev.total_revenue) + ' margin rate' }) +
-      summaryCard('Purchasing Spend', fmt$(pur.total_purchasing), { icon: 'fa-cart-shopping', iconBg: '#F97316', color: 'orange', sub: fmtN(pur.po_count) + ' purchase orders' }) +
-      summaryCard('Bills Paid', fmt$(bill.paid), { icon: 'fa-file-invoice-dollar', iconBg: '#059669', sub: 'Paid to suppliers' }) +
-      summaryCard('Bills Pending', fmt$(bill.pending), { icon: 'fa-clock', iconBg: '#EAB308', color: 'orange', sub: 'Awaiting payment' }) +
-      summaryCard('Inventory Value (Retail)', fmt$(inv.inventory_retail_value), { icon: 'fa-store', iconBg: '#059669', color: 'green', sub: fmtN(inv.total_units) + ' units · matches Inventory dashboard' }) +
-      summaryCard('Inventory Value (Cost)', fmt$(inv.inventory_value), { icon: 'fa-warehouse', iconBg: '#7C3AED', sub: 'At cost basis' }) +
+    var html = '<div class="qb-summary-strip">' +
+      summaryItem('Revenue', fmt$(rev.total_revenue), { color: 'green', sub: fmtN(rev.order_count) + ' orders' }) +
+      summaryItem('Cost of Goods', fmt$(rev.cogs), { sub: 'COGS from sold items' }) +
+      summaryItem('Gross Margin', fmt$(rev.gross_margin), { color: rev.gross_margin >= 0 ? 'green' : 'red', sub: fmtPct(rev.gross_margin, rev.total_revenue) + ' margin' }) +
+      summaryItem('Purchasing', fmt$(pur.total_purchasing), { color: 'orange', sub: fmtN(pur.po_count) + ' POs' }) +
+      summaryItem('Bills Paid', fmt$(bill.paid), { color: 'green' }) +
+      summaryItem('Bills Pending', fmt$(bill.pending), { color: 'orange' }) +
+      summaryItem('Inventory (Retail)', fmt$(inv.inventory_retail_value), { color: 'green', sub: fmtN(inv.total_units) + ' units' }) +
+      summaryItem('Inventory (Cost)', fmt$(inv.inventory_value), { sub: 'At cost basis' }) +
     '</div>';
 
-    // Monthly trend chart
+    // Monthly trend
     if (d.monthlyTrend && d.monthlyTrend.length > 0) {
-      html += sectionStart('Monthly Trend', 'fa-chart-bar', '');
-      html += '<div class="rpt-chart-wrap"><canvas id="rptFinChart"></canvas></div>';
-      html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr>' +
-        '<th>Month</th><th class="right">Revenue</th><th class="right">COGS</th><th class="right">Margin</th><th class="right">Margin %</th><th class="right">Orders</th>' +
-        '</tr></thead><tbody>';
+      var cv = colVisible.bind(null, 'financial');
+      html += sectionOpen('Monthly P&L Trend', 'fa-chart-bar', '');
+      html += '<div class="qb-chart-wrap"><canvas id="rptFinChart"></canvas></div>';
+      html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>';
+      if (cv('month')) html += th('Month');
+      if (cv('revenue')) html += th('Revenue', {right:1});
+      if (cv('cogs')) html += th('COGS', {right:1});
+      if (cv('margin')) html += th('Gross Margin', {right:1});
+      if (cv('margin_pct')) html += th('Margin %', {right:1});
+      if (cv('orders')) html += th('Orders', {right:1});
+      html += '</tr></thead><tbody>';
+
+      var totRev = 0, totCogs = 0, totMargin = 0, totOrders = 0;
       d.monthlyTrend.forEach(function(m) {
-        html += '<tr><td class="num">' + m.month + '</td>' +
-          '<td class="right money">' + fmt$(m.revenue) + '</td>' +
-          '<td class="right num">' + fmt$(m.cogs) + '</td>' +
-          '<td class="right money">' + fmt$(m.margin) + '</td>' +
-          '<td class="right num">' + fmtPct(m.margin, m.revenue) + '</td>' +
-          '<td class="right num">' + fmtN(m.orders) + '</td></tr>';
+        totRev += m.revenue || 0; totCogs += m.cogs || 0; totMargin += m.margin || 0; totOrders += m.orders || 0;
+        html += '<tr>';
+        if (cv('month')) html += td(m.month, {num:1});
+        if (cv('revenue')) html += td(fmt$(m.revenue), {right:1, money:1});
+        if (cv('cogs')) html += td(fmt$(m.cogs), {right:1, num:1});
+        if (cv('margin')) html += td(fmt$(m.margin), {right:1, money:1});
+        if (cv('margin_pct')) html += td(fmtPct(m.margin, m.revenue), {right:1, num:1});
+        if (cv('orders')) html += td(fmtN(m.orders), {right:1, num:1});
+        html += '</tr>';
       });
+      // Totals row
+      html += '<tr class="totals-row">';
+      if (cv('month')) html += '<td><strong>Total</strong></td>';
+      if (cv('revenue')) html += td(fmt$(totRev), {right:1, money:1});
+      if (cv('cogs')) html += td(fmt$(totCogs), {right:1, num:1});
+      if (cv('margin')) html += td(fmt$(totMargin), {right:1, money:1});
+      if (cv('margin_pct')) html += td(fmtPct(totMargin, totRev), {right:1, num:1});
+      if (cv('orders')) html += td(fmtN(totOrders), {right:1, num:1});
+      html += '</tr>';
       html += '</tbody></table></div>';
-      html += sectionEnd();
+      html += sectionClose();
     }
 
     el.innerHTML = html;
-
-    // Render chart
-    if (d.monthlyTrend && d.monthlyTrend.length > 0 && window.Chart) {
-      renderFinChart(d.monthlyTrend);
-    }
-  }).catch(function(err) {
-    document.getElementById('rptContent').innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load financial report</div>';
+    if (d.monthlyTrend && d.monthlyTrend.length > 0 && window.Chart) renderFinChart(d.monthlyTrend);
+  }).catch(function() {
+    document.getElementById('rptContent').innerHTML = '<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load financial report</div>';
   });
 }
 
@@ -222,13 +327,13 @@ function renderFinChart(data) {
     data: {
       labels: data.map(function(d) { return d.month; }),
       datasets: [
-        { label: 'Revenue', data: data.map(function(d) { return d.revenue; }), backgroundColor: 'rgba(5,150,105,0.7)', borderRadius: 6, order: 2 },
-        { label: 'COGS', data: data.map(function(d) { return d.cogs; }), backgroundColor: 'rgba(217,119,6,0.5)', borderRadius: 6, order: 3 },
-        { label: 'Margin', data: data.map(function(d) { return d.margin; }), type: 'line', borderColor: '#2563EB', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 4, order: 1 }
+        { label: 'Revenue', data: data.map(function(d) { return d.revenue; }), backgroundColor: '#2CA01C', borderRadius: 4, order: 2 },
+        { label: 'COGS', data: data.map(function(d) { return d.cogs; }), backgroundColor: '#E8590C', borderRadius: 4, order: 3 },
+        { label: 'Margin', data: data.map(function(d) { return d.margin; }), type: 'line', borderColor: '#0077C5', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 3, order: 1 }
       ]
     },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } },
-      scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return '$' + (v/1000).toFixed(0) + 'k'; } } } } }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top', labels: { usePointStyle: true, padding: 16 } } },
+      scales: { y: { beginAtZero: true, grid: { color: '#E8EAED' }, ticks: { callback: function(v) { return '$' + (v/1000).toFixed(0) + 'k'; } } }, x: { grid: { display: false } } } }
   });
 }
 
@@ -240,66 +345,73 @@ function loadSales(q) {
     var s = d.summary || {};
     var el = document.getElementById('rptContent');
 
-    var html = '<div class="rpt-summary">' +
-      summaryCard('Total Orders', fmtN(s.total_orders), { icon: 'fa-receipt', iconBg: '#2563EB', onClick: "window._rptDrillSales('status','all')" }) +
-      summaryCard('Delivered', fmtN(s.delivered), { icon: 'fa-circle-check', iconBg: '#059669', color: 'green', onClick: "window._rptDrillSales('status','delivered')" }) +
-      summaryCard('Active', fmtN(s.active), { icon: 'fa-spinner', iconBg: '#F97316', color: 'orange', onClick: "window._rptDrillSales('status','active')" }) +
-      summaryCard('Cancelled', fmtN(s.cancelled), { icon: 'fa-ban', iconBg: '#DC2626', color: 'red', onClick: "window._rptDrillSales('status','cancelled')" }) +
-      summaryCard('Revenue', fmt$(s.total_revenue), { icon: 'fa-dollar-sign', iconBg: '#059669', color: 'green' }) +
-      summaryCard('Total Weight', fmtN(Math.round(s.total_weight || 0)) + ' lbs', { icon: 'fa-weight-hanging', iconBg: '#7C3AED' }) +
+    var html = '<div class="qb-summary-strip">' +
+      summaryItem('Total Orders', fmtN(s.total_orders), { color: 'blue' }) +
+      summaryItem('Delivered', fmtN(s.delivered), { color: 'green' }) +
+      summaryItem('Active', fmtN(s.active), { color: 'orange' }) +
+      summaryItem('Cancelled', fmtN(s.cancelled), { color: 'red' }) +
+      summaryItem('Revenue', fmt$(s.total_revenue), { color: 'green' }) +
+      summaryItem('Total Weight', fmtN(Math.round(s.total_weight || 0)) + ' lbs') +
     '</div>';
 
-    var groups = [{ id: 'day', label: 'Daily' }, { id: 'month', label: 'Monthly' }, { id: 'customer', label: 'By Customer' }, { id: 'product', label: 'By Product' }, { id: 'status', label: 'By Status' }];
-    html += sectionStart('Breakdown', 'fa-table', groupBtns(groups, _salesGroup, '_rptSalesGroup'));
+    var groups = [{id:'day',label:'Daily'},{id:'month',label:'Monthly'},{id:'customer',label:'By Customer'},{id:'product',label:'By Product'},{id:'status',label:'By Status'}];
+    html += sectionOpen('Breakdown', 'fa-table', groupBtns(groups, _salesGroup, '_rptSalesGroup'));
 
     if (d.breakdown && d.breakdown.length > 0) {
       if (_salesGroup === 'day' || _salesGroup === 'month') {
-        html += '<div class="rpt-chart-wrap"><canvas id="rptSalesChart"></canvas></div>';
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Period</th><th class="right">Orders</th><th class="right">Weight</th></tr></thead><tbody>';
+        html += '<div class="qb-chart-wrap"><canvas id="rptSalesChart"></canvas></div>';
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>' + th('Period') + th('Orders',{right:1}) + th('Weight',{right:1}) + '</tr></thead><tbody>';
+        var totO = 0, totW = 0;
         d.breakdown.forEach(function(row) {
-          html += '<tr class="clickable" onclick="window._rptDrillSales(\'date\',\'' + row.period + '\')"><td class="num">' + row.period + '</td><td class="right num">' + fmtN(row.orders) + '</td><td class="right num">' + fmtN(Math.round(row.weight || 0)) + '</td></tr>';
+          totO += row.orders || 0; totW += row.weight || 0;
+          html += '<tr class="clickable" onclick="window._rptDrillSales(\'date\',\'' + row.period + '\')">' + td(row.period, {num:1}) + td(fmtN(row.orders), {right:1,num:1}) + td(fmtN(Math.round(row.weight || 0)), {right:1,num:1}) + '</tr>';
         });
+        html += '<tr class="totals-row"><td><strong>Total</strong></td>' + td(fmtN(totO),{right:1,num:1}) + td(fmtN(Math.round(totW)),{right:1,num:1}) + '</tr>';
         html += '</tbody></table></div>';
       } else if (_salesGroup === 'customer') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Customer</th><th class="right">Orders</th><th class="right">Units</th><th class="right">Revenue</th><th class="right">Weight</th></tr></thead><tbody>';
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>' + th('Customer') + th('Orders',{right:1}) + th('Units',{right:1}) + th('Revenue',{right:1}) + th('Weight',{right:1}) + '</tr></thead><tbody>';
+        var totO=0,totU=0,totR=0,totW=0;
         d.breakdown.forEach(function(row) {
-          html += '<tr class="clickable" onclick="window._rptDrillSales(\'customer\',' + row.customer_id + ')"><td>' + (row.label || 'Unknown') + '</td><td class="right num">' + fmtN(row.orders) + '</td><td class="right num">' + fmtN(row.units) + '</td><td class="right money">' + fmt$(row.revenue) + '</td><td class="right num">' + fmtN(Math.round(row.weight || 0)) + '</td></tr>';
+          totO+=row.orders||0;totU+=row.units||0;totR+=row.revenue||0;totW+=row.weight||0;
+          html += '<tr class="clickable" onclick="window._rptDrillSales(\'customer\',' + row.customer_id + ')">' + td(row.label||'Unknown') + td(fmtN(row.orders),{right:1,num:1}) + td(fmtN(row.units),{right:1,num:1}) + td(fmt$(row.revenue),{right:1,money:1}) + td(fmtN(Math.round(row.weight||0)),{right:1,num:1}) + '</tr>';
         });
+        html += '<tr class="totals-row"><td><strong>Total</strong></td>'+td(fmtN(totO),{right:1,num:1})+td(fmtN(totU),{right:1,num:1})+td(fmt$(totR),{right:1,money:1})+td(fmtN(Math.round(totW)),{right:1,num:1})+'</tr>';
         html += '</tbody></table></div>';
       } else if (_salesGroup === 'product') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Product</th><th>Category</th><th class="right">Units</th><th class="right">Revenue</th><th class="right">Cost</th><th class="right">Margin</th><th class="right">Orders</th></tr></thead><tbody>';
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>' + th('Product') + th('Category') + th('Units',{right:1}) + th('Revenue',{right:1}) + th('Cost',{right:1}) + th('Margin',{right:1}) + th('Orders',{right:1}) + '</tr></thead><tbody>';
+        var totU=0,totR=0,totC=0,totM=0,totO=0;
         d.breakdown.forEach(function(row) {
-          html += '<tr class="clickable" onclick="window._rptDrillSales(\'product\',' + row.product_id + ')"><td>' + (row.label || 'Unknown') + '</td><td><span class="rpt-badge rpt-badge-blue">' + (row.category || '-') + '</span></td><td class="right num">' + fmtN(row.units) + '</td><td class="right money">' + fmt$(row.revenue) + '</td><td class="right num">' + fmt$(row.cost) + '</td><td class="right money">' + fmt$(row.margin) + '</td><td class="right num">' + fmtN(row.orders) + '</td></tr>';
+          totU+=row.units||0;totR+=row.revenue||0;totC+=row.cost||0;totM+=row.margin||0;totO+=row.orders||0;
+          html += '<tr class="clickable" onclick="window._rptDrillSales(\'product\',' + row.product_id + ')">' + td(row.label||'Unknown') + td('<span class="qb-badge qb-badge-blue">'+(row.category||'-')+'</span>') + td(fmtN(row.units),{right:1,num:1}) + td(fmt$(row.revenue),{right:1,money:1}) + td(fmt$(row.cost),{right:1,num:1}) + td(fmt$(row.margin),{right:1,money:1}) + td(fmtN(row.orders),{right:1,num:1}) + '</tr>';
         });
+        html += '<tr class="totals-row"><td><strong>Total</strong></td><td></td>'+td(fmtN(totU),{right:1,num:1})+td(fmt$(totR),{right:1,money:1})+td(fmt$(totC),{right:1,num:1})+td(fmt$(totM),{right:1,money:1})+td(fmtN(totO),{right:1,num:1})+'</tr>';
         html += '</tbody></table></div>';
       } else if (_salesGroup === 'status') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Status</th><th class="right">Orders</th><th class="right">Weight</th></tr></thead><tbody>';
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>' + th('Status') + th('Orders',{right:1}) + th('Weight',{right:1}) + '</tr></thead><tbody>';
         d.breakdown.forEach(function(row) {
-          html += '<tr class="clickable" onclick="window._rptDrillSales(\'status\',\'' + row.label + '\')"><td><span class="rpt-badge rpt-badge-blue">' + row.label + '</span></td><td class="right num">' + fmtN(row.orders) + '</td><td class="right num">' + fmtN(Math.round(row.weight || 0)) + '</td></tr>';
+          html += '<tr class="clickable" onclick="window._rptDrillSales(\'status\',\'' + row.label + '\')">' + td('<span class="qb-badge qb-badge-blue">'+row.label+'</span>') + td(fmtN(row.orders),{right:1,num:1}) + td(fmtN(Math.round(row.weight||0)),{right:1,num:1}) + '</tr>';
         });
         html += '</tbody></table></div>';
       }
     } else {
-      html += '<div class="rpt-empty"><i class="fas fa-inbox"></i> No data for this period</div>';
+      html += '<div class="qb-empty"><i class="fas fa-inbox"></i> No data for this period</div>';
     }
-    html += sectionEnd();
+    html += sectionClose();
     el.innerHTML = html;
 
-    // Chart for daily/monthly
     if ((_salesGroup === 'day' || _salesGroup === 'month') && d.breakdown && d.breakdown.length > 0 && window.Chart) {
       var ctx = document.getElementById('rptSalesChart');
       if (ctx) new Chart(ctx, {
         type: 'bar',
-        data: { labels: d.breakdown.map(function(r) { return r.period; }), datasets: [{ label: 'Orders', data: d.breakdown.map(function(r) { return r.orders; }), backgroundColor: 'rgba(30,58,138,0.7)', borderRadius: 4 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+        data: { labels: d.breakdown.map(function(r){return r.period}), datasets: [{label:'Orders',data:d.breakdown.map(function(r){return r.orders}),backgroundColor:'#0077C5',borderRadius:4}] },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,grid:{color:'#E8EAED'}},x:{grid:{display:false}}} }
       });
     }
-  }).catch(function() { document.getElementById('rptContent').innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load sales report</div>'; });
+  }).catch(function(){document.getElementById('rptContent').innerHTML='<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load sales report</div>';});
 }
-
 window._rptSalesGroup = function(g) { _salesGroup = g; loadTab('sales'); };
 
-// ==================== SALES DRILL-DOWN ====================
+// Sales drill-down
 window._rptDrillSales = function(type, val) {
   var q = 'from=' + _dateFrom + '&to=' + _dateTo;
   if (type === 'customer') q += '&customer_id=' + val;
@@ -310,16 +422,16 @@ window._rptDrillSales = function(type, val) {
   API.get('/reports/sales/drill?' + q).then(function(r) {
     var orders = r.data;
     var title = 'Orders';
-    if (type === 'date') title = 'Orders on ' + val;
+    if (type === 'date') title = 'Orders — ' + val;
     else if (type === 'status') title = val.charAt(0).toUpperCase() + val.slice(1) + ' Orders';
 
-    var html = '<table class="rpt-table"><thead><tr><th>Order #</th><th>Customer</th><th>Status</th><th>Date</th><th>Items</th><th class="right">Weight</th></tr></thead><tbody>';
+    var html = '<table class="qb-table"><thead><tr>' + th('Order #') + th('Customer') + th('Status') + th('Date') + th('Items') + th('Weight',{right:1}) + '</tr></thead><tbody>';
     orders.forEach(function(o) {
-      html += '<tr><td class="num">' + o.order_number + '</td><td>' + (o.customer_name || '-') + '</td><td><span class="rpt-badge rpt-badge-blue">' + o.status + '</span></td><td class="muted">' + (o.created_at || '').slice(0, 10) + '</td><td class="muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (o.items_summary || '-') + '</td><td class="right num">' + fmtN(Math.round(o.total_weight || 0)) + '</td></tr>';
+      html += '<tr>' + td(o.order_number,{num:1}) + td(o.customer_name||'-') + td('<span class="qb-badge qb-badge-blue">'+o.status+'</span>') + td((o.created_at||'').slice(0,10),{muted:1}) + td((o.items_summary||'-'),{muted:1}) + td(fmtN(Math.round(o.total_weight||0)),{right:1,num:1}) + '</tr>';
     });
     html += '</tbody></table>';
-    if (orders.length === 0) html = '<div class="rpt-empty"><i class="fas fa-inbox"></i> No orders found</div>';
-    showDrillModal(title, html, 'orders');
+    if (orders.length === 0) html = '<div class="qb-empty"><i class="fas fa-inbox"></i> No orders found</div>';
+    showDrillModal(title, html);
   });
 };
 
@@ -331,39 +443,75 @@ function loadProducts(q) {
     var d = r.data;
     var s = d.summary || {};
     var el = document.getElementById('rptContent');
+    var cv = colVisible.bind(null, 'products');
 
-    var catOptions = '<option value="">All Categories</option>' + _categories.map(function(c) { return '<option value="' + c + '" ' + (c === cat ? 'selected' : '') + '>' + c + '</option>'; }).join('');
+    var catOptions = '<option value="">All Categories</option>' + _categories.map(function(c) { return '<option value="'+c+'" '+(c===cat?'selected':'')+'>'+c+'</option>'; }).join('');
+    var html = '<div style="margin-bottom:12px"><select class="qb-filter-input" id="rptCatFilter" onchange="window._rptTab(\'products\')">' + catOptions + '</select></div>';
 
-    var html = '<div style="margin-bottom:12px"><select class="rpt-filter-select" id="rptCatFilter" onchange="window._rptTab(\'products\')">' + catOptions + '</select></div>';
-
-    html += '<div class="rpt-summary">' +
-      summaryCard('Total Revenue', fmt$(s.totalRevenue), { icon: 'fa-dollar-sign', iconBg: '#059669', color: 'green' }) +
-      summaryCard('Total COGS', fmt$(s.totalCost), { icon: 'fa-tags', iconBg: '#D97706' }) +
-      summaryCard('Gross Margin', fmt$(s.totalMargin), { icon: 'fa-chart-line', iconBg: '#2563EB', color: 'green', sub: fmtPct(s.totalMargin, s.totalRevenue) }) +
-      summaryCard('Units Sold', fmtN(s.totalUnits), { icon: 'fa-cubes', iconBg: '#7C3AED' }) +
+    html += '<div class="qb-summary-strip">' +
+      summaryItem('Total Revenue', fmt$(s.totalRevenue), { color: 'green' }) +
+      summaryItem('Total COGS', fmt$(s.totalCost)) +
+      summaryItem('Gross Margin', fmt$(s.totalMargin), { color: 'green', sub: fmtPct(s.totalMargin, s.totalRevenue) }) +
+      summaryItem('Units Sold', fmtN(s.totalUnits)) +
     '</div>';
 
     // By category
     if (d.byCategory && d.byCategory.length > 0) {
-      html += sectionStart('By Category', 'fa-layer-group', '');
-      html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Category</th><th class="right">Products</th><th class="right">Units Sold</th><th class="right">Revenue</th><th class="right">Cost</th><th class="right">Margin</th></tr></thead><tbody>';
+      html += sectionOpen('By Category', 'fa-layer-group', '');
+      html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Category')+th('Products',{right:1})+th('Units',{right:1})+th('Revenue',{right:1})+th('Cost',{right:1})+th('Margin',{right:1})+'</tr></thead><tbody>';
+      var tP=0,tU=0,tR=0,tC=0,tM=0;
       d.byCategory.forEach(function(row) {
-        html += '<tr><td><span class="rpt-badge rpt-badge-blue">' + row.category + '</span></td><td class="right num">' + fmtN(row.products) + '</td><td class="right num">' + fmtN(row.units) + '</td><td class="right money">' + fmt$(row.revenue) + '</td><td class="right num">' + fmt$(row.cost) + '</td><td class="right money">' + fmt$(row.margin) + '</td></tr>';
+        tP+=row.products||0;tU+=row.units||0;tR+=row.revenue||0;tC+=row.cost||0;tM+=row.margin||0;
+        html += '<tr>'+td('<span class="qb-badge qb-badge-blue">'+row.category+'</span>')+td(fmtN(row.products),{right:1,num:1})+td(fmtN(row.units),{right:1,num:1})+td(fmt$(row.revenue),{right:1,money:1})+td(fmt$(row.cost),{right:1,num:1})+td(fmt$(row.margin),{right:1,money:1})+'</tr>';
       });
-      html += '</tbody></table></div>';
-      html += sectionEnd();
+      html += '<tr class="totals-row"><td><strong>Total</strong></td>'+td(fmtN(tP),{right:1,num:1})+td(fmtN(tU),{right:1,num:1})+td(fmt$(tR),{right:1,money:1})+td(fmt$(tC),{right:1,num:1})+td(fmt$(tM),{right:1,money:1})+'</tr>';
+      html += '</tbody></table></div>' + sectionClose();
     }
 
-    // Product list
-    html += sectionStart('All Products', 'fa-list', '');
-    html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Product</th><th>Category</th><th class="right">Price</th><th class="right">Cost</th><th class="right">Units Sold</th><th class="right">Revenue</th><th class="right">Margin</th><th class="right">Stock</th></tr></thead><tbody>';
+    // All products
+    html += sectionOpen('All Products', 'fa-list', '');
+    html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>';
+    if(cv('name')) html+=th('Product');
+    if(cv('category')) html+=th('Category');
+    if(cv('price')) html+=th('Price',{right:1});
+    if(cv('cost')) html+=th('Cost',{right:1});
+    if(cv('units')) html+=th('Units Sold',{right:1});
+    if(cv('revenue')) html+=th('Revenue',{right:1});
+    if(cv('margin')) html+=th('Margin',{right:1});
+    if(cv('margin_pct')) html+=th('Margin %',{right:1});
+    if(cv('stock')) html+=th('Stock',{right:1});
+    html += '</tr></thead><tbody>';
+
+    var totU=0,totR=0,totM2=0;
     (d.products || []).forEach(function(p) {
-      html += '<tr class="clickable" onclick="window._rptDrillSales(\'product\',' + p.id + ')"><td>' + p.name + '</td><td><span class="rpt-badge rpt-badge-blue">' + (p.category || '-') + '</span></td><td class="right num">' + fmt$(p.price) + '</td><td class="right num">' + fmt$(p.cost) + '</td><td class="right num">' + fmtN(p.units_sold) + '</td><td class="right money">' + fmt$(p.revenue) + '</td><td class="right money">' + fmt$(p.margin) + '</td><td class="right num">' + fmtN(p.current_stock) + '</td></tr>';
+      totU+=p.units_sold||0;totR+=p.revenue||0;totM2+=p.margin||0;
+      html += '<tr class="clickable" onclick="window._rptDrillSales(\'product\','+p.id+')">';
+      if(cv('name')) html+=td(p.name);
+      if(cv('category')) html+=td('<span class="qb-badge qb-badge-blue">'+(p.category||'-')+'</span>');
+      if(cv('price')) html+=td(fmt$(p.price),{right:1,num:1});
+      if(cv('cost')) html+=td(fmt$(p.cost),{right:1,num:1});
+      if(cv('units')) html+=td(fmtN(p.units_sold),{right:1,num:1});
+      if(cv('revenue')) html+=td(fmt$(p.revenue),{right:1,money:1});
+      if(cv('margin')) html+=td(fmt$(p.margin),{right:1,money:1});
+      if(cv('margin_pct')) html+=td(fmtPct(p.margin,p.revenue),{right:1,num:1});
+      if(cv('stock')) html+=td(fmtN(p.current_stock),{right:1,num:1});
+      html += '</tr>';
     });
-    html += '</tbody></table></div>';
-    html += sectionEnd();
+    // Totals
+    html += '<tr class="totals-row">';
+    if(cv('name')) html+='<td><strong>Total</strong></td>';
+    if(cv('category')) html+='<td></td>';
+    if(cv('price')) html+='<td></td>';
+    if(cv('cost')) html+='<td></td>';
+    if(cv('units')) html+=td(fmtN(totU),{right:1,num:1});
+    if(cv('revenue')) html+=td(fmt$(totR),{right:1,money:1});
+    if(cv('margin')) html+=td(fmt$(totM2),{right:1,money:1});
+    if(cv('margin_pct')) html+=td(fmtPct(totM2,totR),{right:1,num:1});
+    if(cv('stock')) html+='<td></td>';
+    html += '</tr>';
+    html += '</tbody></table></div>' + sectionClose();
     el.innerHTML = html;
-  }).catch(function() { document.getElementById('rptContent').innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load products report</div>'; });
+  }).catch(function(){document.getElementById('rptContent').innerHTML='<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load products report</div>';});
 }
 
 // ==================== PURCHASING REPORT ====================
@@ -374,54 +522,56 @@ function loadPurchasing(q) {
     var s = d.summary || {};
     var el = document.getElementById('rptContent');
 
-    var html = '<div class="rpt-summary">' +
-      summaryCard('Total POs', fmtN(s.total_pos), { icon: 'fa-file-alt', iconBg: '#2563EB' }) +
-      summaryCard('Total Spent', fmt$(s.total_spent), { icon: 'fa-dollar-sign', iconBg: '#D97706', color: 'orange' }) +
-      summaryCard('Received', fmtN(s.received), { icon: 'fa-check-circle', iconBg: '#059669', color: 'green' }) +
-      summaryCard('Active', fmtN(s.active), { icon: 'fa-spinner', iconBg: '#F97316', color: 'orange' }) +
-      summaryCard('Bills Pending', fmt$(s.pending_amount), { icon: 'fa-clock', iconBg: '#EAB308', color: 'orange' }) +
-      summaryCard('Bills Paid', fmt$(s.paid_amount), { icon: 'fa-check', iconBg: '#059669', color: 'green' }) +
+    var html = '<div class="qb-summary-strip">' +
+      summaryItem('Total POs', fmtN(s.total_pos), { color: 'blue' }) +
+      summaryItem('Total Spent', fmt$(s.total_spent), { color: 'orange' }) +
+      summaryItem('Received', fmtN(s.received), { color: 'green' }) +
+      summaryItem('Active', fmtN(s.active), { color: 'orange' }) +
+      summaryItem('Bills Pending', fmt$(s.pending_amount), { color: 'orange' }) +
+      summaryItem('Bills Paid', fmt$(s.paid_amount), { color: 'green' }) +
     '</div>';
 
-    var groups = [{ id: 'supplier', label: 'By Supplier' }, { id: 'product', label: 'By Product' }, { id: 'month', label: 'Monthly' }];
-    html += sectionStart('Breakdown', 'fa-table', groupBtns(groups, _purGroup, '_rptPurGroup'));
+    var groups = [{id:'supplier',label:'By Supplier'},{id:'product',label:'By Product'},{id:'month',label:'Monthly'}];
+    html += sectionOpen('Breakdown', 'fa-table', groupBtns(groups, _purGroup, '_rptPurGroup'));
 
     if (d.breakdown && d.breakdown.length > 0) {
       if (_purGroup === 'supplier') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Supplier</th><th class="right">POs</th><th class="right">Spent</th><th class="right">Received</th><th class="right">Active</th></tr></thead><tbody>';
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Supplier')+th('POs',{right:1})+th('Spent',{right:1})+th('Received',{right:1})+th('Active',{right:1})+'</tr></thead><tbody>';
+        var tP=0,tS=0,tR=0,tA=0;
         d.breakdown.forEach(function(row) {
-          html += '<tr><td>' + (row.label || 'Unknown') + '</td><td class="right num">' + fmtN(row.pos) + '</td><td class="right money">' + fmt$(row.spent) + '</td><td class="right num">' + fmtN(row.received) + '</td><td class="right num">' + fmtN(row.active) + '</td></tr>';
+          tP+=row.pos||0;tS+=row.spent||0;tR+=row.received||0;tA+=row.active||0;
+          html += '<tr>'+td(row.label||'Unknown')+td(fmtN(row.pos),{right:1,num:1})+td(fmt$(row.spent),{right:1,money:1})+td(fmtN(row.received),{right:1,num:1})+td(fmtN(row.active),{right:1,num:1})+'</tr>';
         });
+        html += '<tr class="totals-row"><td><strong>Total</strong></td>'+td(fmtN(tP),{right:1,num:1})+td(fmt$(tS),{right:1,money:1})+td(fmtN(tR),{right:1,num:1})+td(fmtN(tA),{right:1,num:1})+'</tr>';
         html += '</tbody></table></div>';
       } else if (_purGroup === 'product') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Product</th><th>Category</th><th class="right">Ordered</th><th class="right">Received</th><th class="right">Total Cost</th><th class="right">POs</th></tr></thead><tbody>';
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Product')+th('Category')+th('Ordered',{right:1})+th('Received',{right:1})+th('Total Cost',{right:1})+th('POs',{right:1})+'</tr></thead><tbody>';
         d.breakdown.forEach(function(row) {
-          html += '<tr><td>' + (row.label || 'Unknown') + '</td><td><span class="rpt-badge rpt-badge-blue">' + (row.category || '-') + '</span></td><td class="right num">' + fmtN(row.qty_ordered) + '</td><td class="right num">' + fmtN(row.qty_received) + '</td><td class="right money">' + fmt$(row.total_cost) + '</td><td class="right num">' + fmtN(row.pos) + '</td></tr>';
+          html += '<tr>'+td(row.label||'Unknown')+td('<span class="qb-badge qb-badge-blue">'+(row.category||'-')+'</span>')+td(fmtN(row.qty_ordered),{right:1,num:1})+td(fmtN(row.qty_received),{right:1,num:1})+td(fmt$(row.total_cost),{right:1,money:1})+td(fmtN(row.pos),{right:1,num:1})+'</tr>';
         });
         html += '</tbody></table></div>';
       } else if (_purGroup === 'month') {
-        html += '<div class="rpt-chart-wrap"><canvas id="rptPurChart"></canvas></div>';
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Month</th><th class="right">POs</th><th class="right">Spent</th></tr></thead><tbody>';
+        html += '<div class="qb-chart-wrap"><canvas id="rptPurChart"></canvas></div>';
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Month')+th('POs',{right:1})+th('Spent',{right:1})+'</tr></thead><tbody>';
         d.breakdown.forEach(function(row) {
-          html += '<tr><td class="num">' + row.period + '</td><td class="right num">' + fmtN(row.pos) + '</td><td class="right money">' + fmt$(row.spent) + '</td></tr>';
+          html += '<tr>'+td(row.period,{num:1})+td(fmtN(row.pos),{right:1,num:1})+td(fmt$(row.spent),{right:1,money:1})+'</tr>';
         });
         html += '</tbody></table></div>';
       }
     } else {
-      html += '<div class="rpt-empty"><i class="fas fa-inbox"></i> No data</div>';
+      html += '<div class="qb-empty"><i class="fas fa-inbox"></i> No data</div>';
     }
-    html += sectionEnd();
+    html += sectionClose();
     el.innerHTML = html;
 
     if (_purGroup === 'month' && d.breakdown && d.breakdown.length > 0 && window.Chart) {
       var ctx = document.getElementById('rptPurChart');
       if (ctx) new Chart(ctx, {
-        type: 'bar',
-        data: { labels: d.breakdown.map(function(r) { return r.period; }), datasets: [{ label: 'Spent', data: d.breakdown.map(function(r) { return r.spent; }), backgroundColor: 'rgba(217,119,6,0.7)', borderRadius: 4 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return '$' + (v/1000).toFixed(0) + 'k'; } } } } }
+        type:'bar', data:{labels:d.breakdown.map(function(r){return r.period}),datasets:[{label:'Spent',data:d.breakdown.map(function(r){return r.spent}),backgroundColor:'#E8590C',borderRadius:4}]},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,grid:{color:'#E8EAED'},ticks:{callback:function(v){return '$'+(v/1000).toFixed(0)+'k'}}},x:{grid:{display:false}}}}
       });
     }
-  }).catch(function() { document.getElementById('rptContent').innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load purchasing report</div>'; });
+  }).catch(function(){document.getElementById('rptContent').innerHTML='<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load purchasing report</div>';});
 }
 window._rptPurGroup = function(g) { _purGroup = g; loadTab('purchasing'); };
 
@@ -433,43 +583,34 @@ function loadDelivery(q) {
     var s = d.summary || {};
     var el = document.getElementById('rptContent');
 
-    var html = '<div class="rpt-summary">' +
-      summaryCard('Total Routes', fmtN(s.total_routes), { icon: 'fa-route', iconBg: '#2563EB' }) +
-      summaryCard('Completed', fmtN(s.completed), { icon: 'fa-check-circle', iconBg: '#059669', color: 'green' }) +
-      summaryCard('Total Stops', fmtN(s.total_stops), { icon: 'fa-map-marker-alt', iconBg: '#7C3AED' }) +
-      summaryCard('Delivered', fmtN(s.delivered_stops), { icon: 'fa-truck', iconBg: '#10B981', color: 'green', sub: fmtPct(s.delivered_stops, s.total_stops) + ' delivery rate' }) +
-      summaryCard('Proofs Collected', fmtN(s.proofs_collected), { icon: 'fa-camera', iconBg: '#F97316' }) +
+    var html = '<div class="qb-summary-strip">' +
+      summaryItem('Total Routes', fmtN(s.total_routes), { color: 'blue' }) +
+      summaryItem('Completed', fmtN(s.completed), { color: 'green' }) +
+      summaryItem('Total Stops', fmtN(s.total_stops)) +
+      summaryItem('Delivered', fmtN(s.delivered_stops), { color: 'green', sub: fmtPct(s.delivered_stops, s.total_stops) + ' rate' }) +
+      summaryItem('Proofs', fmtN(s.proofs_collected)) +
     '</div>';
 
-    var groups = [{ id: 'day', label: 'Daily' }, { id: 'driver', label: 'By Driver' }, { id: 'truck', label: 'By Truck' }];
-    html += sectionStart('Breakdown', 'fa-table', groupBtns(groups, _delGroup, '_rptDelGroup'));
-
+    var groups = [{id:'day',label:'Daily'},{id:'driver',label:'By Driver'},{id:'truck',label:'By Truck'}];
+    html += sectionOpen('Breakdown', 'fa-table', groupBtns(groups, _delGroup, '_rptDelGroup'));
     if (d.breakdown && d.breakdown.length > 0) {
       if (_delGroup === 'day') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Date</th><th class="right">Routes</th><th class="right">Completed</th></tr></thead><tbody>';
-        d.breakdown.forEach(function(row) {
-          html += '<tr><td class="num">' + row.period + '</td><td class="right num">' + fmtN(row.routes) + '</td><td class="right num">' + fmtN(row.completed) + '</td></tr>';
-        });
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Date')+th('Routes',{right:1})+th('Completed',{right:1})+'</tr></thead><tbody>';
+        d.breakdown.forEach(function(row) { html += '<tr>'+td(row.period,{num:1})+td(fmtN(row.routes),{right:1,num:1})+td(fmtN(row.completed),{right:1,num:1})+'</tr>'; });
         html += '</tbody></table></div>';
       } else if (_delGroup === 'driver') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Driver</th><th class="right">Routes</th><th class="right">Completed</th><th class="right">Stops Delivered</th><th class="right">Proofs</th></tr></thead><tbody>';
-        d.breakdown.forEach(function(row) {
-          html += '<tr><td>' + (row.label || 'Unassigned') + '</td><td class="right num">' + fmtN(row.routes) + '</td><td class="right num">' + fmtN(row.completed) + '</td><td class="right num">' + fmtN(row.stops) + '</td><td class="right num">' + fmtN(row.proofs) + '</td></tr>';
-        });
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Driver')+th('Routes',{right:1})+th('Completed',{right:1})+th('Stops',{right:1})+th('Proofs',{right:1})+'</tr></thead><tbody>';
+        d.breakdown.forEach(function(row) { html += '<tr>'+td(row.label||'Unassigned')+td(fmtN(row.routes),{right:1,num:1})+td(fmtN(row.completed),{right:1,num:1})+td(fmtN(row.stops),{right:1,num:1})+td(fmtN(row.proofs),{right:1,num:1})+'</tr>'; });
         html += '</tbody></table></div>';
       } else if (_delGroup === 'truck') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Truck</th><th class="right">Routes</th><th class="right">Completed</th></tr></thead><tbody>';
-        d.breakdown.forEach(function(row) {
-          html += '<tr><td>' + (row.label || 'Unassigned') + '</td><td class="right num">' + fmtN(row.routes) + '</td><td class="right num">' + fmtN(row.completed) + '</td></tr>';
-        });
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Truck')+th('Routes',{right:1})+th('Completed',{right:1})+'</tr></thead><tbody>';
+        d.breakdown.forEach(function(row) { html += '<tr>'+td(row.label||'Unassigned')+td(fmtN(row.routes),{right:1,num:1})+td(fmtN(row.completed),{right:1,num:1})+'</tr>'; });
         html += '</tbody></table></div>';
       }
-    } else {
-      html += '<div class="rpt-empty"><i class="fas fa-inbox"></i> No data</div>';
-    }
-    html += sectionEnd();
+    } else { html += '<div class="qb-empty"><i class="fas fa-inbox"></i> No data</div>'; }
+    html += sectionClose();
     el.innerHTML = html;
-  }).catch(function() { document.getElementById('rptContent').innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load delivery report</div>'; });
+  }).catch(function(){document.getElementById('rptContent').innerHTML='<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load delivery report</div>';});
 }
 window._rptDelGroup = function(g) { _delGroup = g; loadTab('delivery'); };
 
@@ -481,43 +622,34 @@ function loadReturns(q) {
     var s = d.summary || {};
     var el = document.getElementById('rptContent');
 
-    var html = '<div class="rpt-summary">' +
-      summaryCard('Total Returns', fmtN(s.total_returns), { icon: 'fa-rotate-left', iconBg: '#DC2626', color: 'red' }) +
-      summaryCard('Completed', fmtN(s.completed), { icon: 'fa-check', iconBg: '#059669', color: 'green' }) +
-      summaryCard('Pending', fmtN(s.pending), { icon: 'fa-clock', iconBg: '#F97316', color: 'orange' }) +
-      summaryCard('Items Returned', fmtN(s.total_items), { icon: 'fa-box', iconBg: '#7C3AED' }) +
-      summaryCard('Qty Returned', fmtN(s.total_qty_returned), { icon: 'fa-cubes', iconBg: '#2563EB' }) +
+    var html = '<div class="qb-summary-strip">' +
+      summaryItem('Total Returns', fmtN(s.total_returns), { color: 'red' }) +
+      summaryItem('Completed', fmtN(s.completed), { color: 'green' }) +
+      summaryItem('Pending', fmtN(s.pending), { color: 'orange' }) +
+      summaryItem('Items Returned', fmtN(s.total_items)) +
+      summaryItem('Qty Returned', fmtN(s.total_qty_returned)) +
     '</div>';
 
-    var groups = [{ id: 'customer', label: 'By Customer' }, { id: 'product', label: 'By Product' }, { id: 'day', label: 'Daily' }];
-    html += sectionStart('Breakdown', 'fa-table', groupBtns(groups, _retGroup, '_rptRetGroup'));
-
+    var groups = [{id:'customer',label:'By Customer'},{id:'product',label:'By Product'},{id:'day',label:'Daily'}];
+    html += sectionOpen('Breakdown', 'fa-table', groupBtns(groups, _retGroup, '_rptRetGroup'));
     if (d.breakdown && d.breakdown.length > 0) {
       if (_retGroup === 'customer') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Customer</th><th class="right">Returns</th><th class="right">Items</th><th class="right">Qty</th></tr></thead><tbody>';
-        d.breakdown.forEach(function(row) {
-          html += '<tr><td>' + (row.label || 'Unknown') + '</td><td class="right num">' + fmtN(row.returns) + '</td><td class="right num">' + fmtN(row.items) + '</td><td class="right num">' + fmtN(row.qty) + '</td></tr>';
-        });
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Customer')+th('Returns',{right:1})+th('Items',{right:1})+th('Qty',{right:1})+'</tr></thead><tbody>';
+        d.breakdown.forEach(function(row) { html += '<tr>'+td(row.label||'Unknown')+td(fmtN(row.returns),{right:1,num:1})+td(fmtN(row.items),{right:1,num:1})+td(fmtN(row.qty),{right:1,num:1})+'</tr>'; });
         html += '</tbody></table></div>';
       } else if (_retGroup === 'product') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Product</th><th>Category</th><th class="right">Qty Returned</th><th class="right">Returns</th></tr></thead><tbody>';
-        d.breakdown.forEach(function(row) {
-          html += '<tr><td>' + (row.label || 'Unknown') + '</td><td><span class="rpt-badge rpt-badge-blue">' + (row.category || '-') + '</span></td><td class="right num">' + fmtN(row.qty_returned) + '</td><td class="right num">' + fmtN(row.returns) + '</td></tr>';
-        });
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Product')+th('Category')+th('Qty Returned',{right:1})+th('Returns',{right:1})+'</tr></thead><tbody>';
+        d.breakdown.forEach(function(row) { html += '<tr>'+td(row.label||'Unknown')+td('<span class="qb-badge qb-badge-blue">'+(row.category||'-')+'</span>')+td(fmtN(row.qty_returned),{right:1,num:1})+td(fmtN(row.returns),{right:1,num:1})+'</tr>'; });
         html += '</tbody></table></div>';
       } else if (_retGroup === 'day') {
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Date</th><th class="right">Returns</th></tr></thead><tbody>';
-        d.breakdown.forEach(function(row) {
-          html += '<tr><td class="num">' + row.period + '</td><td class="right num">' + fmtN(row.returns) + '</td></tr>';
-        });
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Date')+th('Returns',{right:1})+'</tr></thead><tbody>';
+        d.breakdown.forEach(function(row) { html += '<tr>'+td(row.period,{num:1})+td(fmtN(row.returns),{right:1,num:1})+'</tr>'; });
         html += '</tbody></table></div>';
       }
-    } else {
-      html += '<div class="rpt-empty"><i class="fas fa-inbox"></i> No returns data</div>';
-    }
-    html += sectionEnd();
+    } else { html += '<div class="qb-empty"><i class="fas fa-inbox"></i> No returns data</div>'; }
+    html += sectionClose();
     el.innerHTML = html;
-  }).catch(function() { document.getElementById('rptContent').innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load returns report</div>'; });
+  }).catch(function(){document.getElementById('rptContent').innerHTML='<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load returns report</div>';});
 }
 window._rptRetGroup = function(g) { _retGroup = g; loadTab('returns'); };
 
@@ -527,35 +659,57 @@ function loadCustomers(q) {
     var d = r.data;
     var s = d.summary || {};
     var el = document.getElementById('rptContent');
+    var cv = colVisible.bind(null, 'customers');
 
-    var html = '<div class="rpt-summary">' +
-      summaryCard('Active Customers', fmtN(s.total_active), { icon: 'fa-users', iconBg: '#2563EB' }) +
-      summaryCard('Ordering in Period', fmtN(s.ordering_customers), { icon: 'fa-cart-shopping', iconBg: '#059669', color: 'green' }) +
-      summaryCard('Dormant', fmtN(s.dormant_customers), { icon: 'fa-user-clock', iconBg: '#F97316', color: 'orange', sub: 'No orders in period' }) +
-      summaryCard('Inactive', fmtN(s.total_inactive), { icon: 'fa-user-slash', iconBg: '#DC2626', color: 'red' }) +
+    var html = '<div class="qb-summary-strip">' +
+      summaryItem('Active', fmtN(s.total_active), { color: 'blue' }) +
+      summaryItem('Ordering', fmtN(s.ordering_customers), { color: 'green' }) +
+      summaryItem('Dormant', fmtN(s.dormant_customers), { color: 'orange', sub: 'No orders in period' }) +
+      summaryItem('Inactive', fmtN(s.total_inactive), { color: 'red' }) +
     '</div>';
 
-    // Top customers
-    html += sectionStart('Top Customers (by Revenue)', 'fa-trophy', '');
-    html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Customer</th><th>Zone</th><th class="right">Orders</th><th class="right">Revenue</th><th class="right">Weight</th><th>Last Order</th></tr></thead><tbody>';
+    html += sectionOpen('Top Customers (by Revenue)', 'fa-trophy', '');
+    html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>';
+    if(cv('name')) html+=th('Customer');
+    if(cv('zone')) html+=th('Zone');
+    if(cv('orders')) html+=th('Orders',{right:1});
+    if(cv('revenue')) html+=th('Revenue',{right:1});
+    if(cv('weight')) html+=th('Weight',{right:1});
+    if(cv('last_order')) html+=th('Last Order');
+    html += '</tr></thead><tbody>';
+    var totO=0,totR=0,totW=0;
     (d.topCustomers || []).forEach(function(c) {
-      html += '<tr class="clickable" onclick="window._rptDrillSales(\'customer\',' + c.id + ')"><td>' + (c.business_name || '-') + '</td><td><span class="rpt-badge rpt-badge-blue">' + (c.location || '-') + '</span></td><td class="right num">' + fmtN(c.order_count) + '</td><td class="right money">' + fmt$(c.revenue) + '</td><td class="right num">' + fmtN(Math.round(c.total_weight || 0)) + '</td><td class="muted">' + (c.last_order || '').slice(0, 10) + '</td></tr>';
+      totO+=c.order_count||0;totR+=c.revenue||0;totW+=c.total_weight||0;
+      html += '<tr class="clickable" onclick="window._rptDrillSales(\'customer\','+c.id+')">';
+      if(cv('name')) html+=td(c.business_name||'-');
+      if(cv('zone')) html+=td('<span class="qb-badge qb-badge-blue">'+(c.location||'-')+'</span>');
+      if(cv('orders')) html+=td(fmtN(c.order_count),{right:1,num:1});
+      if(cv('revenue')) html+=td(fmt$(c.revenue),{right:1,money:1});
+      if(cv('weight')) html+=td(fmtN(Math.round(c.total_weight||0)),{right:1,num:1});
+      if(cv('last_order')) html+=td((c.last_order||'').slice(0,10),{muted:1});
+      html += '</tr>';
     });
-    html += '</tbody></table></div>';
-    html += sectionEnd();
+    html += '<tr class="totals-row">';
+    if(cv('name')) html+='<td><strong>Total</strong></td>';
+    if(cv('zone')) html+='<td></td>';
+    if(cv('orders')) html+=td(fmtN(totO),{right:1,num:1});
+    if(cv('revenue')) html+=td(fmt$(totR),{right:1,money:1});
+    if(cv('weight')) html+=td(fmtN(Math.round(totW)),{right:1,num:1});
+    if(cv('last_order')) html+='<td></td>';
+    html += '</tr>';
+    html += '</tbody></table></div>' + sectionClose();
 
     // Dormant
     if (d.dormant && d.dormant.length > 0) {
-      html += sectionStart('Dormant Customers (No Orders in Period)', 'fa-user-clock', '');
-      html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Customer</th><th>Zone</th><th>Last Order</th></tr></thead><tbody>';
+      html += sectionOpen('Dormant Customers', 'fa-user-clock', '');
+      html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Customer')+th('Zone')+th('Last Order')+'</tr></thead><tbody>';
       d.dormant.forEach(function(c) {
-        html += '<tr><td>' + (c.business_name || '-') + '</td><td><span class="rpt-badge rpt-badge-orange">' + (c.location || '-') + '</span></td><td class="muted">' + (c.last_order || 'Never').slice(0, 10) + '</td></tr>';
+        html += '<tr>'+td(c.business_name||'-')+td('<span class="qb-badge qb-badge-orange">'+(c.location||'-')+'</span>')+td((c.last_order||'Never').slice(0,10),{muted:1})+'</tr>';
       });
-      html += '</tbody></table></div>';
-      html += sectionEnd();
+      html += '</tbody></table></div>' + sectionClose();
     }
     el.innerHTML = html;
-  }).catch(function() { document.getElementById('rptContent').innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load customers report</div>'; });
+  }).catch(function(){document.getElementById('rptContent').innerHTML='<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load customers report</div>';});
 }
 
 // ==================== INVENTORY AS-OF REPORT ====================
@@ -563,17 +717,15 @@ var _invAsOfDate = new Date().toISOString().slice(0, 10);
 function loadInventory() {
   var el = document.getElementById('rptContent');
 
-  var html = '<div class="rpt-asof-panel">' +
-    '<div class="rpt-asof-title"><i class="fas fa-clock-rotate-left"></i> View Inventory As Of Any Date</div>' +
-    '<div style="font-size:12px;color:#6B7280;margin-bottom:10px">Inventory is automatically saved at the end of each day. Pick any past date to see what stock looked like.</div>' +
-    '<div class="rpt-asof-controls">' +
-      '<input type="date" id="rptAsOfDate" value="' + _invAsOfDate + '" max="' + new Date().toISOString().slice(0,10) + '" onchange="window._rptLoadAsOf()">' +
-      '<button class="rpt-asof-btn" onclick="window._rptLoadAsOf()"><i class="fas fa-search"></i> Load</button>' +
-    '</div>' +
+  var html = '<div class="qb-asof-bar">' +
+    '<i class="fas fa-clock-rotate-left"></i>' +
+    '<label>Inventory As Of:</label>' +
+    '<input type="date" id="rptAsOfDate" value="' + _invAsOfDate + '" max="' + new Date().toISOString().slice(0,10) + '">' +
+    '<button class="qb-asof-btn" onclick="window._rptLoadAsOf()"><i class="fas fa-search"></i> Load</button>' +
+    '<button class="qb-action-btn" style="margin-left:auto" onclick="window._rptExportInventoryAsOf()"><i class="fas fa-file-csv"></i> Export As-Of</button>' +
   '</div>';
-  html += '<div id="rptInvResults"><div class="rpt-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div></div>';
+  html += '<div id="rptInvResults"><div class="qb-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div></div>';
   el.innerHTML = html;
-
   _rptLoadAsOfData();
 }
 
@@ -583,56 +735,121 @@ function _rptLoadAsOfData() {
     var d = r.data;
     var container = document.getElementById('rptInvResults');
     if (!container) return;
-
+    var cv = colVisible.bind(null, 'inventory');
     var html = '';
+
     if (d.source === 'none' || d.source === 'nearest_snapshot') {
-      html += '<div class="rpt-empty"><i class="fas fa-info-circle"></i> ' + (d.message || 'No data') + '</div>';
+      html += '<div class="qb-empty"><i class="fas fa-info-circle"></i> ' + (d.message || 'No data') + '</div>';
     }
 
     if (d.items && d.items.length > 0) {
-      var s = d.summary || {};
-      var sourceLabel = d.source === 'live' ? '<i class="fas fa-circle" style="color:#10B981"></i> Current live inventory' : '<i class="fas fa-clock-rotate-left" style="color:#6366F1"></i> Saved snapshot from ' + d.date;
-      html += '<div style="margin-bottom:8px;font-size:12px;color:#6B7280">' + sourceLabel + '</div>';
+      var sourceLabel = d.source === 'live'
+        ? '<i class="fas fa-circle" style="color:#2CA01C;font-size:8px"></i> Current live inventory'
+        : '<i class="fas fa-clock-rotate-left" style="color:#6C2EB9;font-size:8px"></i> Saved snapshot from ' + d.date;
+      html += '<div class="qb-source-label">' + sourceLabel + '</div>';
 
-      html += '<div class="rpt-summary">' +
-        summaryCard('Products', fmtN(s.totalItems), { icon: 'fa-box', iconBg: '#2563EB' }) +
-        summaryCard('Total Qty', fmtN(s.totalQty), { icon: 'fa-cubes', iconBg: '#7C3AED' }) +
-        summaryCard('Total Value (Retail)', fmt$(s.totalValue), { icon: 'fa-dollar-sign', iconBg: '#059669', color: 'green', sub: 'At selling price' }) +
-        (s.totalCostValue ? summaryCard('Total Value (Cost)', fmt$(s.totalCostValue), { icon: 'fa-warehouse', iconBg: '#7C3AED', sub: 'At cost basis' }) : '') +
+      var s = d.summary || {};
+      html += '<div class="qb-summary-strip">' +
+        summaryItem('Products', fmtN(s.totalItems)) +
+        summaryItem('Total Qty', fmtN(s.totalQty)) +
+        summaryItem('Value (Retail)', fmt$(s.totalValue), { color: 'green', sub: 'At selling price' }) +
+        (s.totalCostValue ? summaryItem('Value (Cost)', fmt$(s.totalCostValue), { sub: 'At cost basis' }) : '') +
       '</div>';
 
       // By category
       if (d.byCategory && d.byCategory.length > 0) {
-        html += sectionStart('By Category', 'fa-layer-group', '');
-        html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Category</th><th class="right">Products</th><th class="right">Qty</th><th class="right">Value</th></tr></thead><tbody>';
+        html += sectionOpen('By Category', 'fa-layer-group', '');
+        html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Category')+th('Products',{right:1})+th('Qty',{right:1})+th('Value',{right:1})+'</tr></thead><tbody>';
+        var tP=0,tQ=0,tV=0;
         d.byCategory.forEach(function(cat) {
-          html += '<tr><td><span class="rpt-badge rpt-badge-blue">' + cat.category + '</span></td><td class="right num">' + fmtN(cat.products) + '</td><td class="right num">' + fmtN(cat.qty) + '</td><td class="right money">' + fmt$(cat.value) + '</td></tr>';
+          tP+=cat.products||0;tQ+=cat.qty||0;tV+=cat.value||0;
+          html += '<tr>'+td('<span class="qb-badge qb-badge-blue">'+cat.category+'</span>')+td(fmtN(cat.products),{right:1,num:1})+td(fmtN(cat.qty),{right:1,num:1})+td(fmt$(cat.value),{right:1,money:1})+'</tr>';
         });
-        html += '</tbody></table></div>' + sectionEnd();
+        html += '<tr class="totals-row"><td><strong>Total</strong></td>'+td(fmtN(tP),{right:1,num:1})+td(fmtN(tQ),{right:1,num:1})+td(fmt$(tV),{right:1,money:1})+'</tr>';
+        html += '</tbody></table></div>' + sectionClose();
       }
 
-      // Full list
-      html += sectionStart('All Products — ' + d.date, 'fa-list', '');
-      html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Product</th><th>Category</th><th class="right">On Hand</th><th class="right">On Hold</th><th class="right">Reserved</th><th class="right">Available</th><th class="right">Unit Cost</th><th class="right">Unit Price</th><th class="right">Value (Retail)</th></tr></thead><tbody>';
+      // Full product list
+      html += sectionOpen('All Products — ' + d.date, 'fa-list', '');
+      html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>';
+      if(cv('name')) html+=th('Product');
+      if(cv('category')) html+=th('Category');
+      if(cv('on_hand')) html+=th('On Hand',{right:1});
+      if(cv('on_hold')) html+=th('On Hold',{right:1});
+      if(cv('reserved')) html+=th('Reserved',{right:1});
+      if(cv('available')) html+=th('Available',{right:1});
+      if(cv('cost')) html+=th('Unit Cost',{right:1});
+      if(cv('price')) html+=th('Unit Price',{right:1});
+      if(cv('value')) html+=th('Value (Retail)',{right:1});
+      html += '</tr></thead><tbody>';
+
+      var totQty=0,totVal=0;
       d.items.forEach(function(item) {
         var name = item.product_name || item.name || '-';
-        html += '<tr><td>' + name + '</td><td><span class="rpt-badge rpt-badge-blue">' + (item.category || '-') + '</span></td><td class="right num">' + fmtN(item.qty_on_hand) + '</td><td class="right num">' + fmtN(item.qty_on_hold) + '</td><td class="right num">' + fmtN(item.qty_reserved) + '</td><td class="right num">' + fmtN(item.qty_available) + '</td><td class="right num">' + fmt$(item.unit_cost) + '</td><td class="right num">' + fmt$(item.unit_price) + '</td><td class="right money">' + fmt$(item.total_value) + '</td></tr>';
+        totQty+=item.qty_on_hand||0;totVal+=item.total_value||0;
+        html += '<tr>';
+        if(cv('name')) html+=td(name);
+        if(cv('category')) html+=td('<span class="qb-badge qb-badge-blue">'+(item.category||'-')+'</span>');
+        if(cv('on_hand')) html+=td(fmtN(item.qty_on_hand),{right:1,num:1});
+        if(cv('on_hold')) html+=td(fmtN(item.qty_on_hold),{right:1,num:1});
+        if(cv('reserved')) html+=td(fmtN(item.qty_reserved),{right:1,num:1});
+        if(cv('available')) html+=td(fmtN(item.qty_available),{right:1,num:1});
+        if(cv('cost')) html+=td(fmt$(item.unit_cost),{right:1,num:1});
+        if(cv('price')) html+=td(fmt$(item.unit_price),{right:1,num:1});
+        if(cv('value')) html+=td(fmt$(item.total_value),{right:1,money:1});
+        html += '</tr>';
       });
-      html += '</tbody></table></div>' + sectionEnd();
+      html += '<tr class="totals-row">';
+      if(cv('name')) html+='<td><strong>Total</strong></td>';
+      if(cv('category')) html+='<td></td>';
+      if(cv('on_hand')) html+=td(fmtN(totQty),{right:1,num:1});
+      if(cv('on_hold')) html+='<td></td>';
+      if(cv('reserved')) html+='<td></td>';
+      if(cv('available')) html+='<td></td>';
+      if(cv('cost')) html+='<td></td>';
+      if(cv('price')) html+='<td></td>';
+      if(cv('value')) html+=td(fmt$(totVal),{right:1,money:1});
+      html += '</tr>';
+      html += '</tbody></table></div>' + sectionClose();
     } else if (d.source !== 'none' && d.source !== 'nearest_snapshot') {
-      html += '<div class="rpt-empty"><i class="fas fa-inbox"></i> No inventory data for this date</div>';
+      html += '<div class="qb-empty"><i class="fas fa-inbox"></i> No inventory data for this date</div>';
     }
-
     container.innerHTML = html;
   }).catch(function() {
     var c = document.getElementById('rptInvResults');
-    if (c) c.innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load inventory</div>';
+    if (c) c.innerHTML = '<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load inventory</div>';
   });
 }
 
 window._rptLoadAsOf = function() {
   _invAsOfDate = document.getElementById('rptAsOfDate')?.value || _invAsOfDate;
   _rptLoadAsOfData();
+};
+
+// Export inventory as-of specifically
+window._rptExportInventoryAsOf = function() {
+  var date = document.getElementById('rptAsOfDate')?.value || _invAsOfDate;
+  API.get('/reports/inventory/as-of?date=' + date).then(function(r) {
+    var d = r.data;
+    if (!d.items || d.items.length === 0) { alert('No inventory data to export for ' + date); return; }
+
+    var csv = 'Product,Category,On Hand,On Hold,Reserved,Available,Unit Cost,Unit Price,Value (Retail)\n';
+    d.items.forEach(function(item) {
+      csv += csvVal(item.product_name || item.name || '') + ',' +
+        csvVal(item.category || '') + ',' +
+        (item.qty_on_hand || 0) + ',' +
+        (item.qty_on_hold || 0) + ',' +
+        (item.qty_reserved || 0) + ',' +
+        (item.qty_available || 0) + ',' +
+        (item.unit_cost || 0).toFixed(2) + ',' +
+        (item.unit_price || 0).toFixed(2) + ',' +
+        (item.total_value || 0).toFixed(2) + '\n';
+    });
+
+    downloadCsv(csv, 'bf-ops-inventory-as-of-' + date + '.csv');
+  }).catch(function(err) {
+    alert('Export failed: ' + (err.response?.data?.error || err.message));
+  });
 };
 
 // ==================== FLEET REPORT ====================
@@ -642,30 +859,28 @@ function loadFleet(q) {
     var s = d.summary || {};
     var el = document.getElementById('rptContent');
 
-    var html = '<div class="rpt-summary">' +
-      summaryCard('Active Trucks', fmtN(s.active_trucks), { icon: 'fa-truck', iconBg: '#2563EB' }) +
-      summaryCard('Total Routes', fmtN(s.total_routes), { icon: 'fa-route', iconBg: '#7C3AED' }) +
-      summaryCard('Maintenance Events', fmtN(s.maintenance_records), { icon: 'fa-wrench', iconBg: '#F97316', color: 'orange' }) +
-      summaryCard('Open Issues', fmtN(s.open_issues), { icon: 'fa-exclamation-triangle', iconBg: '#DC2626', color: 'red' }) +
+    var html = '<div class="qb-summary-strip">' +
+      summaryItem('Active Trucks', fmtN(s.active_trucks), { color: 'blue' }) +
+      summaryItem('Total Routes', fmtN(s.total_routes)) +
+      summaryItem('Maintenance', fmtN(s.maintenance_records), { color: 'orange' }) +
+      summaryItem('Open Issues', fmtN(s.open_issues), { color: 'red' }) +
     '</div>';
 
-    // Truck usage
-    html += sectionStart('Truck Usage', 'fa-truck', '');
-    html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Truck</th><th>Plate</th><th class="right">Routes</th><th class="right">Completed</th><th class="right">Maintenance</th></tr></thead><tbody>';
+    html += sectionOpen('Truck Usage', 'fa-truck', '');
+    html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Truck')+th('Plate')+th('Routes',{right:1})+th('Completed',{right:1})+th('Maintenance',{right:1})+'</tr></thead><tbody>';
     (d.truckUsage || []).forEach(function(t) {
-      html += '<tr><td>' + (t.name || '-') + '</td><td class="muted">' + (t.plate_number || '-') + '</td><td class="right num">' + fmtN(t.routes) + '</td><td class="right num">' + fmtN(t.completed) + '</td><td class="right num">' + fmtN(t.maintenance_events) + '</td></tr>';
+      html += '<tr>'+td(t.name||'-')+td(t.plate_number||'-',{muted:1})+td(fmtN(t.routes),{right:1,num:1})+td(fmtN(t.completed),{right:1,num:1})+td(fmtN(t.maintenance_events),{right:1,num:1})+'</tr>';
     });
-    html += '</tbody></table></div>' + sectionEnd();
+    html += '</tbody></table></div>' + sectionClose();
 
-    // Driver performance
-    html += sectionStart('Driver Performance', 'fa-user-helmet-safety', '');
-    html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Driver</th><th class="right">Routes</th><th class="right">Completed</th><th class="right">Stops Delivered</th><th class="right">Proofs</th></tr></thead><tbody>';
+    html += sectionOpen('Driver Performance', 'fa-user-helmet-safety', '');
+    html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Driver')+th('Routes',{right:1})+th('Completed',{right:1})+th('Stops',{right:1})+th('Proofs',{right:1})+'</tr></thead><tbody>';
     (d.driverPerformance || []).forEach(function(dr) {
-      html += '<tr><td>' + (dr.name || '-') + '</td><td class="right num">' + fmtN(dr.routes) + '</td><td class="right num">' + fmtN(dr.completed) + '</td><td class="right num">' + fmtN(dr.stops_delivered) + '</td><td class="right num">' + fmtN(dr.proofs) + '</td></tr>';
+      html += '<tr>'+td(dr.name||'-')+td(fmtN(dr.routes),{right:1,num:1})+td(fmtN(dr.completed),{right:1,num:1})+td(fmtN(dr.stops_delivered),{right:1,num:1})+td(fmtN(dr.proofs),{right:1,num:1})+'</tr>';
     });
-    html += '</tbody></table></div>' + sectionEnd();
+    html += '</tbody></table></div>' + sectionClose();
     el.innerHTML = html;
-  }).catch(function() { document.getElementById('rptContent').innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load fleet report</div>'; });
+  }).catch(function(){document.getElementById('rptContent').innerHTML='<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load fleet report</div>';});
 }
 
 // ==================== WAREHOUSE REPORT ====================
@@ -675,189 +890,161 @@ function loadWarehouse(q) {
     var s = d.summary || {};
     var el = document.getElementById('rptContent');
 
-    var html = '<div class="rpt-summary">' +
-      summaryCard('Total Activities', fmtN(s.total_activities), { icon: 'fa-boxes-stacked', iconBg: '#2563EB' }) +
-      summaryCard('Inbound Qty', fmtN(s.total_in), { icon: 'fa-arrow-down', iconBg: '#059669', color: 'green' }) +
-      summaryCard('Outbound Qty', fmtN(s.total_out), { icon: 'fa-arrow-up', iconBg: '#DC2626', color: 'red' }) +
-      summaryCard('Products Touched', fmtN(s.products_touched), { icon: 'fa-box', iconBg: '#7C3AED' }) +
-      summaryCard('Staff Involved', fmtN(s.staff_involved), { icon: 'fa-users', iconBg: '#F97316' }) +
+    var html = '<div class="qb-summary-strip">' +
+      summaryItem('Activities', fmtN(s.total_activities)) +
+      summaryItem('Inbound Qty', fmtN(s.total_in), { color: 'green' }) +
+      summaryItem('Outbound Qty', fmtN(s.total_out), { color: 'red' }) +
+      summaryItem('Products Touched', fmtN(s.products_touched)) +
+      summaryItem('Staff', fmtN(s.staff_involved)) +
     '</div>';
 
-    // By type
-    html += sectionStart('By Activity Type', 'fa-list', '');
-    html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Type</th><th class="right">Count</th><th class="right">Qty In</th><th class="right">Qty Out</th></tr></thead><tbody>';
+    html += sectionOpen('By Activity Type', 'fa-list', '');
+    html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Type')+th('Count',{right:1})+th('Qty In',{right:1})+th('Qty Out',{right:1})+'</tr></thead><tbody>';
     (d.byType || []).forEach(function(t) {
-      html += '<tr><td><span class="rpt-badge rpt-badge-blue">' + t.activity_type + '</span></td><td class="right num">' + fmtN(t.count) + '</td><td class="right num" style="color:#059669">' + fmtN(t.qty_in) + '</td><td class="right num" style="color:#DC2626">' + fmtN(t.qty_out) + '</td></tr>';
+      html += '<tr>'+td('<span class="qb-badge qb-badge-blue">'+t.activity_type+'</span>')+td(fmtN(t.count),{right:1,num:1})+td(fmtN(t.qty_in),{right:1,num:1})+td(fmtN(t.qty_out),{right:1,num:1})+'</tr>';
     });
-    html += '</tbody></table></div>' + sectionEnd();
+    html += '</tbody></table></div>' + sectionClose();
 
-    // By staff
-    html += sectionStart('By Staff Member', 'fa-user', '');
-    html += '<div class="rpt-table-wrap"><table class="rpt-table"><thead><tr><th>Name</th><th class="right">Activities</th><th class="right">Qty In</th><th class="right">Qty Out</th></tr></thead><tbody>';
-    (d.byStaff || []).forEach(function(s) {
-      html += '<tr><td>' + (s.label || 'Unknown') + '</td><td class="right num">' + fmtN(s.activities) + '</td><td class="right num" style="color:#059669">' + fmtN(s.qty_in) + '</td><td class="right num" style="color:#DC2626">' + fmtN(s.qty_out) + '</td></tr>';
+    html += sectionOpen('By Staff', 'fa-user', '');
+    html += '<div class="qb-table-wrap"><table class="qb-table"><thead><tr>'+th('Name')+th('Activities',{right:1})+th('Qty In',{right:1})+th('Qty Out',{right:1})+'</tr></thead><tbody>';
+    (d.byStaff || []).forEach(function(st) {
+      html += '<tr>'+td(st.label||'Unknown')+td(fmtN(st.activities),{right:1,num:1})+td(fmtN(st.qty_in),{right:1,num:1})+td(fmtN(st.qty_out),{right:1,num:1})+'</tr>';
     });
-    html += '</tbody></table></div>' + sectionEnd();
+    html += '</tbody></table></div>' + sectionClose();
     el.innerHTML = html;
-  }).catch(function() { document.getElementById('rptContent').innerHTML = '<div class="rpt-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load warehouse report</div>'; });
+  }).catch(function(){document.getElementById('rptContent').innerHTML='<div class="qb-empty"><i class="fas fa-exclamation-triangle"></i> Failed to load warehouse report</div>';});
 }
 
 // ==================== DRILL-DOWN MODAL ====================
-function showDrillModal(title, bodyHtml, exportType) {
-  var existing = document.querySelector('.rpt-drill-overlay');
+function showDrillModal(title, bodyHtml) {
+  var existing = document.querySelector('.qb-drill-overlay');
   if (existing) existing.remove();
 
   var overlay = document.createElement('div');
-  overlay.className = 'rpt-drill-overlay';
+  overlay.className = 'qb-drill-overlay';
   overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML =
-    '<div class="rpt-drill-modal">' +
-      '<div class="rpt-drill-header"><h3><i class="fas fa-search-plus"></i> ' + title + '</h3><button class="rpt-drill-close" onclick="this.closest(\'.rpt-drill-overlay\').remove()">&times;</button></div>' +
-      '<div class="rpt-drill-body">' + bodyHtml + '</div>' +
-      '<div class="rpt-drill-footer">' +
-        (exportType ? '<button class="rpt-export-btn" onclick="window._rptExportExcel(\'' + exportType + '\')"><i class="fas fa-file-excel"></i> Export</button>' : '') +
-        '<button class="rpt-export-btn" onclick="this.closest(\'.rpt-drill-overlay\').remove()">Close</button>' +
+    '<div class="qb-drill-modal">' +
+      '<div class="qb-drill-header"><h3>' + title + '</h3><button class="qb-drill-close" onclick="this.closest(\'.qb-drill-overlay\').remove()"><i class="fas fa-times"></i></button></div>' +
+      '<div class="qb-drill-body">' + bodyHtml + '</div>' +
+      '<div class="qb-drill-footer">' +
+        '<button class="qb-action-btn" onclick="window._rptExportExcel()"><i class="fas fa-file-csv"></i> Export</button>' +
+        '<button class="qb-action-btn" onclick="this.closest(\'.qb-drill-overlay\').remove()">Close</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(overlay);
 }
 
-// ==================== EXPORT: PDF ====================
+// ==================== EXPORT: PDF / PRINT ====================
 window._rptExportPDF = function() {
-  // Build a print-friendly version and trigger print dialog (saves as PDF)
   var content = document.getElementById('rptContent');
   if (!content) return;
+  var titles = { financial:'Financial Overview', sales:'Sales Report', products:'Product Performance', purchasing:'Purchasing Report', delivery:'Delivery Report', returns:'Returns Report', customers:'Customer Report', inventory:'Inventory Valuation', fleet:'Fleet Report', warehouse:'Warehouse Activity' };
 
   var win = window.open('', '_blank');
-  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>BF Ops Report - ' + _currentTab + '</title>' +
+  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>BF Ops — ' + (titles[_currentTab]||'Report') + '</title>' +
     '<style>' +
-    'body { font-family: Inter, -apple-system, sans-serif; padding: 20px; color: #1F2937; }' +
-    'h1 { font-size: 20px; color: #1E3A8A; margin-bottom: 4px; }' +
-    '.period { font-size: 13px; color: #6B7280; margin-bottom: 16px; }' +
+    'body { font-family: Inter, -apple-system, sans-serif; padding: 24px; color: #393A3D; max-width: 1000px; margin: 0 auto; }' +
+    'h1 { font-size: 20px; color: #393A3D; margin-bottom: 4px; }' +
+    '.period { font-size: 12px; color: #8C8D91; margin-bottom: 20px; }' +
     'table { width: 100%; border-collapse: collapse; margin: 12px 0; }' +
-    'th { padding: 6px 10px; text-align: left; font-size: 11px; background: #F3F4F6; border: 1px solid #E5E7EB; font-weight: 600; }' +
-    'td { padding: 6px 10px; font-size: 12px; border: 1px solid #E5E7EB; }' +
+    'th { padding: 8px 12px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; background: #F4F5F8; border-bottom: 2px solid #D4D7DC; }' +
+    'td { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid #E8EAED; }' +
     '.right { text-align: right; }' +
     '.num { font-variant-numeric: tabular-nums; }' +
-    '.money { font-weight: 700; }' +
-    '.rpt-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }' +
-    '.rpt-card { border: 1px solid #E5E7EB; border-radius: 8px; padding: 12px; }' +
-    '.rpt-card-label { font-size: 10px; font-weight: 600; text-transform: uppercase; color: #9CA3AF; }' +
-    '.rpt-card-value { font-size: 20px; font-weight: 800; color: #1E3A8A; }' +
-    '.rpt-card-icon, .rpt-chart-wrap, .rpt-group-btn, .rpt-export-btn, .rpt-drill-overlay, canvas, .rpt-tabs, .rpt-toolbar, .rpt-asof-panel button { display: none; }' +
+    '.money { font-weight: 700; color: #2CA01C; }' +
+    '.totals-row td { font-weight: 800; border-top: 2px solid #393A3D; border-bottom: none; }' +
+    '.qb-summary-strip { display: flex; gap: 12px; margin: 16px 0; }' +
+    '.qb-summary-item { border: 1px solid #E8EAED; border-radius: 4px; padding: 10px 14px; }' +
+    '.qb-summary-label { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #8C8D91; }' +
+    '.qb-summary-value { font-size: 18px; font-weight: 800; }' +
+    '.qb-summary-value.green { color: #2CA01C; } .qb-summary-value.red { color: #D13B3B; } .qb-summary-value.orange { color: #E8590C; } .qb-summary-value.blue { color: #0077C5; }' +
+    '.qb-badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; }' +
+    '.qb-badge-blue { background: #E5F1FA; color: #005A9E; }' +
+    '.qb-badge-green { background: #E8F5E6; color: #1A7A12; }' +
+    '.qb-badge-orange { background: #FFF4E5; color: #C05000; }' +
+    'canvas, .qb-chart-wrap, .qb-section-controls, .qb-asof-bar button, .qb-action-btn { display: none; }' +
     '@media print { body { padding: 0; } }' +
     '</style></head><body>' +
-    '<h1><i class="fas fa-chart-bar"></i> BF Ops — ' + _currentTab.charAt(0).toUpperCase() + _currentTab.slice(1) + ' Report</h1>' +
-    '<div class="period">' + _dateFrom + ' to ' + _dateTo + ' • Generated ' + new Date().toLocaleString() + '</div>' +
+    '<h1>BF Operations — ' + (titles[_currentTab]||'Report') + '</h1>' +
+    '<div class="period">' + _dateFrom + ' to ' + _dateTo + ' &bull; Generated ' + new Date().toLocaleString() + '</div>' +
     content.innerHTML +
     '</body></html>');
   win.document.close();
   setTimeout(function() { win.print(); }, 500);
 };
 
-// ==================== EXPORT: EXCEL (CSV) ====================
+// ==================== EXPORT: CSV ====================
 window._rptExportExcel = function(type) {
   type = type || _currentTab;
 
-  // Strategy: First try to export from visible tables on the page.
-  // This works for every tab that renders a table, regardless of backend export support.
-  var tables = document.querySelectorAll('#rptContent .rpt-table');
+  // Scrape visible tables
+  var tables = document.querySelectorAll('#rptContent .qb-table');
   if (tables.length > 0) {
     var allCsv = '';
     tables.forEach(function(table, tIdx) {
-      if (tIdx > 0) allCsv += '\n\n';
-      // Get section title if available
-      var section = table.closest('.rpt-section');
-      if (section) {
-        var title = section.querySelector('h3');
-        if (title) allCsv += title.textContent.trim() + '\n';
-      }
+      if (tIdx > 0) allCsv += '\n';
       var rows = table.querySelectorAll('tr');
       rows.forEach(function(row) {
         var cells = row.querySelectorAll('th, td');
         var vals = [];
         cells.forEach(function(cell) {
           var val = cell.textContent.trim();
-          if (val.includes(',') || val.includes('"') || val.includes('\n')) {
-            val = '"' + val.replace(/"/g, '""') + '"';
-          }
-          vals.push(val);
+          vals.push(csvVal(val));
         });
         allCsv += vals.join(',') + '\n';
       });
     });
-
-    if (allCsv.trim()) {
-      var blob = new Blob(['\uFEFF' + allCsv], { type: 'text/csv;charset=utf-8;' });
-      var link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = 'bf-ops-' + type + '-' + _dateFrom + '-to-' + _dateTo + '.csv';
-      link.click();
-      return;
-    }
+    if (allCsv.trim()) { downloadCsv(allCsv, 'bf-ops-' + type + '-' + _dateFrom + '-to-' + _dateTo + '.csv'); return; }
   }
 
-  // Also export summary cards as a table
-  var cards = document.querySelectorAll('#rptContent .rpt-card');
+  // Fallback: summary cards
+  var cards = document.querySelectorAll('#rptContent .qb-summary-item');
   if (cards.length > 0) {
     var csv = 'Metric,Value\n';
     cards.forEach(function(card) {
-      var label = (card.querySelector('.rpt-card-label') || {}).textContent || '';
-      var value = (card.querySelector('.rpt-card-value') || {}).textContent || '';
-      label = label.trim();
-      value = value.trim();
-      if (label) {
-        if (label.includes(',') || value.includes(',')) {
-          label = '"' + label.replace(/"/g, '""') + '"';
-          value = '"' + value.replace(/"/g, '""') + '"';
-        }
-        csv += label + ',' + value + '\n';
-      }
+      var label = (card.querySelector('.qb-summary-label') || {}).textContent || '';
+      var value = (card.querySelector('.qb-summary-value') || {}).textContent || '';
+      csv += csvVal(label.trim()) + ',' + csvVal(value.trim()) + '\n';
     });
-    var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-    var link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = 'bf-ops-' + type + '-summary-' + _dateFrom + '-to-' + _dateTo + '.csv';
-    link.click();
+    downloadCsv(csv, 'bf-ops-' + type + '-summary-' + _dateFrom + '-to-' + _dateTo + '.csv');
     return;
   }
 
-  // Fallback: try API export for raw data dump
-  var typeMap = { financial: 'orders', sales: 'orders', products: 'products', purchasing: 'bills', delivery: 'orders', returns: 'returns', customers: 'customers', inventory: 'inventory', fleet: 'orders', warehouse: 'orders' };
+  // Last resort: API
+  var typeMap = { financial:'orders', sales:'orders', products:'products', purchasing:'bills', delivery:'orders', returns:'returns', customers:'customers', inventory:'inventory', fleet:'orders', warehouse:'orders' };
   var exportType = typeMap[type] || type;
-
   var q = 'type=' + exportType + '&from=' + _dateFrom + '&to=' + _dateTo;
-  if (type === 'inventory' || exportType === 'inventory') {
+  if (type === 'inventory') {
     var asOfDate = document.getElementById('rptAsOfDate')?.value;
     if (asOfDate) q = 'type=inventory_snapshot&date=' + asOfDate;
   }
 
   API.get('/reports/export?' + q).then(function(r) {
     var data = r.data.data;
-    if (!data || data.length === 0) { alert('No data to export. Try loading data on this tab first.'); return; }
-
+    if (!data || data.length === 0) { alert('No data to export.'); return; }
     var headers = Object.keys(data[0]);
     var csv = headers.join(',') + '\n';
     data.forEach(function(row) {
-      csv += headers.map(function(h) {
-        var val = row[h];
-        if (val === null || val === undefined) return '';
-        val = String(val);
-        if (val.includes(',') || val.includes('"') || val.includes('\n')) {
-          val = '"' + val.replace(/"/g, '""') + '"';
-        }
-        return val;
-      }).join(',') + '\n';
+      csv += headers.map(function(h) { return csvVal(String(row[h] ?? '')); }).join(',') + '\n';
     });
-
-    var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-    var link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = 'bf-ops-' + exportType + '-' + _dateFrom + '-to-' + _dateTo + '.csv';
-    link.click();
+    downloadCsv(csv, 'bf-ops-' + exportType + '-' + _dateFrom + '-to-' + _dateTo + '.csv');
   }).catch(function(err) {
     alert('Export failed: ' + (err.response?.data?.error || err.message));
   });
 };
+
+function csvVal(val) {
+  if (val.includes(',') || val.includes('"') || val.includes('\n')) return '"' + val.replace(/"/g, '""') + '"';
+  return val;
+}
+
+function downloadCsv(csv, filename) {
+  var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  var link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+}
 
 })();

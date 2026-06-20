@@ -12,7 +12,7 @@ var MODULES = [
   { id: 'ordering', name: 'Purchasing', icon: 'fa-cart-shopping', desc: 'Purchase orders, vendors, receiving', color: '#D97706' },
   { id: 'crm', name: 'CRM', icon: 'fa-handshake', desc: 'Contacts, organizations, sales pipeline', color: '#6366F1' },
   { id: 'reports', name: 'Reports', icon: 'fa-chart-pie', desc: 'Comprehensive reporting, exports, analytics', color: '#8B5CF6' },
-  { id: 'pos', name: 'Point of Sale', icon: 'fa-cash-register', desc: 'Register, payments, receipts', color: '#7C3AED', soon: true },
+  { id: 'pos', name: 'Point of Sale', icon: 'fa-cash-register', desc: 'Register, payments, receipts', color: '#7C3AED' },
   { id: 'tasks', name: 'Tasks', icon: 'fa-list-check', desc: 'Team tasks, checklists, operations', color: '#DC2626', soon: true },
 ];
 
@@ -323,6 +323,8 @@ function launchModule(moduleId, initialPage) {
     loadCRMModule();
   } else if (moduleId === 'reports') {
     loadReportsModule();
+  } else if (moduleId === 'pos') {
+    loadPOSModule();
   } else {
     document.getElementById('moduleFrame').innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px">
@@ -343,6 +345,9 @@ function cleanupActiveModule() {
   }
   if (typeof window._reportsCleanup === 'function') {
     try { window._reportsCleanup(); } catch(e) {}
+  }
+  if (typeof window._posCleanup === 'function') {
+    try { window._posCleanup(); } catch(e) {}
   }
   // Remove module-specific stylesheets
   document.querySelectorAll('link[data-module]').forEach(el => el.remove());
@@ -598,6 +603,36 @@ function loadReportsModule() {
     document.body.appendChild(script);
   } else {
     if (typeof window._reportsInit === 'function') window._reportsInit();
+  }
+}
+
+// ==================== POS MODULE LOADER ====================
+
+function loadPOSModule() {
+  const frame = document.getElementById('moduleFrame');
+
+  // Load POS CSS if needed
+  if (!document.querySelector('link[data-module="pos-css"]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/static/modules/pos.css?v=' + Date.now();
+    link.dataset.module = 'pos-css';
+    document.head.appendChild(link);
+  }
+
+  frame.innerHTML = '<div id="pos-app"></div>';
+
+  if (!loadedModuleScripts.pos) {
+    const script = document.createElement('script');
+    script.src = '/static/modules/pos.js?v=' + Date.now();
+    script.dataset.module = 'pos';
+    script.onload = () => {
+      loadedModuleScripts.pos = true;
+      if (typeof window._posInit === 'function') window._posInit();
+    };
+    document.body.appendChild(script);
+  } else {
+    if (typeof window._posInit === 'function') window._posInit();
   }
 }
 

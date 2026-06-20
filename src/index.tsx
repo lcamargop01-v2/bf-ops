@@ -6,6 +6,7 @@ import { inventoryApp } from './modules/inventory'
 import { purchasingApp } from './modules/purchasing'
 import { crmApp } from './modules/crm'
 import { reportsApp } from './modules/reports'
+import { posApp } from './modules/pos'
 
 const app = new Hono<{ Bindings: BFBindings; Variables: BFVariables }>()
 
@@ -390,6 +391,14 @@ const MODULE_FEATURES: Record<string, { id: string; label: string }[]> = {
     { id: 'warehouse', label: 'Warehouse' },
     { id: 'export', label: 'Data Export' },
   ],
+  pos: [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'register', label: 'Register' },
+    { id: 'sales', label: 'Sales' },
+    { id: 'customers', label: 'Customers' },
+    { id: 'refunds', label: 'Refunds' },
+    { id: 'sessions', label: 'Sessions' },
+  ],
 }
 
 app.get('/api/admin/module-features', (c) => {
@@ -543,6 +552,9 @@ app.route('/', crmApp)
 
 // Reports module: /api/reports/*
 app.route('/', reportsApp)
+
+// POS module: /api/pos/*
+app.route('/', posApp)
 
 // Logistics module: /api/orders, /api/routes, /api/customers, etc.
 app.route('/', logisticsApp)
