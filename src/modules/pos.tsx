@@ -1621,4 +1621,21 @@ app.put('/api/pos/stock-reserve/:id/cancel', async (c) => {
   return c.json({ success: true })
 })
 
+// ==================== LIST STOCK RESERVATIONS ====================
+app.get('/api/pos/stock-reserve/:locationId/pending', async (c) => {
+  const db = c.env.DB
+  const locationId = parseInt(c.req.param('locationId'))
+  const rows = await db.prepare(`
+    SELECT r.*, p.name as product_name,
+      fl.name as from_location, tl.name as to_location
+    FROM pos_stock_reservations r
+    LEFT JOIN products p ON p.id = r.product_id
+    LEFT JOIN locations fl ON fl.id = r.from_location_id
+    LEFT JOIN locations tl ON tl.id = r.to_location_id
+    WHERE (r.from_location_id = ? OR r.to_location_id = ?)
+    ORDER BY r.created_at DESC LIMIT 50
+  `).bind(locationId, locationId).all<any>()
+  return c.json(rows.results || [])
+})
+
 export { app as posApp }

@@ -367,6 +367,84 @@
 .pos-cust-delete-btn { background: rgba(220,38,38,0.1); color: var(--pos-red); border: 1px solid rgba(220,38,38,0.2); }
 .pos-cust-delete-btn:hover { background: rgba(220,38,38,0.2); }
 
+/* ==================== STOCK CHECK POPUP ==================== */
+.pos-stock-check-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.pos-stock-check-loc { background: var(--pos-gray-50); border: 1px solid var(--pos-gray-200); border-radius: 10px; padding: 14px; }
+.pos-stock-check-loc.current { background: #EFF6FF; border-color: #93C5FD; }
+.pos-stock-check-header { font-size: 14px; font-weight: 700; color: var(--pos-navy); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.pos-stock-check-nums { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.pos-stock-num { text-align: center; }
+.pos-stock-num .label { display: block; font-size: 10px; color: var(--pos-gray-400); text-transform: uppercase; letter-spacing: 0.5px; }
+.pos-stock-num .val { display: block; font-size: 18px; font-weight: 800; color: var(--pos-gray-700); }
+.pos-stock-num .val.green { color: var(--pos-green); }
+.pos-stock-num .val.orange { color: var(--pos-orange); }
+.pos-stock-num .val.red { color: var(--pos-red); }
+.pos-stock-reserve-row { margin-top: 10px; text-align: center; }
+.pos-stock-reserve-btn { background: var(--pos-navy) !important; color: white !important; font-size: 11px !important; }
+.pos-stock-reserves { margin-top: 16px; }
+.pos-stock-reserves h4 { font-size: 13px; font-weight: 700; color: var(--pos-gray-600); margin: 0 0 8px 0; }
+.pos-stock-reserve-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #FEF3C7; border-radius: 8px; margin-bottom: 6px; font-size: 12px; }
+.pos-stock-reserve-item .pos-stock-reserve-date { color: var(--pos-gray-400); margin-left: auto; }
+.pos-stock-loading { text-align: center; padding: 30px; color: var(--pos-gray-400); }
+
+/* ==================== LINE DISCOUNT ==================== */
+.pos-line-disc-form { }
+.pos-line-disc-product { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--pos-gray-50); border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
+.pos-line-disc-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+.pos-line-disc-tab { flex: 1; padding: 8px; border: 1px solid var(--pos-gray-200); background: white; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; text-align: center; transition: all 0.15s; }
+.pos-line-disc-tab.active { background: var(--pos-navy); color: white; border-color: var(--pos-navy); }
+.pos-line-disc-tab:hover:not(.active) { background: var(--pos-gray-50); }
+#posLineDiscPanel > div { display: none; }
+#posLineDiscPanel > div.active { display: block; }
+#posLineDiscPanel label { display: block; font-size: 12px; font-weight: 600; color: var(--pos-gray-600); margin-bottom: 4px; }
+#posLineDiscPanel input { width: 100%; padding: 8px 12px; border: 1px solid var(--pos-gray-200); border-radius: 8px; font-size: 14px; }
+.pos-line-disc-preview { font-size: 13px; color: var(--pos-green); font-weight: 600; margin: 6px 0 0; }
+.pos-line-disc-reason { margin-top: 12px; }
+.pos-line-disc-reason label { display: block; font-size: 12px; font-weight: 600; color: var(--pos-gray-600); margin-bottom: 4px; }
+.pos-line-disc-reason input { width: 100%; padding: 8px 12px; border: 1px solid var(--pos-gray-200); border-radius: 8px; font-size: 13px; }
+
+/* Cart item discount indicator */
+.pos-cart-item-disc { display: inline-block; background: #FEF3C7; color: var(--pos-orange); font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
+
+/* ==================== PROMO & CART DISCOUNT ==================== */
+.pos-promo-applied { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #D1FAE5; border: 1px solid #A7F3D0; border-radius: 8px; margin-bottom: 8px; font-size: 12px; color: #065F46; }
+.pos-promo-applied i { color: var(--pos-green); }
+.pos-promo-remove { background: none; border: none; color: var(--pos-red); cursor: pointer; margin-left: auto; font-size: 14px; padding: 2px 6px; }
+.pos-promo-remove:hover { background: rgba(220,38,38,0.1); border-radius: 4px; }
+.pos-promo-input-row { display: flex; gap: 6px; margin-bottom: 8px; }
+.pos-promo-input { flex: 1; padding: 6px 10px; border: 1px solid var(--pos-gray-200); border-radius: 8px; font-size: 12px; text-transform: uppercase; }
+.pos-promo-input::placeholder { text-transform: none; }
+.pos-cart-disc-row { margin-bottom: 8px; }
+
+/* ==================== ORDER DETAIL ==================== */
+.pos-order-detail { }
+.pos-order-detail-header { margin-bottom: 16px; }
+.pos-order-detail-header h4 { font-size: 16px; font-weight: 800; color: var(--pos-navy); display: inline; margin-right: 8px; }
+.pos-order-detail-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; font-size: 12px; color: var(--pos-gray-500); }
+.pos-order-detail-meta i { margin-right: 4px; }
+.pos-order-section-title { font-size: 13px; font-weight: 700; color: var(--pos-gray-600); margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--pos-gray-200); }
+.pos-order-detail-totals { margin-top: 12px; padding: 12px; background: var(--pos-gray-50); border-radius: 10px; }
+.pos-order-detail-totals > div { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+.pos-order-detail-totals > div.discount { color: var(--pos-green); }
+.pos-order-detail-totals > div.grand { font-weight: 800; font-size: 15px; color: var(--pos-navy); border-top: 2px solid var(--pos-gray-200); margin-top: 6px; padding-top: 8px; }
+
+/* ==================== MERGE MODE ==================== */
+.pos-merge-banner { background: #FEF3C7; border: 1px solid #F59E0B; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; font-weight: 600; color: var(--pos-orange); display: flex; align-items: center; gap: 8px; }
+
+/* ==================== DASHBOARD TOOLS ==================== */
+.pos-dash-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.pos-dash-tool-btn { flex: 1; min-width: 140px; padding: 12px 16px !important; background: var(--pos-gray-50) !important; color: var(--pos-gray-700) !important; border: 1px solid var(--pos-gray-200) !important; font-size: 13px !important; font-weight: 600 !important; }
+.pos-dash-tool-btn:hover { background: var(--pos-gray-100) !important; border-color: var(--pos-navy) !important; color: var(--pos-navy) !important; }
+.pos-dash-tool-btn i { margin-right: 6px; }
+
+/* ==================== STATUS BADGES ==================== */
+.status-badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: capitalize; }
+.status-completed { background: #D1FAE5; color: #065F46; }
+.status-voided { background: #FEE2E2; color: #991B1B; }
+.status-draft { background: #E0E7FF; color: #3730A3; }
+.pos-badge-red { background: #FEE2E2; color: #991B1B; }
+.pos-badge-orange { background: #FEF3C7; color: #92400E; }
+
 /* ==================== RESPONSIVE ==================== */
 @media (max-width: 900px) {
   .pos-register { flex-direction: column; }
