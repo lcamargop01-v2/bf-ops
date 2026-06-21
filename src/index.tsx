@@ -14,21 +14,18 @@ const app = new Hono<{ Bindings: BFBindings; Variables: BFVariables }>()
 
 app.use('/api/*', cors())
 
-// Serve static assets from the ASSETS binding (Workers for Platform)
+// Static assets are served by Cloudflare's asset router via _routes.json exclude
+// Fallback: serve from ASSETS binding for Workers for Platform compatibility
 app.get('/static/*', async (c) => {
   try {
     const assets = (c.env as any).ASSETS
-    if (!assets) {
-      return c.text('ASSETS binding not found. Keys: ' + Object.keys(c.env).join(', '), 500)
+    if (assets && typeof assets.fetch === 'function') {
+      const url = new URL(c.req.url)
+      const assetReq = new Request(url.toString(), { headers: c.req.raw.headers })
+      return await assets.fetch(assetReq)
     }
-    if (typeof assets.fetch !== 'function') {
-      return c.text('ASSETS has no fetch. Type: ' + typeof assets + ' Keys: ' + Object.keys(assets).join(', '), 500)
-    }
-    const resp = await assets.fetch(c.req.raw)
-    return resp
-  } catch (e: any) {
-    return c.text('ASSETS error: ' + (e?.message || String(e)), 500)
-  }
+  } catch (e) { /* fall through */ }
+  return c.notFound()
 })
 
 // Global error handler
