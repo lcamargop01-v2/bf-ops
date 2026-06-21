@@ -411,10 +411,46 @@ function addToCart(productId, info) {
 function checkStockWarning(item) {
   _s.warnings = _s.warnings.filter(function(w) { return w.product_id !== item.product_id; });
   if (item.qty > item.stock) {
-    var other = getOtherLocation();
-    var msg = esc(item.name) + ': Only ' + item.stock + ' in stock (need ' + item.qty + ')';
-    if (other) msg += ' <a href="#" class="pos-stock-check-link" data-stock-pid="' + item.product_id + '">Check ' + esc(other.name) + '</a>';
-    _s.warnings.push({ product_id: item.product_id, type: item.stock <= 0 ? 'error' : 'warning', message: msg });
+    if (item.stock <= 0) {
+      // Zero local stock — smart check other locations
+      _s.warnings.push({
+        product_id: item.product_id, type: 'error',
+        message: '<strong>' + esc(item.name) + '</strong>: <span style="color:var(--pos-red)">Out of stock here.</span> <i class="fas fa-spinner fa-spin" style="font-size:11px"></i> Checking other locations...'
+      });
+      renderWarnings();
+      API.get('/pos/stock-check?product_ids=' + item.product_id + '&location_id=' + getLocationId()).then(function(r) {
+        var stockData = (r.data.stock || [])[0];
+        _s.warnings = _s.warnings.filter(function(w) { return w.product_id !== item.product_id; });
+        if (stockData && stockData.other_locations && stockData.other_locations.length > 0) {
+          // Found stock elsewhere
+          var otherLoc = stockData.other_locations[0];
+          var msg = '<strong>' + esc(item.name) + '</strong>: Out of stock here, but <strong>' + otherLoc.available + '</strong> available at <strong>' + esc(otherLoc.location_name) + '</strong>.' +
+            ' <button class="pos-stock-action-btn transfer" data-xfer-pid="' + item.product_id + '" data-xfer-name="' + esc(item.name) + '" data-xfer-from="' + otherLoc.location_id + '" data-xfer-fromname="' + esc(otherLoc.location_name) + '" data-xfer-avail="' + otherLoc.available + '"><i class="fas fa-arrows-left-right"></i> Request Transfer</button>';
+          _s.warnings.push({ product_id: item.product_id, type: 'error', message: msg });
+        } else {
+          // No stock anywhere
+          var msg2 = '<strong>' + esc(item.name) + '</strong>: <span style="color:var(--pos-red)">Out of stock everywhere.</span>' +
+            ' <button class="pos-stock-action-btn purchase" data-purch-pid="' + item.product_id + '" data-purch-name="' + esc(item.name) + '"><i class="fas fa-cart-plus"></i> Request Purchase for Customer</button>';
+          _s.warnings.push({ product_id: item.product_id, type: 'error', message: msg2 });
+        }
+        renderWarnings();
+      }).catch(function() {
+        // Fallback to old behavior
+        _s.warnings = _s.warnings.filter(function(w) { return w.product_id !== item.product_id; });
+        var other = getOtherLocation();
+        var msg3 = esc(item.name) + ': Out of stock.';
+        if (other) msg3 += ' <a href="#" class="pos-stock-check-link" data-stock-pid="' + item.product_id + '">Check ' + esc(other.name) + '</a>';
+        _s.warnings.push({ product_id: item.product_id, type: 'error', message: msg3 });
+        renderWarnings();
+      });
+      return; // async — renderWarnings called in callback
+    } else {
+      // Some stock but not enough
+      var other = getOtherLocation();
+      var msg = esc(item.name) + ': Only ' + item.stock + ' in stock (need ' + item.qty + ')';
+      if (other) msg += ' <a href="#" class="pos-stock-check-link" data-stock-pid="' + item.product_id + '">Check ' + esc(other.name) + '</a>';
+      _s.warnings.push({ product_id: item.product_id, type: 'warning', message: msg });
+    }
   }
   renderWarnings();
 }
@@ -720,6 +756,148 @@ function renderWarnings() {
       openStockCheck(parseInt(link.dataset.stockPid));
     });
   });
+
+  // Wire "Request Transfer" buttons
+  el.querySelectorAll('[data-xfer-pid]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.preventDefault();
+      var pid = parseInt(btn.dataset.xferPid);
+      var pName = btn.dataset.xferName;
+      var fromId = parseInt(btn.dataset.xferFrom);
+      var fromName = btn.dataset.xferFromname;
+      var avail = parseInt(btn.dataset.xferAvail);
+      var cartItem = _s.cart.find(function(c) { return c.product_id === pid; });
+      var qtyNeeded = cartItem ? cartItem.qty : 1;
+      var qtyToTransfer = Math.min(qtyNeeded, avail);
+      posConfirmTransfer(pid, pName, fromId, fromName, qtyToTransfer, avail);
+    });
+  });
+
+  // Wire "Request Purchase for Customer" buttons
+  el.querySelectorAll('[data-purch-pid]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.preventDefault();
+      var pid = parseInt(btn.dataset.purchPid);
+      var pName = btn.dataset.purchName;
+      posConfirmPurchaseRequest(pid, pName);
+    });
+  });
+}
+
+// ==================== SMART TRANSFER / PURCHASE REQUESTS ====================
+
+function posConfirmTransfer(productId, productName, fromLocId, fromLocName, qty, maxAvail) {
+  var cartItem = _s.cart.find(function(c) { return c.product_id === productId; });
+  var body = '<div style="margin-bottom:16px">' +
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">' +
+      '<div style="width:40px;height:40px;background:#EFF6FF;border-radius:10px;display:flex;align-items:center;justify-content:center"><i class="fas fa-arrows-left-right" style="color:#3B82F6"></i></div>' +
+      '<div><strong style="font-size:15px">' + esc(productName) + '</strong><br><span style="color:#64748B;font-size:12px">Not in stock at your location</span></div>' +
+    '</div>' +
+    '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:12px;margin-bottom:12px">' +
+      '<i class="fas fa-warehouse" style="color:#16A34A"></i> <strong>' + esc(fromLocName) + '</strong> has <strong>' + maxAvail + '</strong> available' +
+    '</div>' +
+    '<div class="pos-cust-form-group">' +
+      '<label>Quantity to transfer</label>' +
+      '<input type="number" id="posXferQty" value="' + qty + '" min="1" max="' + maxAvail + '" style="width:100px;padding:8px;border:1px solid #D1D5DB;border-radius:6px">' +
+    '</div>' +
+  '</div>';
+
+  showModal('<i class="fas fa-arrows-left-right"></i> Request Transfer from ' + esc(fromLocName), body,
+    '<button class="pos-btn" onclick="closeModal()" style="margin-right:8px">Cancel</button>' +
+    '<button class="pos-btn pos-btn-pay" onclick="posDoTransferRequest(' + productId + ',' + fromLocId + ')"><i class="fas fa-paper-plane"></i> Request Transfer</button>');
+}
+
+function posDoTransferRequest(productId, fromLocId) {
+  var qty = parseInt(document.getElementById('posXferQty').value);
+  if (!qty || qty < 1) { toast('Enter a valid quantity', 'error'); return; }
+
+  var cartItem = _s.cart.find(function(c) { return c.product_id === productId; });
+  var custName = _s.customer ? (_s.customer.business_name || _s.customer.contact_name || '') : '';
+  var custId = _s.customer ? _s.customer.id : null;
+
+  API.post('/pos/request-transfer', {
+    to_location_id: getLocationId(),
+    from_location_id: fromLocId,
+    items: [{ product_id: productId, qty: qty }],
+    customer_id: custId,
+    customer_name: custName,
+    notes: 'POS transfer request' + (cartItem ? ' for ' + cartItem.name : '')
+  }).then(function(r) {
+    closeModal();
+    toast('Transfer ' + r.data.transfer_number + ' requested! It will appear in the Inventory module for shipping.', 'success');
+    // Update warning to show transfer is in progress
+    _s.warnings = _s.warnings.filter(function(w) { return w.product_id !== productId; });
+    _s.warnings.push({
+      product_id: productId, type: 'info',
+      message: '<strong>' + esc(cartItem ? cartItem.name : 'Product') + '</strong>: Transfer <strong>' + r.data.transfer_number + '</strong> requested. Waiting to be shipped.'
+    });
+    renderWarnings();
+  }).catch(function(err) { toast('Transfer request failed: ' + errMsg(err), 'error'); });
+}
+
+function posConfirmPurchaseRequest(productId, productName) {
+  var custName = _s.customer ? (_s.customer.business_name || _s.customer.contact_name || '') : '';
+  var hasCust = !!_s.customer;
+
+  var body = '<div style="margin-bottom:16px">' +
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">' +
+      '<div style="width:40px;height:40px;background:#FEF2F2;border-radius:10px;display:flex;align-items:center;justify-content:center"><i class="fas fa-box-open" style="color:#DC2626"></i></div>' +
+      '<div><strong style="font-size:15px">' + esc(productName) + '</strong><br><span style="color:#DC2626;font-size:12px;font-weight:600">Out of stock at all locations</span></div>' +
+    '</div>' +
+    '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px;margin-bottom:12px">' +
+      '<i class="fas fa-info-circle" style="color:#DC2626"></i> This will create a <strong>purchase request</strong> for the purchasing team and a <strong>task</strong> to remind you when the product arrives.' +
+    '</div>' +
+    (hasCust ? '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px;margin-bottom:12px"><i class="fas fa-user" style="color:#16A34A"></i> Customer: <strong>' + esc(custName) + '</strong> — will be notified when product arrives.</div>' :
+      '<div style="background:#FEF9C3;border:1px solid #FDE68A;border-radius:8px;padding:10px;margin-bottom:12px"><i class="fas fa-exclamation-triangle" style="color:#D97706"></i> No customer selected. <strong>Select a customer first</strong> to tag this purchase request and get notified on arrival.</div>') +
+    '<div class="pos-cust-form-group">' +
+      '<label>Quantity needed</label>' +
+      '<input type="number" id="posPurchQty" value="1" min="1" style="width:100px;padding:8px;border:1px solid #D1D5DB;border-radius:6px">' +
+    '</div>' +
+    '<div class="pos-cust-form-group">' +
+      '<label>Urgency</label>' +
+      '<select id="posPurchUrgency" style="padding:8px;border:1px solid #D1D5DB;border-radius:6px">' +
+        '<option value="normal">Normal</option><option value="high">High</option><option value="critical">Critical</option>' +
+      '</select>' +
+    '</div>' +
+    '<div class="pos-cust-form-group">' +
+      '<label>Notes (optional)</label>' +
+      '<input type="text" id="posPurchNotes" placeholder="e.g. Customer needs by Friday" style="width:100%;padding:8px;border:1px solid #D1D5DB;border-radius:6px">' +
+    '</div>' +
+  '</div>';
+
+  showModal('<i class="fas fa-cart-plus"></i> Request Purchase — ' + esc(productName), body,
+    '<button class="pos-btn" onclick="closeModal()" style="margin-right:8px">Cancel</button>' +
+    '<button class="pos-btn pos-btn-pay" onclick="posDoPurchaseRequest(' + productId + ',\'' + esc(productName).replace(/'/g, "\\'") + '\')"><i class="fas fa-paper-plane"></i> Submit Purchase Request</button>');
+}
+
+function posDoPurchaseRequest(productId, productName) {
+  var qty = parseInt(document.getElementById('posPurchQty').value);
+  if (!qty || qty < 1) { toast('Enter a valid quantity', 'error'); return; }
+  var urgency = document.getElementById('posPurchUrgency').value;
+  var notes = document.getElementById('posPurchNotes').value;
+
+  var custName = _s.customer ? (_s.customer.business_name || _s.customer.contact_name || '') : '';
+  var custId = _s.customer ? _s.customer.id : null;
+
+  API.post('/pos/request-purchase', {
+    location_id: getLocationId(),
+    items: [{ product_id: productId, product_name: productName, qty: qty }],
+    customer_id: custId,
+    customer_name: custName,
+    urgency: urgency,
+    notes: notes
+  }).then(function(r) {
+    closeModal();
+    toast('Purchase request ' + r.data.purchasing_request_number + ' created!' + (custId ? ' Task created to notify ' + custName + ' when it arrives.' : ''), 'success');
+    // Update warning
+    _s.warnings = _s.warnings.filter(function(w) { return w.product_id !== productId; });
+    _s.warnings.push({
+      product_id: productId, type: 'info',
+      message: '<strong>' + esc(productName) + '</strong>: Purchase request <strong>' + r.data.purchasing_request_number + '</strong> submitted.' +
+        (custName ? ' <i class="fas fa-bell"></i> ' + esc(custName) + ' will be notified on arrival.' : '')
+    });
+    renderWarnings();
+  }).catch(function(err) { toast('Purchase request failed: ' + errMsg(err), 'error'); });
 }
 
 // ==================== CUSTOMER SELECTOR ====================

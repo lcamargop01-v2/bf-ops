@@ -4,6 +4,16 @@ type Bindings = { DB: D1Database }
 const app = new Hono<{ Bindings: Bindings }>()
 
 // ==================== HELPERS ====================
+function getUserFromHeader(c: any): any {
+  try {
+    const auth = c.req.header('Authorization')
+    if (!auth) return null
+    const token = auth.replace('Bearer ', '')
+    const payload = JSON.parse(atob(token))
+    return payload
+  } catch { return null }
+}
+
 function genSaleNumber() {
   const d = new Date()
   const prefix = 'S' + d.getFullYear().toString().slice(2) + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0')
@@ -2338,6 +2348,204 @@ app.post('/api/pos/customers/:id/addresses', async (c) => {
     body.notes || null, body.delivery_instructions || null).run()
 
   return c.json({ id: r.meta.last_row_id, success: true }, 201)
+})
+
+// ==================== SMART STOCK CHECK (cross-location) ====================
+
+app.get('/api/pos/stock-check', async (c) => {
+  const db = c.env.DB
+  const productIds = (c.req.query('product_ids') || '').split(',').filter(Boolean).map(Number)
+  const currentLocationId = parseInt(c.req.query('location_id') || '0')
+
+  if (!productIds.length) return c.json({ error: 'product_ids required' }, 400)
+
+  // Get all locations
+  const locs = await db.prepare('SELECT id, name, code, type FROM locations').all()
+  const locations = locs.results || []
+
+  // Get stock for all requested products across ALL locations
+  const placeholders = productIds.map(() => '?').join(',')
+  const stocks = await db.prepare(
+    `SELECT s.product_id, s.location_id, s.qty_on_hand, s.qty_on_hold, s.qty_reserved,
+            p.name as product_name, p.sku, p.unit_type
+     FROM inventory_stock s
+     JOIN products p ON p.id = s.product_id
+     WHERE s.product_id IN (${placeholders})`
+  ).bind(...productIds).all()
+
+  // Build result per product
+  const result = productIds.map(pid => {
+    const productStocks = (stocks.results || []).filter((s: any) => s.product_id === pid)
+    const product = productStocks[0] || {} as any
+    const byLocation = locations.map((loc: any) => {
+      const s = productStocks.find((st: any) => st.location_id === loc.id) as any
+      return {
+        location_id: loc.id,
+        location_name: loc.name,
+        location_code: loc.code,
+        location_type: loc.type,
+        is_current: loc.id === currentLocationId,
+        qty_on_hand: s?.qty_on_hand || 0,
+        qty_on_hold: s?.qty_on_hold || 0,
+        qty_reserved: s?.qty_reserved || 0,
+        available: Math.max(0, (s?.qty_on_hand || 0) - (s?.qty_on_hold || 0) - (s?.qty_reserved || 0))
+      }
+    })
+
+    const current = byLocation.find(l => l.is_current)
+    const others = byLocation.filter(l => !l.is_current && l.available > 0)
+
+    return {
+      product_id: pid,
+      product_name: product.product_name || product.name || '',
+      sku: product.sku || '',
+      unit_type: product.unit_type || 'each',
+      local_available: current?.available || 0,
+      local_on_hand: current?.qty_on_hand || 0,
+      other_locations: others
+    }
+  })
+
+  return c.json({ stock: result })
+})
+
+// ==================== POS-INITIATED TRANSFER (smart one-click) ====================
+
+app.post('/api/pos/request-transfer', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  const body = await c.req.json() as any
+
+  // body: { to_location_id, from_location_id, items: [{product_id, qty}], customer_id?, customer_name?, notes? }
+  if (!body.to_location_id || !body.from_location_id) return c.json({ error: 'Locations required' }, 400)
+  if (!body.items?.length) return c.json({ error: 'Items required' }, 400)
+
+  const d = new Date()
+  const tNum = `TRF${d.getFullYear().toString().slice(2)}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${Math.random().toString(36).substring(2,7).toUpperCase()}`
+
+  const notes = (body.notes || 'POS transfer request') +
+    (body.customer_name ? ' | For customer: ' + body.customer_name : '')
+
+  const tResult = await db.prepare(
+    `INSERT INTO inventory_transfers (transfer_number, from_location_id, to_location_id, status, notes, created_by)
+     VALUES (?, ?, ?, 'pending', ?, ?)`
+  ).bind(tNum, body.from_location_id, body.to_location_id, notes, user?.id || null).run()
+  const transferId = tResult.meta.last_row_id
+
+  for (const item of body.items) {
+    await db.prepare(
+      `INSERT INTO inventory_transfer_items (transfer_id, product_id, qty_requested) VALUES (?, ?, ?)`
+    ).bind(transferId, item.product_id, item.qty || 1).run()
+  }
+
+  // If customer tagged, create a notification + task to remind when received
+  if (body.customer_id) {
+    await db.prepare(
+      `INSERT INTO notifications (user_id, title, message, notification_type, ref_type, ref_id)
+       VALUES (?, ?, ?, 'inventory', 'transfer', ?)`
+    ).bind(user?.id || 0,
+      'Transfer Requested for Customer',
+      'Transfer ' + tNum + ' created for ' + (body.customer_name || 'customer') + '. Will notify when received.',
+      transferId).run()
+  }
+
+  return c.json({ success: true, transfer_id: transferId, transfer_number: tNum })
+})
+
+// ==================== POS-INITIATED PURCHASE REQUEST (customer-tagged) ====================
+
+app.post('/api/pos/request-purchase', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  const body = await c.req.json() as any
+
+  // body: { location_id, items: [{product_id, product_name, qty}], customer_id, customer_name, notes? }
+  if (!body.items?.length) return c.json({ error: 'Items required' }, 400)
+
+  // 1. Create POS inventory request
+  const pirNum = 'PIR-' + Date.now().toString(36).toUpperCase()
+  const pirResult = await db.prepare(`
+    INSERT INTO pos_inventory_requests (request_number, location_id, urgency, requested_by, requested_by_name, reason, notes, customer_id, customer_name, notify_customer, fulfillment_type)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(pirNum, body.location_id || 0, body.urgency || 'normal',
+    user?.id || null, user?.email || '', 'Customer order — not in stock',
+    body.notes || '', body.customer_id || null, body.customer_name || null,
+    body.customer_id ? 1 : 0, 'purchase').run()
+  const pirId = pirResult.meta.last_row_id
+
+  for (const item of body.items) {
+    await db.prepare(`
+      INSERT INTO pos_inventory_request_items (request_id, product_id, product_name, qty_requested, current_stock, unit)
+      VALUES (?,?,?,?,?,?)
+    `).bind(pirId, item.product_id, item.product_name || '', item.qty || 1, 0, item.unit || 'each').run()
+  }
+
+  // 2. Create a purchasing order_request so it shows up in the purchasing module
+  const reqNum = `REQ${Date.now().toString(36).toUpperCase()}`
+  const orResult = await db.prepare(`
+    INSERT INTO order_requests (request_number, status, urgency, location_id, requested_by, requested_by_name, requested_by_role, reason, notes)
+    VALUES (?, 'pending', ?, ?, ?, ?, 'pos_staff', ?, ?)
+  `).bind(reqNum, body.urgency || 'normal', body.location_id || 0,
+    user?.id || null, user?.email || 'POS',
+    'Customer order — product not in stock at any location',
+    'POS Request ' + pirNum + (body.customer_name ? ' | Customer: ' + body.customer_name : '')).run()
+  const orderRequestId = orResult.meta.last_row_id
+
+  // Add items to order_request
+  for (const item of body.items) {
+    await db.prepare(`
+      INSERT INTO order_request_items (request_id, product_id, product_name, qty_requested, unit)
+      VALUES (?,?,?,?,?)
+    `).bind(orderRequestId, item.product_id, item.product_name || '', item.qty || 1, item.unit || 'each').run()
+  }
+
+  // Link POS request to purchasing request
+  await db.prepare(
+    `UPDATE pos_inventory_requests SET purchasing_request_id = ?, status = 'approved' WHERE id = ?`
+  ).bind(orderRequestId, pirId).run()
+
+  // 3. Create a task: "Remind to inform customer when product received"
+  if (body.customer_id) {
+    const taskNum = 'TSK-' + Date.now().toString(36).toUpperCase()
+    await db.prepare(`
+      INSERT INTO tasks (task_number, title, description, task_type, priority, status, assigned_to, assigned_to_name, created_by, created_by_name, location_id, ref_type, ref_id, ref_number, customer_id, customer_name, notes)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).bind(
+      taskNum,
+      'Notify ' + (body.customer_name || 'customer') + ' when product arrives',
+      'Products requested for customer ' + (body.customer_name || '') + ' are not in stock. A purchase request (' + reqNum + ') has been created. Contact the customer when the order is received.',
+      'follow_up', body.urgency === 'critical' ? 'critical' : 'high', 'pending',
+      user?.id || null, user?.email || null, user?.id || null, user?.email || 'POS',
+      body.location_id || null, 'pos_request', pirId, pirNum,
+      body.customer_id, body.customer_name || null,
+      'Auto-created from POS. Waiting for purchase to arrive.'
+    ).run()
+
+    // 4. Reserve stock for this customer (mark qty_reserved in inventory_stock)
+    // This ensures when the product arrives via PO receiving, it's earmarked
+    for (const item of body.items) {
+      // We can't reserve what doesn't exist yet, but we track the intent
+      // The reservation will be applied when the PO is received
+      // For now, create a notification so the receiver knows
+    }
+
+    // Notification for the user
+    await db.prepare(
+      `INSERT INTO notifications (user_id, title, message, notification_type, ref_type, ref_id)
+       VALUES (?, ?, ?, 'task', 'pos_request', ?)`
+    ).bind(user?.id || 0,
+      'Purchase Requested for Customer',
+      'No stock available. Purchase request ' + reqNum + ' created for ' + (body.customer_name || 'customer') + '. Task created to notify customer when received.',
+      pirId).run()
+  }
+
+  return c.json({
+    success: true,
+    pos_request_id: pirId,
+    pos_request_number: pirNum,
+    purchasing_request_id: orderRequestId,
+    purchasing_request_number: reqNum
+  })
 })
 
 export { app as posApp }

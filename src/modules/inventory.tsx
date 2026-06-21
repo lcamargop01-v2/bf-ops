@@ -634,6 +634,35 @@ app.post('/api/inventory/transfers/:id/receive', async (c) => {
   await db.prepare('UPDATE inventory_transfers SET status = "received", received_by = ?, received_at = datetime("now") WHERE id = ?')
     .bind(user.id, id).run()
 
+  // Check if this transfer was linked to a POS inventory request with a tagged customer
+  const linkedPIR = await db.prepare(
+    `SELECT * FROM pos_inventory_requests WHERE transfer_id = ? AND notify_customer = 1 AND customer_id IS NOT NULL`
+  ).bind(id).first() as any
+
+  if (linkedPIR) {
+    // Update the POS request status to fulfilled
+    await db.prepare(
+      `UPDATE pos_inventory_requests SET status = 'fulfilled', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).bind(linkedPIR.id).run()
+
+    // Create notification for the user who requested it
+    if (linkedPIR.requested_by) {
+      await db.prepare(
+        `INSERT INTO notifications (user_id, title, message, notification_type, ref_type, ref_id)
+         VALUES (?, ?, ?, 'inventory', 'transfer', ?)`
+      ).bind(linkedPIR.requested_by,
+        'Transfer Received — Notify Customer',
+        'Transfer for ' + (linkedPIR.customer_name || 'customer') + ' has arrived at ' + (transfer as any).to_location_name + '. Please contact them to let them know their product is ready.',
+        id).run()
+    }
+
+    // Also complete any tasks linked to this POS request
+    await db.prepare(
+      `UPDATE tasks SET status = 'completed', completed_at = CURRENT_TIMESTAMP, notes = COALESCE(notes, '') || ' | Auto-completed: transfer received'
+       WHERE ref_type = 'pos_request' AND ref_id = ? AND status != 'completed'`
+    ).bind(linkedPIR.id).run()
+  }
+
   return c.json({ success: true })
 })
 
@@ -646,6 +675,9 @@ app.post('/api/inventory/transfers/:id/cancel', async (c) => {
 
   const transfer = await db.prepare('SELECT * FROM inventory_transfers WHERE id = ?').bind(id).first() as any
   if (!transfer) return c.json({ error: 'Transfer not found' }, 404)
+  if (transfer.status === 'received' || transfer.status === 'cancelled') {
+    return c.json({ error: 'Transfer already ' + transfer.status + ' — cannot cancel' }, 400)
+  }
 
   const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
 

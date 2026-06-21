@@ -1608,17 +1608,17 @@ app.post('/api/purchasing/pos-requests/:id/transfer', async (c) => {
   const items = await db.prepare('SELECT * FROM pos_inventory_request_items WHERE request_id = ?').bind(id).all()
 
   const trResult = await db.prepare(
-    `INSERT INTO inventory_transfers (transfer_number, from_location_id, to_location_id, status, transfer_type, notes, created_by, created_by_name)
-     VALUES (?, ?, ?, 'pending', 'pos_request', ?, ?, ?)`
-  ).bind(tNum, source_location_id, req.location_id, notes || 'From POS request ' + req.request_number, user?.id || null, user?.email || 'system').run()
+    `INSERT INTO inventory_transfers (transfer_number, from_location_id, to_location_id, status, notes, created_by)
+     VALUES (?, ?, ?, 'pending', ?, ?)`
+  ).bind(tNum, source_location_id, req.location_id, (notes || '') + ' | From POS request ' + req.request_number, user?.id || null).run()
 
   const transferId = trResult.meta.last_row_id
 
   for (const item of (items.results || []) as any[]) {
     await db.prepare(
-      `INSERT INTO inventory_transfer_items (transfer_id, product_id, product_name, qty_requested, unit)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(transferId, item.product_id, item.product_name, item.qty_requested, item.unit || 'each').run()
+      `INSERT INTO inventory_transfer_items (transfer_id, product_id, qty_requested)
+       VALUES (?, ?, ?)`
+    ).bind(transferId, item.product_id, item.qty_requested).run()
   }
 
   // Update POS request
