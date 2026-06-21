@@ -16,12 +16,19 @@ app.use('/api/*', cors())
 
 // Serve static assets from the ASSETS binding (Workers for Platform)
 app.get('/static/*', async (c) => {
-  const assets = (c.env as any).ASSETS
-  if (assets) {
+  try {
+    const assets = (c.env as any).ASSETS
+    if (!assets) {
+      return c.text('ASSETS binding not found. Keys: ' + Object.keys(c.env).join(', '), 500)
+    }
+    if (typeof assets.fetch !== 'function') {
+      return c.text('ASSETS has no fetch. Type: ' + typeof assets + ' Keys: ' + Object.keys(assets).join(', '), 500)
+    }
     const resp = await assets.fetch(c.req.raw)
-    if (resp && resp.status !== 404) return resp
+    return resp
+  } catch (e: any) {
+    return c.text('ASSETS error: ' + (e?.message || String(e)), 500)
   }
-  return c.notFound()
 })
 
 // Global error handler
