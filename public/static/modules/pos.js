@@ -22,7 +22,7 @@ var _s = {
   deliveryDate: '',
   deliveryAddrId: null,
   warnings: [],
-  payMethod: 'cash',
+  payMethod: null, // set dynamically: 'cash' for retail, 'credit_card' for DC
   splitPayments: [],
   productCache: {}, // keyed by id for click lookups
   custPage: 1,
@@ -100,6 +100,14 @@ function getOtherLocation() {
   return _s.locations.find(function(l) { return l.id != current; });
 }
 
+function isDCMode() {
+  return getLocationType() === 'distribution';
+}
+
+function getDefaultPayMethod() {
+  return isDCMode() ? 'credit_card' : 'cash';
+}
+
 // ==================== RENDER: OPEN SESSION ====================
 function renderOpenSession() {
   var el = document.getElementById('pos-app');
@@ -125,11 +133,25 @@ function renderOpenSession() {
         '<p>Start a new shift to begin taking sales</p>' +
         '<div class="pos-session-form">' +
           '<div><label>Location</label><select id="posSessionLoc">' + locOpts + '</select></div>' +
-          '<div><label>Opening Cash ($)</label><input type="number" id="posSessionCash" value="0" min="0" step="0.01"></div>' +
+          '<div id="posSessionCashWrap"><label>Opening Cash ($)</label><input type="number" id="posSessionCash" value="0" min="0" step="0.01"></div>' +
+          '<div id="posSessionDcNotice" style="display:none;background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:10px;font-size:12px;color:#92400E"><i class="fas fa-info-circle"></i> Distribution center — no cash drawer. Card &amp; account payments only.</div>' +
           '<button class="pos-session-open-btn" id="posOpenBtn"><i class="fas fa-play"></i> Open Register</button>' +
         '</div>' +
       '</div>' +
     '</div>';
+
+  // Toggle cash field based on location type
+  function updateSessionLocUI() {
+    var selLoc = parseInt(gv('posSessionLoc')) || 1;
+    var loc = _s.locations.find(function(l) { return l.id == selLoc; });
+    var isDC = loc && loc.type === 'distribution';
+    var cashWrap = document.getElementById('posSessionCashWrap');
+    var dcNotice = document.getElementById('posSessionDcNotice');
+    if (cashWrap) cashWrap.style.display = isDC ? 'none' : '';
+    if (dcNotice) dcNotice.style.display = isDC ? '' : 'none';
+  }
+  on('posSessionLoc', 'change', updateSessionLocUI);
+  updateSessionLocUI();
 
   on('posOpenBtn', 'click', function() {
     var user = getUser();
@@ -906,6 +928,7 @@ function resumeHeld(saleId) {
 // ==================== PAYMENT FLOW ====================
 function openPayment() {
   if (_s.cart.length === 0) return;
+  _s.payMethod = getDefaultPayMethod();
   var totals = calcTotals();
   var canChargeAccount = _s.customer && _s.customerAcct && _s.customerAcct.status !== 'suspended';
   var acctCls = !canChargeAccount ? ' style="opacity:0.4;pointer-events:none"' : '';
@@ -917,13 +940,14 @@ function openPayment() {
       (_s.customer ? '<div style="font-size:13px;color:var(--pos-gray-500)">' + esc(_s.customer.business_name || '') + '</div>' : '') +
     '</div>' +
     '<div class="pos-pay-methods">' +
-      '<div class="pos-pay-method active" data-method="cash"><i class="fas fa-money-bill-wave"></i><span>Cash</span></div>' +
-      '<div class="pos-pay-method" data-method="credit_card"><i class="fas fa-credit-card"></i><span>Credit Card</span></div>' +
+      (isDCMode() ? '' : '<div class="pos-pay-method' + (!isDCMode() ? ' active' : '') + '" data-method="cash"><i class="fas fa-money-bill-wave"></i><span>Cash</span></div>') +
+      '<div class="pos-pay-method' + (isDCMode() ? ' active' : '') + '" data-method="credit_card"><i class="fas fa-credit-card"></i><span>Credit Card</span></div>' +
       '<div class="pos-pay-method" data-method="debit_card"><i class="far fa-credit-card"></i><span>Debit Card</span></div>' +
-      '<div class="pos-pay-method" data-method="check"><i class="fas fa-money-check"></i><span>Check</span></div>' +
+      (isDCMode() ? '' : '<div class="pos-pay-method" data-method="check"><i class="fas fa-money-check"></i><span>Check</span></div>') +
       '<div class="pos-pay-method" data-method="account"' + acctCls + '><i class="fas fa-building"></i><span>On Account</span></div>' +
-      '<div class="pos-pay-method" data-method="split"><i class="fas fa-divide"></i><span>Split</span></div>' +
+      (isDCMode() ? '' : '<div class="pos-pay-method" data-method="split"><i class="fas fa-divide"></i><span>Split</span></div>') +
     '</div>' +
+    (isDCMode() ? '<div style="background:#FEF3C7;border-radius:8px;padding:8px 12px;font-size:11px;color:#92400E;margin-bottom:8px;text-align:center"><i class="fas fa-warehouse"></i> DC mode — card &amp; account payments only</div>' : '') +
     '<div id="posPayDetails"></div>';
 
   showModal('Payment', html,

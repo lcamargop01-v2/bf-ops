@@ -473,6 +473,8 @@ app.post('/api/pos/sales', async (c) => {
         .bind(orderId, item.product_id, item.quantity).run()
     }
     await db.prepare('UPDATE pos_sales SET order_id = ? WHERE id = ?').bind(orderId, saleId).run()
+    // Pickup orders: mark source but set status to 'confirmed' so they don't appear in unrouted delivery queue
+    await db.prepare("UPDATE orders SET source = 'pos', status = 'confirmed' WHERE id = ?").bind(orderId).run()
 
   } else if (fulfillment === 'delivery' && body.customer_id) {
     // Delivery from DC (or same-location delivery)
@@ -492,6 +494,8 @@ app.post('/api/pos/sales', async (c) => {
         .bind(orderId, item.product_id, item.quantity).run()
     }
     await db.prepare('UPDATE pos_sales SET order_id = ? WHERE id = ?').bind(orderId, saleId).run()
+    // Delivery orders: source=pos, keep status='new' so they appear as unrouted in logistics
+    await db.prepare("UPDATE orders SET source = 'pos' WHERE id = ?").bind(orderId).run()
 
   } else if (body.delivery_requested && body.customer_id) {
     // Legacy: simple same-location delivery
@@ -508,6 +512,8 @@ app.post('/api/pos/sales', async (c) => {
         .bind(orderId, item.product_id, item.quantity).run()
     }
     await db.prepare('UPDATE pos_sales SET order_id = ? WHERE id = ?').bind(orderId, saleId).run()
+    // Legacy delivery: source=pos, keep status='new' for logistics routing
+    await db.prepare("UPDATE orders SET source = 'pos' WHERE id = ?").bind(orderId).run()
   }
 
   return c.json({
@@ -1636,6 +1642,28 @@ app.get('/api/pos/stock-reserve/:locationId/pending', async (c) => {
     ORDER BY r.created_at DESC LIMIT 50
   `).bind(locationId, locationId).all<any>()
   return c.json(rows.results || [])
+})
+
+// ==================== DARTS SYNC STATUS ====================
+app.put('/api/pos/darts-sync/:type/:id', async (c) => {
+  const db = c.env.DB
+  const type = c.req.param('type') // 'sale' or 'order'
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+  const synced = body.synced ? 1 : 0
+  const user = body.user_name || 'Unknown'
+  const now = new Date().toISOString()
+
+  if (type === 'sale') {
+    await db.prepare('UPDATE pos_sales SET darts_synced = ?, darts_synced_at = ?, darts_synced_by = ? WHERE id = ?')
+      .bind(synced, synced ? now : null, synced ? user : null, id).run()
+  } else if (type === 'order') {
+    await db.prepare('UPDATE orders SET darts_synced = ?, darts_synced_at = ?, darts_synced_by = ? WHERE id = ?')
+      .bind(synced, synced ? now : null, synced ? user : null, id).run()
+  } else {
+    return c.json({ error: 'Invalid type' }, 400)
+  }
+  return c.json({ success: true, synced })
 })
 
 export { app as posApp }
