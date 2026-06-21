@@ -15525,7 +15525,7 @@ async function whShowChecklist(routeId) {
           const stopDone = s.all_checked && items.length > 0;
           return `<div class="wh-checklist-stop ${stopDone?'done':''}" id="whCLStop_${s.stop_id}">
             <div class="wh-checklist-stop-hdr" onclick="this.parentElement.classList.toggle('collapsed')">
-              <div class="wh-checklist-stop-num ${stopDone?'done':''}">${stopDone?'<i class=\\'fas fa-check\\'></i>':i+1}</div>
+              <div class="wh-checklist-stop-num ${stopDone?'done':''}">${stopDone?'<i class="fas fa-check"></i>':i+1}</div>
               <div class="wh-checklist-stop-info">
                 <div class="wh-checklist-stop-name">${escapeHtml(s.business_name)}</div>
                 <div class="wh-checklist-stop-meta">${s.order_number} &bull; ${s.street||''} ${s.city||''}</div>
