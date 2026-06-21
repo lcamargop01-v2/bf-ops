@@ -180,14 +180,6 @@ async function invRender() {
     root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
     var html = await invRenderLosses();
     root.innerHTML = invRenderNav() + html;
-  } else if (invPage === 'holds') {
-    root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
-    var html = await invRenderHolds();
-    root.innerHTML = invRenderNav() + html;
-  } else if (invPage === 'reservations') {
-    root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
-    var html = await invRenderReservations();
-    root.innerHTML = invRenderNav() + html;
   } else if (invPage === 'audit') {
     root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
     var html = await invRenderAuditLog();
@@ -215,8 +207,7 @@ function invRenderNav() {
     { id: 'transfers', icon: 'fa-truck-ramp-box', label: 'Transfers' },
     { id: 'batches', icon: 'fa-layer-group', label: 'Batches' },
     { id: 'losses', icon: 'fa-triangle-exclamation', label: 'Losses' },
-    { id: 'holds', icon: 'fa-lock', label: 'Holds' },
-    { id: 'reservations', icon: 'fa-bookmark', label: 'Reserved' },
+
     { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' },
     { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' }
   ];
@@ -268,8 +259,8 @@ function invRenderDashboard() {
       (card.label === 'Low Stock' ? "invNav('stock')" :
        card.label === 'Active Transfers' ? "invNav('transfers')" :
        card.label === 'Losses (30d)' ? "invNav('losses')" :
-       card.label === 'On Hold' ? "invNav('holds')" :
-       card.label === 'Reserved' ? "invNav('reservations')" : '') + '">' +
+       card.label === 'On Hold' ? "invNav('stock')" :
+       card.label === 'Reserved' ? "invNav('stock')" : '') + '">' +
       '<div class="inv-stat-icon" style="background:' + card.color + '20;color:' + card.color + '"><i class="fas ' + card.icon + '"></i></div>' +
       '<div class="inv-stat-info"><div class="inv-stat-value">' + card.value + '</div><div class="inv-stat-label">' + card.label + '</div></div>' +
       '</div>';
@@ -801,102 +792,7 @@ async function invRenderLosses() {
   return html;
 }
 
-// ==================== HOLDS ====================
-async function invRenderHolds() {
-  var resp = await invAPI.get('/api/inventory/holds?active=1', { headers: invHeaders() });
-  var holds = resp.data.holds || [];
-
-  var html = '<div class="inv-section">';
-  html += '<div class="inv-section-header"><h2><i class="fas fa-lock"></i> Active Holds</h2>';
-  if (invCanEdit('holds')) html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewHold()"><i class="fas fa-plus"></i> Place Hold</button>';
-  html += '</div>';
-
-  if (holds.length === 0) {
-    html += '<div class="inv-empty"><p>No active holds.</p></div>';
-  } else {
-    html += '<div class="inv-table-wrap"><table class="inv-table">';
-    html += '<thead><tr><th>Product</th><th>Location</th><th>Qty</th><th>Reason</th><th>Reference</th><th>Notes</th><th>Created</th><th></th></tr></thead><tbody>';
-    holds.forEach(function(h) {
-      html += '<tr>' +
-        '<td><strong>' + escH(h.product_name) + '</strong><br><span class="inv-muted">' + escH(h.sku || '') + '</span></td>' +
-        '<td><span class="inv-loc-badge">' + escH(h.location_name) + '</span></td>' +
-        '<td><span class="inv-hold-badge">' + h.qty + '</span> ' + escH(h.unit_type || '') + '</td>' +
-        '<td>' + escH(h.reason) + '</td>' +
-        '<td class="inv-muted">' + (h.reference_type ? h.reference_type + ' #' + h.reference_id : '—') + '</td>' +
-        '<td class="inv-muted">' + escH(h.notes || '—') + '</td>' +
-        '<td>' + invFormatDate(h.created_at) + '</td>' +
-        '<td><button class="inv-btn inv-btn-xs inv-btn-success" onclick="invReleaseHold(' + h.id + ')"><i class="fas fa-unlock"></i> Release</button></td>' +
-        '</tr>';
-    });
-    html += '</tbody></table></div>';
-  }
-  html += '</div>';
-  return html;
-}
-
-async function invReleaseHold(id) {
-  if (!confirm('Release this hold?')) return;
-  try {
-    await invAPI.post('/api/inventory/holds/' + id + '/release', {}, { headers: invHeaders() });
-    invToast('Hold released');
-    invRender();
-  } catch(e) { invToast('Release failed: ' + (e.response?.data?.error || e.message), 'error'); }
-}
-
-// ==================== RESERVATIONS ====================
-async function invRenderReservations() {
-  var resp = await invAPI.get('/api/inventory/reservations?status=active', { headers: invHeaders() });
-  var reservations = resp.data.reservations || [];
-
-  var html = '<div class="inv-section">';
-  html += '<div class="inv-section-header"><h2><i class="fas fa-bookmark"></i> Active Reservations</h2>';
-  if (invCanEdit('reservations')) html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewReservation()"><i class="fas fa-plus"></i> Reserve</button>';
-  html += '</div>';
-
-  if (reservations.length === 0) {
-    html += '<div class="inv-empty"><p>No active reservations.</p></div>';
-  } else {
-    html += '<div class="inv-table-wrap"><table class="inv-table">';
-    html += '<thead><tr><th>Product</th><th>Location</th><th>Qty</th><th>Customer</th><th>Order</th><th>Notes</th><th>Created</th><th></th></tr></thead><tbody>';
-    reservations.forEach(function(r) {
-      html += '<tr>' +
-        '<td><strong>' + escH(r.product_name) + '</strong></td>' +
-        '<td><span class="inv-loc-badge">' + escH(r.location_name) + '</span></td>' +
-        '<td><span class="inv-res-badge">' + r.qty + '</span></td>' +
-        '<td>' + escH(r.customer_name || '—') + '</td>' +
-        '<td>' + escH(r.order_number || '—') + '</td>' +
-        '<td class="inv-muted">' + escH(r.notes || '—') + '</td>' +
-        '<td>' + invFormatDate(r.created_at) + '</td>' +
-        '<td>' +
-        '<button class="inv-btn inv-btn-xs inv-btn-success" onclick="invFulfillReservation(' + r.id + ')"><i class="fas fa-check"></i></button> ' +
-        '<button class="inv-btn inv-btn-xs inv-btn-danger" onclick="invCancelReservation(' + r.id + ')"><i class="fas fa-times"></i></button>' +
-        '</td></tr>';
-    });
-    html += '</tbody></table></div>';
-  }
-  html += '</div>';
-  return html;
-}
-
-async function invFulfillReservation(id) {
-  if (!confirm('Fulfill this reservation? Stock will be deducted.')) return;
-  try {
-    await invAPI.post('/api/inventory/reservations/' + id + '/fulfill', {}, { headers: invHeaders() });
-    invToast('Reservation fulfilled');
-    invRender();
-  } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
-}
-
-async function invCancelReservation(id) {
-  if (!confirm('Cancel this reservation?')) return;
-  try {
-    await invAPI.post('/api/inventory/reservations/' + id + '/cancel', {}, { headers: invHeaders() });
-    invToast('Reservation cancelled');
-    invRender();
-  } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
-}
-
-// ==================== AUDIT LOG ====================
+// ==================== AUDIT LOG ==
 async function invRenderAuditLog() {
   var url = '/api/inventory/audit?limit=100';
   if (invSelectedLocation) url += '&location_id=' + invSelectedLocation;
@@ -1518,76 +1414,7 @@ async function invDoSplitBatch(batchId) {
   } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
-// New Hold modal
-function invShowNewHold() {
-  var body = invProductPickerHTML('invHoldProduct') +
-    invLocationPickerHTML('invHoldLocation', 'Location') +
-    '<div class="inv-form-group"><label>Quantity</label><input id="invHoldQty" type="number" class="inv-input" min="1" inputmode="numeric"></div>' +
-    '<div class="inv-form-group"><label>Reason</label><select id="invHoldReason" class="inv-select">' +
-    '<option value="manual">Manual hold</option><option value="order">Order hold</option><option value="route">Route loading</option><option value="transfer">Transfer</option></select></div>' +
-    '<div class="inv-form-group"><label>Notes</label><textarea id="invHoldNotes" class="inv-input" rows="2"></textarea></div>';
 
-  var footer = '<button class="inv-btn inv-btn-primary" onclick="invDoCreateHold()"><i class="fas fa-lock"></i> Place Hold</button>';
-  invShowModal('<i class="fas fa-lock"></i> Place Hold', body, footer);
-}
-
-async function invDoCreateHold() {
-  var productId = parseInt(document.getElementById('invHoldProduct').value);
-  var locationId = parseInt(document.getElementById('invHoldLocation').value);
-  var qty = parseInt(document.getElementById('invHoldQty').value);
-  var reason = document.getElementById('invHoldReason').value;
-  var notes = document.getElementById('invHoldNotes').value;
-
-  if (!productId || !locationId || !qty) { invToast('Fill in all fields', 'warning'); return; }
-
-  try {
-    await invAPI.post('/api/inventory/holds', { product_id: productId, location_id: locationId, qty: qty, reason: reason, notes: notes }, { headers: invHeaders() });
-    invToast('Hold placed');
-    invCloseModal();
-    invRender();
-  } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
-}
-
-// New Reservation modal
-function invShowNewReservation() {
-  var body = invProductPickerHTML('invResProduct') +
-    invLocationPickerHTML('invResLocation', 'Location') +
-    '<div class="inv-form-group"><label>Quantity</label><input id="invResQty" type="number" class="inv-input" min="1" inputmode="numeric"></div>' +
-    '<div class="inv-form-group"><label>Customer (optional)</label><input id="invResCustomer" type="text" placeholder="Search customer..." class="inv-input" oninput="invSearchCustomers(this.value)">' +
-    '<select id="invResCustomerId" class="inv-select"><option value="">— No customer —</option></select></div>' +
-    '<div class="inv-form-group"><label>Notes</label><textarea id="invResNotes" class="inv-input" rows="2"></textarea></div>';
-
-  var footer = '<button class="inv-btn inv-btn-primary" onclick="invDoCreateReservation()"><i class="fas fa-bookmark"></i> Reserve</button>';
-  invShowModal('<i class="fas fa-bookmark"></i> Reserve Inventory', body, footer);
-}
-
-async function invSearchCustomers(term) {
-  try {
-    var resp = await invAPI.get('/api/customers?search=' + encodeURIComponent(term), { headers: invHeaders() });
-    var sel = document.getElementById('invResCustomerId');
-    sel.innerHTML = '<option value="">— No customer —</option>';
-    (resp.data.customers || []).forEach(function(c) {
-      sel.innerHTML += '<option value="' + c.id + '">' + c.business_name + '</option>';
-    });
-  } catch(e) {}
-}
-
-async function invDoCreateReservation() {
-  var productId = parseInt(document.getElementById('invResProduct').value);
-  var locationId = parseInt(document.getElementById('invResLocation').value);
-  var qty = parseInt(document.getElementById('invResQty').value);
-  var customerId = parseInt(document.getElementById('invResCustomerId').value) || null;
-  var notes = document.getElementById('invResNotes').value;
-
-  if (!productId || !locationId || !qty) { invToast('Fill in all fields', 'warning'); return; }
-
-  try {
-    await invAPI.post('/api/inventory/reservations', { product_id: productId, location_id: locationId, qty: qty, customer_id: customerId, notes: notes }, { headers: invHeaders() });
-    invToast('Reservation created');
-    invCloseModal();
-    invRender();
-  } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
-}
 
 // ==================== BATCH IMAGES ====================
 

@@ -360,8 +360,7 @@ const MODULE_FEATURES: Record<string, { id: string; label: string }[]> = {
     { id: 'transfers', label: 'Transfers' },
     { id: 'batches', label: 'Batches' },
     { id: 'losses', label: 'Losses' },
-    { id: 'holds', label: 'Holds' },
-    { id: 'reservations', label: 'Reserved' },
+
     { id: 'audit', label: 'Audit Log' },
     { id: 'categories', label: 'Categories' },
   ],
