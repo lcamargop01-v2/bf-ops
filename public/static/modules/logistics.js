@@ -1709,6 +1709,11 @@ function navigate(page, params = {}) {
   // Check permission before navigating
   var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
   if (!_ca('logistics', page)) { showToast('You don\'t have access to this page', 'warning'); return; }
+  // Ticket Review temporarily admin-only — sales reps must use POS ordering
+  if (page === 'ticket_review') {
+    var _nu = null; try { _nu = JSON.parse(localStorage.getItem('bf_ops_user') || 'null'); } catch(e) {}
+    if (!_nu || _nu.role !== 'admin') { showToast('Ticket Review is temporarily disabled — please use POS to enter orders', 'info'); return; }
+  }
   // Cleanup all maps before navigation to prevent stale state
   cleanupAllMaps();
   currentPage = page;
