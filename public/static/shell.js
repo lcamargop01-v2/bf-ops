@@ -1457,7 +1457,7 @@ async function avSavePreferences(userId) {
     try {
       currentUser = JSON.parse(savedUser);
       setToken(savedToken);
-      // Restore permissions from localStorage
+      // Restore permissions from localStorage (show UI immediately)
       var savedPerms = localStorage.getItem('bf_ops_permissions');
       if (savedPerms) {
         _userPermissions = JSON.parse(savedPerms);
@@ -1474,6 +1474,20 @@ async function avSavePreferences(userId) {
       } else {
         renderHome();
       }
+      // Background refresh permissions from server (picks up admin changes)
+      API.get('/permissions/me').then(function(resp) {
+        var freshPerms = resp.data.permissions || 'all';
+        var freshFin = resp.data.can_view_financials !== undefined ? !!resp.data.can_view_financials : true;
+        if (JSON.stringify(freshPerms) !== JSON.stringify(_userPermissions) || freshFin !== _canViewFinancials) {
+          _userPermissions = freshPerms;
+          _canViewFinancials = freshFin;
+          window._userPermissions = _userPermissions;
+          window._canViewFinancials = _canViewFinancials;
+          localStorage.setItem('bf_ops_permissions', JSON.stringify(_userPermissions));
+          localStorage.setItem('bf_ops_can_view_financials', JSON.stringify(_canViewFinancials));
+          console.log('[Shell] Permissions refreshed from server');
+        }
+      }).catch(function() { /* ignore — permissions stay from cache */ });
     } catch(e) {
       setToken(null);
       renderLogin();

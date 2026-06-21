@@ -961,12 +961,15 @@ function invActionIcon(action) {
 // ==================== CATEGORY CONSOLIDATION PAGE ====================
 
 async function invRenderCategoriesPage() {
+  console.log('[Inventory] rendering categories page, cached:', !!invRecatData);
   // Load preview data if not already loaded
   if (!invRecatData) {
     try {
       var resp = await invAPI.get('/api/inventory/products/recategorize-preview', { headers: invHeaders() });
       invRecatData = resp.data;
+      console.log('[Inventory] categories data loaded:', (invRecatData.products || []).length, 'products');
     } catch(e) {
+      console.error('[Inventory] categories API error:', e);
       return '<div class="inv-section"><div class="inv-empty"><i class="fas fa-exclamation-triangle" style="font-size:36px;color:#DC2626;display:block;margin-bottom:12px"></i>' +
         '<h3>Failed to load classification data</h3><p>' + (e.response?.data?.error || e.message) + '</p>' +
         '<button class="inv-btn inv-btn-primary" onclick="invRecatData=null;invRender()"><i class="fas fa-redo"></i> Retry</button></div></div>';
