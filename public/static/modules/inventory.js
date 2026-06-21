@@ -2095,6 +2095,45 @@ async function invShowProductDetail(productId) {
       });
     }
 
+    // Cost History section (financial permission required)
+    if (invCanViewFin()) {
+      try {
+        var chResp = await invAPI.get('/api/purchasing/cost-history/' + productId, { headers: invHeaders() });
+        var costHistory = chResp.data.history || [];
+        if (costHistory.length > 0) {
+          body += '<h4 style="margin-top:16px"><i class="fas fa-chart-line" style="color:#6366F1"></i> Cost History</h4>';
+          body += '<table class="inv-table inv-table-compact"><thead><tr><th>Date</th><th>Old Cost</th><th>New Cost</th><th>Change</th><th>Source</th><th>Reference</th></tr></thead><tbody>';
+          costHistory.forEach(function(ch) {
+            var diff = ch.new_cost - ch.old_cost;
+            var diffPct = ch.old_cost > 0 ? ((diff / ch.old_cost) * 100).toFixed(1) : '—';
+            var diffClass = diff > 0 ? 'color:#DC2626' : diff < 0 ? 'color:#059669' : '';
+            var diffSign = diff > 0 ? '+' : '';
+            var refLabel = '';
+            if (ch.po_number) refLabel += '<span class="inv-muted">PO ' + escH(ch.po_number) + '</span>';
+            if (ch.bill_number || ch.bill_id) refLabel += (refLabel ? ' → ' : '') + '<span style="color:#2563EB">Bill #' + (ch.bill_number || ch.bill_id) + '</span>';
+            if (ch.supplier_name) refLabel += (refLabel ? '<br>' : '') + '<span class="inv-muted" style="font-size:11px">' + escH(ch.supplier_name) + '</span>';
+            if (!refLabel) refLabel = '<span class="inv-muted">—</span>';
+            body += '<tr>' +
+              '<td style="white-space:nowrap">' + invFormatDate(ch.created_at) + '</td>' +
+              '<td class="text-right">$' + (ch.old_cost || 0).toFixed(2) + '</td>' +
+              '<td class="text-right"><strong>$' + (ch.new_cost || 0).toFixed(2) + '</strong></td>' +
+              '<td class="text-right" style="' + diffClass + '">' + diffSign + '$' + Math.abs(diff).toFixed(2) + (diffPct !== '—' ? ' <span style="font-size:11px">(' + diffSign + diffPct + '%)</span>' : '') + '</td>' +
+              '<td><span class="inv-cat-badge inv-cat-' + (ch.source === 'bill' ? 'supplement' : ch.source === 'manual' ? 'grain' : 'other') + '">' + escH(ch.source || 'bill') + '</span></td>' +
+              '<td>' + refLabel + '</td>' +
+              '</tr>';
+          });
+          body += '</tbody></table>';
+        } else {
+          body += '<h4 style="margin-top:16px"><i class="fas fa-chart-line" style="color:#6366F1"></i> Cost History</h4>';
+          body += '<p class="inv-muted" style="font-size:13px">No cost changes recorded yet. Costs update automatically when supplier bills are approved.</p>';
+        }
+      } catch(e) {
+        // Cost history endpoint might not be available — silently skip
+        body += '<h4 style="margin-top:16px"><i class="fas fa-chart-line" style="color:#6366F1"></i> Cost History</h4>';
+        body += '<p class="inv-muted" style="font-size:13px">No cost changes recorded yet. Costs update automatically when supplier bills are approved.</p>';
+      }
+    }
+
     var footer = invCanEdit('products') ? '<button class="inv-btn inv-btn-primary" onclick="invCloseModal();invShowEditProduct(' + productId + ')"><i class="fas fa-pen"></i> Edit Product</button>' : '';
     invShowModal('<i class="fas fa-box"></i> ' + escH(pName), body, footer);
 

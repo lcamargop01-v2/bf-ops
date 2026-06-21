@@ -885,6 +885,13 @@ async function poSubmitReceiving(poId) {
 
     poToast('Items received! Status: ' + poStatusLabel(resp.data.new_status));
     poNav('detail', poId);
+
+    // Prompt to create a bill from supplier invoice
+    setTimeout(function() {
+      if (confirm('Items received successfully!\n\nDo you have the supplier\'s invoice? Create a bill now to record the actual costs.')) {
+        poShowCreateBill(poId);
+      }
+    }, 500);
   } catch(e) {
     poToast('Receiving failed: ' + (e.response?.data?.error || e.message), 'error');
   }
