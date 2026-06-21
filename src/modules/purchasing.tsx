@@ -1002,7 +1002,7 @@ app.get('/api/purchasing/dashboard', async (c) => {
     `SELECT status, COUNT(*) as cnt, order_type FROM purchase_orders GROUP BY status, order_type`
   ).all()
 
-  // Arriving soon (expected_date in next 7 days, not received)
+  // Arriving soon (expected in next 7 days OR no date set — all active POs need attention)
   const arrivingSoon = await db.prepare(
     `SELECT po.*, s.name as supplier_name, l.name as location_name, l.code as location_code,
       (SELECT COALESCE(SUM(qty_ordered), 0) FROM po_items WHERE po_id = po.id) as total_qty_ordered,
@@ -1012,10 +1012,9 @@ app.get('/api/purchasing/dashboard', async (c) => {
      LEFT JOIN suppliers s ON po.supplier_id = s.id
      JOIN locations l ON po.location_id = l.id
      WHERE po.status IN ('ordered','in_transit','delayed','partial')
-       AND po.expected_date IS NOT NULL
-       AND po.expected_date >= date('now')
-       AND po.expected_date <= date('now', '+7 days')
-     ORDER BY po.expected_date ASC`
+       AND (po.expected_date IS NULL
+            OR (po.expected_date >= date('now') AND po.expected_date <= date('now', '+7 days')))
+     ORDER BY po.expected_date IS NULL, po.expected_date ASC`
   ).all()
 
   // Active POs (not received/cancelled/claim)
@@ -1087,11 +1086,11 @@ app.get('/api/purchasing/arriving', async (c) => {
     JOIN po_items pi ON pi.po_id = po.id
     LEFT JOIN products p ON pi.product_id = p.id
     WHERE po.status IN ('ordered','in_transit','delayed','partial')
-      AND po.expected_date IS NOT NULL
-      AND po.expected_date <= date('now', '+' || ? || ' days')`
+      AND (po.expected_date IS NULL
+           OR po.expected_date <= date('now', '+' || ? || ' days'))`
   const binds: any[] = [days]
   if (locationId) { q += ' AND po.location_id = ?'; binds.push(parseInt(locationId)) }
-  q += ' ORDER BY po.expected_date ASC, po.id'
+  q += ' ORDER BY po.expected_date IS NULL, po.expected_date ASC, po.id'
 
   const result = await db.prepare(q).bind(...binds).all()
   return c.json({ arriving: result.results || [] })
