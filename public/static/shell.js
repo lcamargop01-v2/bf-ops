@@ -293,6 +293,8 @@ async function doLogin(e) {
     initPushNotifications();
     // Feature request FAB
     initFeatureRequestBtn();
+    // AI Help Assistant FAB
+    initHelpAssistant();
     // Auto-navigate to user's default landing if configured
     if (currentUser.default_module) {
       launchModule(currentUser.default_module, currentUser.default_page || null);
@@ -902,6 +904,683 @@ function closeShellModal() {
 }
 
 // ==================== FEATURE REQUEST (EVERY PAGE) ====================
+
+// ==================== AI HELP ASSISTANT ====================
+
+var _helpOpen = false;
+var _helpChatHistory = [];
+
+// Comprehensive quick-tips per module + page
+var HELP_TIPS = {
+  _modules: {
+    logistics: { title: 'Logistics', desc: 'Deliveries, orders, routes, fleet, and standing order text confirmations.' },
+    inventory: { title: 'Inventory', desc: 'Stock levels, counts, transfers between locations.' },
+    ordering: { title: 'Purchasing', desc: 'Purchase orders, supplier management, receiving shipments.' },
+    crm: { title: 'CRM', desc: 'Customer relationships, sales pipeline, contacts.' },
+    reports: { title: 'Reports', desc: 'Reports and analytics.' },
+    pos: { title: 'Point of Sale', desc: 'Walk-in register, payments.' },
+    tasks: { title: 'Tasks', desc: 'Team tasks, notifications, follow-ups.' }
+  },
+  logistics: {
+    today: {
+      title: '📋 Today — Your Morning Briefing',
+      tips: [
+        '🔴 RED items = need you RIGHT NOW (someone replied with changes)',
+        '🟡 YELLOW items = need attention soon (reminders to send, etc)',
+        '🟢 GREEN banner = nothing needs you, you\'re all caught up!',
+        '🚀 Tap "Start Today\'s Deliveries" to run the autopilot wizard step by step',
+        '⏰ This page refreshes automatically every 30 seconds',
+        '📱 On your phone? Use the 4 big buttons at the bottom'
+      ]
+    },
+    dashboard: {
+      title: '📊 Dashboard — Quick Overview',
+      tips: [
+        'See today\'s delivery count, pending orders, and recent activity',
+        'Check which routes are assigned and which need drivers',
+        'Quick stats show you the big picture at a glance'
+      ]
+    },
+    orders: {
+      title: '📦 Orders — Manage Deliveries',
+      tips: [
+        'Tap any order to see full details',
+        'Use filters at the top to find specific orders (by date, status, customer)',
+        'Tap "+" to create a new order manually',
+        'Status colors: Blue=new, Yellow=in progress, Green=delivered, Red=problem',
+        'Tap the customer name to see their info'
+      ]
+    },
+    ticket_review: {
+      title: '🎫 Ticket Review — Prepare Orders',
+      tips: [
+        'Left side: list of orders to prepare',
+        'Right side: order details with items',
+        'Scan barcodes to mark items ready',
+        'Green check = item scanned and ready',
+        'When all items scanned, order is ready to load on truck'
+      ]
+    },
+    schedule: {
+      title: '📅 Schedule — Delivery Calendar',
+      tips: [
+        'See which days have deliveries planned',
+        'Tap a day to see the orders for that date',
+        'Colors show how many orders per day',
+        'Use arrows to go to next/previous month'
+      ]
+    },
+    routes: {
+      title: '🗺️ Routes — Delivery Routes',
+      tips: [
+        'Each route = a truck going out to deliver',
+        'Tap a route to see all its stops (customers)',
+        'Drag and drop to reorder stops',
+        'Assign a driver and truck to each route',
+        'Status shows if route is planned, in progress, or completed'
+      ]
+    },
+    route_builder: {
+      title: '🏗️ Route Builder — Build Routes on Map',
+      tips: [
+        'Visual map showing all customers',
+        'Drag customers onto a route to add them',
+        'See distances between stops',
+        'Color dots = different zones',
+        'Save when you\'re done arranging'
+      ]
+    },
+    zones: {
+      title: '🗺️ Zones — Delivery Areas',
+      tips: [
+        'Zones are delivery areas (like neighborhoods)',
+        'Each zone has delivery days (e.g., Mon/Wed/Fri)',
+        'Customers are assigned to zones by their address',
+        'Zone colors help you see them on maps',
+        'Edit a zone to change its delivery days'
+      ]
+    },
+    recurring: {
+      title: '🔄 Recurring — Standing Orders Setup',
+      tips: [
+        'Set up what customers get every week/month',
+        'Pick the customer, their items, and how often',
+        'These auto-populate when you generate confirmation runs',
+        'Edit anytime — changes take effect on next run'
+      ]
+    },
+    standing_orders: {
+      title: '📱 Standing Orders — Text Confirmations',
+      tips: [
+        '1️⃣ Tap "New Confirmation Run" and pick the delivery date',
+        '2️⃣ System pulls customers from zones that deliver that day',
+        '3️⃣ Tap "AI Messages" — AI writes a personal text for each customer',
+        '4️⃣ Review messages if you want (or trust the AI)',
+        '5️⃣ Tap "Send" — texts go out via SMS',
+        '6️⃣ Customers reply: C=confirm, changes, or N=skip',
+        '7️⃣ Send reminders to people who don\'t reply',
+        '8️⃣ Confirmed orders auto-create!',
+        '💡 TIP: Use the "Today" page autopilot wizard — it walks you through each step with one big button!'
+      ]
+    },
+    so_dashboard: {
+      title: '📺 SO Dashboard — Standing Orders at a Glance',
+      tips: [
+        'See all active confirmation runs and their status',
+        '✅ = Confirmed, 🟡 = Waiting, 🟣 = Changed order, 🔴 = Declined, ⚪ = No reply',
+        'Yellow highlighted rows = someone replied with changes — review them!',
+        'Tap "View" to see the text message thread with a customer',
+        'Tap ✅ or ❌ to approve or decline a changed order',
+        '"Run Daily Digest" scans everything and creates tasks for the team',
+        'Seasonal Snapshot at the bottom shows who\'s arriving/departing'
+      ]
+    },
+    seasonality: {
+      title: '☀️ Seasonality — Seasonal Customers',
+      tips: [
+        'Some customers are only here part of the year (snowbirds)',
+        'Set their arrival and departure months',
+        'System auto-detects when they\'re arriving/departing soon',
+        'Tap "Arrived" to send welcome-back text and add to deliveries',
+        'Tap "Departed" to send farewell text and remove from runs',
+        'Filter tabs: In Season, Arriving Soon, Departing Soon, Out of Season',
+        'Season Log shows history of all arrivals/departures'
+      ]
+    },
+    customers: {
+      title: '👥 Customers — Customer Directory',
+      tips: [
+        'Search by name, phone, or zone',
+        'Tap a customer to see all their details',
+        'Edit phone, address, delivery notes',
+        'See their order history and standing order setup',
+        'Zone assignment determines which delivery days they get'
+      ]
+    },
+    products: {
+      title: '📦 Products — Product Catalog',
+      tips: [
+        'All products with names, SKUs, categories, and prices',
+        'Categories: Horse, Hay, Feed, Shavings, etc.',
+        'Search by name or SKU',
+        'Edit prices, units, and details'
+      ]
+    },
+    trucks: {
+      title: '🚛 Fleet — Trucks',
+      tips: [
+        'List of all delivery trucks',
+        'See truck status, capacity, and assigned driver',
+        'Track maintenance schedules'
+      ]
+    },
+    drivers_mgmt: {
+      title: '🪪 Drivers — Driver Management',
+      tips: [
+        'Assign drivers to trucks and routes',
+        'See driver schedules and availability',
+        'Driver contact info and license details'
+      ]
+    },
+    maintenance: {
+      title: '🔧 Maintenance — Fleet Maintenance',
+      tips: [
+        'Track service schedules for each truck',
+        'Log oil changes, tire rotations, repairs',
+        'Set reminders for upcoming maintenance'
+      ]
+    },
+    warehouse: {
+      title: '🏭 Warehouse — Warehouse Ops',
+      tips: [
+        'Manage warehouse packing operations',
+        'Track what\'s been picked and packed for delivery',
+        'Scan items to verify packing accuracy'
+      ]
+    },
+    driver: {
+      title: '🚗 Driver View — For Drivers',
+      tips: [
+        'Shows driver their route and stops for today',
+        'Navigation to each stop',
+        'Mark deliveries as complete',
+        'Customer notes visible for each stop',
+        'Take photos of deliveries for proof'
+      ]
+    },
+    packing: {
+      title: '📋 Packing Lists — Print Lists',
+      tips: [
+        'Generate packing lists for orders being prepared',
+        'Shows items, quantities, and customer info',
+        'Print for the warehouse team to pick and pack'
+      ]
+    },
+    returns: {
+      title: '↩️ Returns — Handle Returns',
+      tips: [
+        'Process product returns from customers',
+        'Track reason for return',
+        'Adjust inventory after return is received'
+      ]
+    },
+    learning: {
+      title: '🧠 AI Learning Engine',
+      tips: [
+        'The AI learns from past orders to improve suggestions',
+        'See what patterns the AI has detected',
+        'Helps with better recommendations over time'
+      ]
+    },
+    fleet_tracking: {
+      title: '📡 Fleet Tracking — Live GPS',
+      tips: [
+        'See all trucks on a live map',
+        'Track delivery progress in real-time',
+        'Green = on route, Red = stopped, Blue = returning'
+      ]
+    },
+    fleet_sync: {
+      title: '🔄 Fleet Sync',
+      tips: [
+        'Sync fleet data with external tracking systems',
+        'Check connection status',
+        'Manual sync if automatic sync fails'
+      ]
+    }
+  },
+  inventory: {
+    dashboard: {
+      title: '📊 Inventory Dashboard',
+      tips: [
+        'See stock levels across all locations',
+        'Red alerts for low stock items',
+        'Quick view of recent movements'
+      ]
+    },
+    stock: {
+      title: '📦 Stock Levels',
+      tips: [
+        'View current stock at each location',
+        'Loxahatchee (LOX) = Retail store',
+        'Aldi = Warehouse / distribution center',
+        'Filter by category, location, or stock status',
+        'Red = low stock, Yellow = getting low, Green = good'
+      ]
+    },
+    products: {
+      title: '📦 Products (Inventory View)',
+      tips: [
+        'Same products as Logistics but with stock focus',
+        'See quantities, reorder points, and supplier info'
+      ]
+    },
+    count: {
+      title: '🔢 Inventory Count',
+      tips: [
+        'Do physical counts to verify stock accuracy',
+        'Scan barcodes or type in quantities',
+        'System compares your count to what it thinks is there',
+        'Discrepancies highlighted for review'
+      ]
+    },
+    transfers: {
+      title: '🔀 Transfers — Move Stock',
+      tips: [
+        'Transfer products between Loxahatchee and Aldi',
+        'Create transfer → Pack items → Ship → Receive at destination',
+        'Track transfer status: Draft → Packed → Shipped → Received',
+        'Print transfer packing list for the driver'
+      ]
+    }
+  },
+  ordering: {
+    dashboard: {
+      title: '📊 Purchasing Dashboard',
+      tips: [
+        'Overview of open purchase orders and pending deliveries',
+        'See which suppliers have orders in progress'
+      ]
+    },
+    orders: {
+      title: '📝 Purchase Orders',
+      tips: [
+        'Create orders to buy from suppliers',
+        'Add items, quantities, and expected prices',
+        'Track order status: Draft → Sent → Received',
+        'Partial receiving supported — mark what arrived'
+      ]
+    },
+    requests: {
+      title: '🙋 Purchase Requests',
+      tips: [
+        'Staff can request items they need restocked',
+        'Smart restock suggestions based on usage',
+        'Approve requests to create purchase orders',
+        'Categories help organize by product type'
+      ]
+    },
+    arriving: {
+      title: '📬 Arriving Shipments',
+      tips: [
+        'Track incoming deliveries from suppliers',
+        'See expected arrival dates',
+        'Mark items as received when they arrive',
+        'Updates inventory automatically'
+      ]
+    },
+    bills: {
+      title: '💰 Bills — Supplier Invoices',
+      tips: [
+        'Match supplier invoices to purchase orders',
+        'Track what\'s been paid vs. outstanding',
+        'Verify prices match what was quoted'
+      ]
+    },
+    suppliers: {
+      title: '🏭 Suppliers Directory',
+      tips: [
+        'All your feed and product suppliers',
+        'Contact info, payment terms, lead times',
+        'See order history with each supplier'
+      ]
+    }
+  },
+  crm: {
+    dashboard: {
+      title: '📊 CRM Dashboard',
+      tips: [
+        'Overview of customer relationships and sales pipeline',
+        'Quick stats on contacts and organizations'
+      ]
+    },
+    pipeline: {
+      title: '🔄 Sales Pipeline',
+      tips: [
+        'Track potential new customers through stages',
+        'Drag deals between stages (Lead → Contacted → Quoted → Won)',
+        'See estimated values and close dates'
+      ]
+    },
+    organizations: {
+      title: '🏢 Organizations',
+      tips: [
+        'Business/farm profiles',
+        'See all contacts at each organization',
+        'Track account details and notes'
+      ]
+    },
+    contacts: {
+      title: '📇 Contacts',
+      tips: [
+        'Individual people at each business/farm',
+        'Phone, email, role, and notes',
+        'Link contacts to organizations'
+      ]
+    }
+  },
+  tasks: {
+    _default: {
+      title: '✅ Tasks & Notifications',
+      tips: [
+        'See all team tasks in one place',
+        'Tasks auto-created by standing orders, seasonal events, etc.',
+        'Tap a task to see details and add comments',
+        'Mark tasks complete when done',
+        'Filter by status: Pending, In Progress, Completed',
+        'Bell icon 🔔 in top bar shows notifications',
+        'Red badge on bell = unread notifications'
+      ]
+    }
+  },
+  pos: {
+    _default: {
+      title: '🛒 Point of Sale',
+      tips: [
+        'Process walk-in customer purchases',
+        'Search products by name or scan barcode',
+        'Add to cart, adjust quantities',
+        'Apply discounts if needed',
+        'Accept payment: cash, card, or account charge',
+        'Print or email receipts'
+      ]
+    }
+  },
+  reports: {
+    _default: {
+      title: '📈 Reports & Analytics',
+      tips: [
+        'Generate reports on sales, inventory, deliveries',
+        'Export data to CSV/Excel',
+        'Filter by date range, customer, product, etc.'
+      ]
+    }
+  }
+};
+
+function initHelpAssistant() {
+  if (document.getElementById('helpFab')) return;
+
+  // Create FAB button
+  var fab = document.createElement('button');
+  fab.id = 'helpFab';
+  fab.className = 'help-fab';
+  fab.title = 'Need help?';
+  fab.innerHTML = '<i class="fas fa-question"></i>';
+  fab.onclick = function() { toggleHelpPanel(); };
+  document.body.appendChild(fab);
+
+  // Create panel
+  var panel = document.createElement('div');
+  panel.id = 'helpPanel';
+  panel.className = 'help-panel';
+  panel.innerHTML = helpPanelHTML();
+  document.body.appendChild(panel);
+
+  // Create backdrop
+  var backdrop = document.createElement('div');
+  backdrop.id = 'helpBackdrop';
+  backdrop.className = 'help-backdrop';
+  backdrop.onclick = function() { toggleHelpPanel(false); };
+  document.body.appendChild(backdrop);
+}
+
+function toggleHelpPanel(forceState) {
+  _helpOpen = forceState !== undefined ? forceState : !_helpOpen;
+  var panel = document.getElementById('helpPanel');
+  var backdrop = document.getElementById('helpBackdrop');
+  var fab = document.getElementById('helpFab');
+  if (panel) panel.classList.toggle('open', _helpOpen);
+  if (backdrop) backdrop.classList.toggle('open', _helpOpen);
+  if (fab) fab.classList.toggle('active', _helpOpen);
+  if (_helpOpen) refreshHelpContent();
+}
+
+function refreshHelpContent() {
+  var content = document.getElementById('helpTipsContent');
+  if (!content) return;
+
+  var mod = activeModule || '';
+  var page = '';
+  // Detect current page from each module's state
+  if (mod === 'logistics' && typeof currentPage !== 'undefined') {
+    // currentPage is a global in logistics.js
+    try { page = window.currentPage || ''; } catch(e) {}
+    // Also try to detect from the logistics module's internal state
+    if (!page) {
+      var scripts = document.querySelectorAll('script');
+      // fallback
+    }
+  }
+  // For other modules, try to detect from page title or URL
+  if (!page) {
+    var titleEl = document.querySelector('.topbar-title, #pageTitle, .module-title');
+    if (titleEl) {
+      var titleText = (titleEl.textContent || '').toLowerCase().trim();
+      // Map title back to page ID
+      var pageMap = SHELL_MODULE_PAGES[mod] || [];
+      for (var i = 0; i < pageMap.length; i++) {
+        if (pageMap[i].label.toLowerCase() === titleText) {
+          page = pageMap[i].id;
+          break;
+        }
+      }
+    }
+  }
+
+  // Get tips for this module/page
+  var modTips = HELP_TIPS[mod] || {};
+  var pageTips = modTips[page] || modTips._default || null;
+  var modInfo = HELP_TIPS._modules[mod] || { title: mod, desc: '' };
+
+  var html = '';
+
+  // Module header
+  html += '<div style="background:linear-gradient(135deg,#EFF6FF,#F0FDF4);border-radius:12px;padding:14px 16px;margin-bottom:16px">';
+  html += '<div style="font-size:13px;color:#6B7280;font-weight:600">You\'re in:</div>';
+  html += '<div style="font-size:18px;font-weight:800;color:#1E3A8A;margin-top:2px">' + escHtml(modInfo.title || mod || 'Home') + '</div>';
+  if (modInfo.desc) html += '<div style="font-size:12px;color:#6B7280;margin-top:2px">' + escHtml(modInfo.desc) + '</div>';
+  html += '</div>';
+
+  // Page-specific tips
+  if (pageTips) {
+    html += '<div style="margin-bottom:16px">';
+    html += '<div style="font-size:16px;font-weight:800;color:#111827;margin-bottom:10px">' + escHtml(pageTips.title) + '</div>';
+    (pageTips.tips || []).forEach(function(tip) {
+      html += '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start">';
+      html += '<div style="flex-shrink:0;width:6px;height:6px;border-radius:50%;background:#2563EB;margin-top:7px"></div>';
+      html += '<div style="font-size:14px;color:#374151;line-height:1.5">' + escHtml(tip) + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  } else {
+    html += '<div style="padding:20px;text-align:center;color:#9CA3AF">';
+    html += '<i class="fas fa-info-circle" style="font-size:24px;margin-bottom:8px;display:block"></i>';
+    html += '<div style="font-size:14px">No specific tips for this page yet.</div>';
+    html += '<div style="font-size:12px;margin-top:4px">Ask a question below!</div>';
+    html += '</div>';
+  }
+
+  // Common tips
+  html += '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:12px 14px;margin-bottom:12px">';
+  html += '<div style="font-size:13px;font-weight:700;color:#92400E;margin-bottom:6px">💡 General Tips</div>';
+  html += '<div style="font-size:12px;color:#78350F;line-height:1.5">';
+  html += '• 🔔 Bell icon at top = notifications<br>';
+  html += '• The "Today" page is the simplest starting point<br>';
+  html += '• Most things happen automatically — just check & approve<br>';
+  html += '• If something looks wrong, try refreshing the page';
+  html += '</div></div>';
+
+  content.innerHTML = html;
+
+  // Store context for AI chat
+  window._helpContext = { module: mod, page: page };
+}
+
+function helpPanelHTML() {
+  return '<div class="help-panel-inner">'
+    // Header
+    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:2px solid #E5E7EB;background:linear-gradient(135deg,#2563EB,#7C3AED);border-radius:16px 16px 0 0">'
+    + '<div style="display:flex;align-items:center;gap:10px">'
+    + '<span style="font-size:28px">🤖</span>'
+    + '<div><div style="font-size:17px;font-weight:800;color:#fff">Help Assistant</div>'
+    + '<div style="font-size:11px;color:#C7D2FE">How can I help you?</div></div>'
+    + '</div>'
+    + '<button onclick="toggleHelpPanel(false)" style="background:rgba(255,255,255,0.2);border:none;color:#fff;width:32px;height:32px;border-radius:8px;font-size:16px;cursor:pointer"><i class="fas fa-times"></i></button>'
+    + '</div>'
+    // Tab bar
+    + '<div style="display:flex;border-bottom:1px solid #E5E7EB;background:#F9FAFB">'
+    + '<button id="helpTabTips" onclick="helpSwitchTab(\'tips\')" class="help-tab active" style="flex:1;padding:10px;border:none;background:none;font-size:13px;font-weight:700;cursor:pointer;border-bottom:3px solid #2563EB;color:#2563EB"><i class="fas fa-lightbulb" style="margin-right:4px"></i> Quick Tips</button>'
+    + '<button id="helpTabAsk" onclick="helpSwitchTab(\'ask\')" class="help-tab" style="flex:1;padding:10px;border:none;background:none;font-size:13px;font-weight:700;cursor:pointer;border-bottom:3px solid transparent;color:#6B7280"><i class="fas fa-comment-dots" style="margin-right:4px"></i> Ask AI</button>'
+    + '</div>'
+    // Tips content
+    + '<div id="helpTipsPanel" class="help-tab-content" style="padding:16px 20px;overflow-y:auto;flex:1">'
+    + '<div id="helpTipsContent"><div style="padding:20px;text-align:center;color:#9CA3AF"><i class="fas fa-spinner fa-spin"></i></div></div>'
+    + '</div>'
+    // AI chat content
+    + '<div id="helpAskPanel" class="help-tab-content" style="display:none;flex-direction:column">'
+    + '<div id="helpChatMessages" style="flex:1;overflow-y:auto;padding:16px 20px">'
+    + '<div style="text-align:center;padding:20px">'
+    + '<div style="font-size:40px;margin-bottom:8px">🤖</div>'
+    + '<div style="font-size:15px;font-weight:700;color:#374151">Ask me anything!</div>'
+    + '<div style="font-size:13px;color:#6B7280;margin-top:4px">I know how every page and button works.</div>'
+    + '<div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">'
+    + '<button onclick="helpAskSuggestion(\'How do I send text confirmations?\')" class="help-suggestion">How do I send text confirmations?</button>'
+    + '<button onclick="helpAskSuggestion(\'What do the colored circles mean?\')" class="help-suggestion">What do the colored circles mean?</button>'
+    + '<button onclick="helpAskSuggestion(\'How do I add a new customer?\')" class="help-suggestion">How do I add a new customer?</button>'
+    + '<button onclick="helpAskSuggestion(\'What is the Today page for?\')" class="help-suggestion">What is the Today page for?</button>'
+    + '</div>'
+    + '</div>'
+    + '</div>'
+    // Chat input
+    + '<div style="border-top:1px solid #E5E7EB;padding:12px 16px;background:#F9FAFB;border-radius:0 0 16px 16px">'
+    + '<form onsubmit="helpAskSubmit(event)" style="display:flex;gap:8px">'
+    + '<input id="helpAskInput" type="text" placeholder="Type your question..." style="flex:1;padding:10px 14px;border:2px solid #E5E7EB;border-radius:10px;font-size:14px;outline:none" onfocus="this.style.borderColor=\'#2563EB\'" onblur="this.style.borderColor=\'#E5E7EB\'">'
+    + '<button type="submit" style="background:#2563EB;color:#fff;border:none;padding:10px 16px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap"><i class="fas fa-paper-plane"></i></button>'
+    + '</form>'
+    + '</div>'
+    + '</div>';
+}
+
+function helpSwitchTab(tab) {
+  var tipsTab = document.getElementById('helpTabTips');
+  var askTab = document.getElementById('helpTabAsk');
+  var tipsPanel = document.getElementById('helpTipsPanel');
+  var askPanel = document.getElementById('helpAskPanel');
+  if (tab === 'tips') {
+    if (tipsTab) { tipsTab.style.borderBottomColor = '#2563EB'; tipsTab.style.color = '#2563EB'; }
+    if (askTab) { askTab.style.borderBottomColor = 'transparent'; askTab.style.color = '#6B7280'; }
+    if (tipsPanel) tipsPanel.style.display = 'block';
+    if (askPanel) askPanel.style.display = 'none';
+  } else {
+    if (tipsTab) { tipsTab.style.borderBottomColor = 'transparent'; tipsTab.style.color = '#6B7280'; }
+    if (askTab) { askTab.style.borderBottomColor = '#2563EB'; askTab.style.color = '#2563EB'; }
+    if (tipsPanel) tipsPanel.style.display = 'none';
+    if (askPanel) { askPanel.style.display = 'flex'; askPanel.style.flexDirection = 'column'; }
+    var input = document.getElementById('helpAskInput');
+    if (input) setTimeout(function() { input.focus(); }, 100);
+  }
+}
+
+function helpAskSuggestion(q) {
+  var input = document.getElementById('helpAskInput');
+  if (input) input.value = q;
+  helpSwitchTab('ask');
+  helpAskSubmit();
+}
+window.helpAskSuggestion = helpAskSuggestion;
+window.toggleHelpPanel = toggleHelpPanel;
+window.helpSwitchTab = helpSwitchTab;
+
+function helpAskSubmit(e) {
+  if (e) e.preventDefault();
+  var input = document.getElementById('helpAskInput');
+  var q = (input ? input.value : '').trim();
+  if (!q) return;
+  if (input) input.value = '';
+
+  // Add user message to chat
+  _helpChatHistory.push({ role: 'user', text: q });
+  helpRenderChat();
+
+  // Add loading indicator
+  _helpChatHistory.push({ role: 'assistant', text: '...', loading: true });
+  helpRenderChat();
+
+  // Call AI
+  var ctx = window._helpContext || {};
+  API.post('/help/ask', { question: q, module: ctx.module || '', page: ctx.page || '' })
+    .then(function(resp) {
+      // Remove loading message
+      _helpChatHistory = _helpChatHistory.filter(function(m) { return !m.loading; });
+      _helpChatHistory.push({ role: 'assistant', text: resp.data.answer || 'I\'m not sure — ask your manager!' });
+      helpRenderChat();
+    })
+    .catch(function(err) {
+      _helpChatHistory = _helpChatHistory.filter(function(m) { return !m.loading; });
+      _helpChatHistory.push({ role: 'assistant', text: 'Sorry, I couldn\'t get an answer. Try again!' });
+      helpRenderChat();
+    });
+}
+window.helpAskSubmit = helpAskSubmit;
+
+function helpRenderChat() {
+  var container = document.getElementById('helpChatMessages');
+  if (!container) return;
+
+  if (_helpChatHistory.length === 0) return;
+
+  var html = '';
+  _helpChatHistory.forEach(function(msg) {
+    if (msg.role === 'user') {
+      html += '<div style="display:flex;justify-content:flex-end;margin-bottom:10px">';
+      html += '<div style="background:#2563EB;color:#fff;padding:10px 14px;border-radius:14px 14px 4px 14px;max-width:85%;font-size:14px;line-height:1.5">' + escHtml(msg.text) + '</div>';
+      html += '</div>';
+    } else {
+      html += '<div style="display:flex;gap:8px;margin-bottom:10px;align-items:flex-start">';
+      html += '<div style="font-size:24px;flex-shrink:0">🤖</div>';
+      if (msg.loading) {
+        html += '<div style="background:#F3F4F6;padding:10px 14px;border-radius:4px 14px 14px 14px;max-width:85%;font-size:14px"><i class="fas fa-spinner fa-spin"></i> Thinking...</div>';
+      } else {
+        // Simple markdown-like rendering: **bold** and bullet points
+        var txt = escHtml(msg.text)
+          .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+          .replace(/\n- /g, '<br>• ')
+          .replace(/\n• /g, '<br>• ')
+          .replace(/\n/g, '<br>');
+        html += '<div style="background:#F3F4F6;padding:10px 14px;border-radius:4px 14px 14px 14px;max-width:85%;font-size:14px;line-height:1.6;color:#374151">' + txt + '</div>';
+      }
+      html += '</div>';
+    }
+  });
+
+  container.innerHTML = html;
+  container.scrollTop = container.scrollHeight;
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 function initFeatureRequestBtn() {
   if (document.getElementById('shellFeatureReqBtn')) return;
@@ -2254,6 +2933,8 @@ async function avSavePreferences(userId) {
       initPushNotifications();
       // Feature request FAB
       initFeatureRequestBtn();
+      // AI Help Assistant FAB
+      initHelpAssistant();
       // Auto-navigate to default landing if configured
       if (currentUser.default_module) {
         launchModule(currentUser.default_module, currentUser.default_page || null);

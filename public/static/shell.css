@@ -409,3 +409,98 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 @media (max-width: 768px) {
   .shell-feature-req-fab { bottom: max(16px, calc(var(--sab) + 12px)); right: 16px; width: 44px; height: 44px; font-size: 18px; }
 }
+
+/* ==================== AI HELP ASSISTANT ==================== */
+.help-fab {
+  position: fixed; bottom: 24px; right: 80px; z-index: 9000;
+  width: 48px; height: 48px; border-radius: 50%;
+  background: linear-gradient(135deg, #2563EB 0%, #7C3AED 100%);
+  color: white; border: none; font-size: 20px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; box-shadow: 0 4px 16px rgba(37,99,235,0.4);
+  transition: all 0.25s ease; -webkit-tap-highlight-color: transparent;
+}
+.help-fab:hover { transform: scale(1.1); box-shadow: 0 6px 24px rgba(37,99,235,0.5); }
+.help-fab:active { transform: scale(0.95); }
+.help-fab.active {
+  background: linear-gradient(135deg, #7C3AED 0%, #2563EB 100%);
+  transform: rotate(45deg);
+}
+/* Pulse animation when panel is closed to draw attention */
+@keyframes helpFabPulse {
+  0%, 100% { box-shadow: 0 4px 16px rgba(37,99,235,0.4); }
+  50% { box-shadow: 0 4px 24px rgba(37,99,235,0.6), 0 0 0 8px rgba(37,99,235,0.1); }
+}
+.help-fab:not(.active) { animation: helpFabPulse 3s ease-in-out infinite; }
+.help-fab:not(.active):hover { animation: none; }
+
+/* Panel — slides in from the right */
+.help-panel {
+  position: fixed; top: 0; right: -420px; z-index: 10001;
+  width: 400px; max-width: 100vw; height: 100vh; height: 100dvh;
+  background: #FFFFFF; border-left: 1px solid #E2E8F0;
+  box-shadow: -8px 0 30px rgba(0,0,0,0.15);
+  transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex; flex-direction: column;
+  border-radius: 16px 0 0 16px;
+  overflow: hidden;
+}
+.help-panel.open { right: 0; }
+
+.help-panel-inner {
+  display: flex; flex-direction: column;
+  height: 100%; overflow: hidden;
+}
+
+/* Backdrop */
+.help-backdrop {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0, 0, 0, 0.3);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.3s ease;
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+.help-backdrop.open { opacity: 1; pointer-events: auto; }
+
+/* Tab content areas */
+.help-tab-content {
+  flex: 1; overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #CBD5E1 transparent;
+}
+.help-tab-content::-webkit-scrollbar { width: 5px; }
+.help-tab-content::-webkit-scrollbar-track { background: transparent; }
+.help-tab-content::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
+.help-tab-content::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+/* Suggestion buttons */
+.help-suggestion {
+  display: block; width: 100%; text-align: left;
+  padding: 10px 14px; border: 1px solid #E5E7EB; border-radius: 10px;
+  background: #F9FAFB; color: #374151; font-size: 13px;
+  cursor: pointer; transition: all 0.15s;
+  font-family: inherit; line-height: 1.4;
+}
+.help-suggestion:hover {
+  background: #EFF6FF; border-color: #93C5FD; color: #1E40AF;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(37,99,235,0.1);
+}
+.help-suggestion:active { transform: translateY(0); }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .help-fab {
+    bottom: max(16px, calc(var(--sab) + 12px)); right: 68px;
+    width: 44px; height: 44px; font-size: 18px;
+  }
+  .help-panel {
+    width: 100vw; max-width: 100vw;
+    border-radius: 0; right: -100vw;
+  }
+  .help-panel.open { right: 0; }
+}
+@media (max-width: 480px) {
+  .help-fab { right: 64px; }
+}
