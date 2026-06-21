@@ -1779,6 +1779,8 @@ function render() {
 
 function renderSidebarContent() {
   const items = [
+    { section: 'Quick Start' },
+    { id: 'today', icon: 'fa-clipboard-check', label: 'Today', badge: 'NEW' },
     { section: t('nav_operations') },
     { id: 'dashboard', icon: 'fa-tachometer-alt', label: t('nav_dashboard') },
     { id: 'orders', icon: 'fa-clipboard-list', label: t('nav_orders') },
@@ -1788,6 +1790,10 @@ function renderSidebarContent() {
     { id: 'route_builder', icon: 'fa-map-location-dot', label: 'Route Builder' },
     { id: 'zones', icon: 'fa-map-location-dot', label: t('zones_title') },
     { id: 'recurring', icon: 'fa-sync-alt', label: t('nav_recurring') },
+    { section: 'Standing Orders' },
+    { id: 'standing_orders', icon: 'fa-bell-concierge', label: 'Standing Orders' },
+    { id: 'so_dashboard', icon: 'fa-tv', label: 'SO Dashboard' },
+    { id: 'seasonality', icon: 'fa-sun', label: 'Seasonality' },
     { section: t('nav_resources') },
     { id: 'customers', icon: 'fa-users', label: t('nav_customers') },
     { id: 'products', icon: 'fa-box-open', label: t('nav_products') },
@@ -1915,10 +1921,10 @@ function renderSidebarUser() {
 }
 
 function renderPage() {
-  const titles = { dashboard:t('nav_dashboard'), orders:t('nav_orders'), ticket_review:'Ticket Review', schedule:t('nav_schedule'), routes:t('nav_routes'), route_builder:'Route Builder', zones:t('zones_title'), recurring:t('recurring_title'), customers:t('nav_customers'), products:t('nav_products'), trucks:t('trucks_title'), drivers_mgmt:t('nav_drivers')||'Drivers', maintenance:t('nav_maintenance')||'Fleet Maintenance', warehouse:'Warehouse', driver:t('nav_driver_view'), packing:t('nav_packing_lists'), returns:'Returns', learning:'AI Learning Engine', fleet_tracking:'Fleet Tracking', fleet_sync:'Fleet Sync', so_dashboard:'Standing Orders Dashboard', seasonality:'Customer Seasonality' };
+  const titles = { dashboard:t('nav_dashboard'), orders:t('nav_orders'), ticket_review:'Ticket Review', schedule:t('nav_schedule'), routes:t('nav_routes'), route_builder:'Route Builder', zones:t('zones_title'), recurring:t('recurring_title'), customers:t('nav_customers'), products:t('nav_products'), trucks:t('trucks_title'), drivers_mgmt:t('nav_drivers')||'Drivers', maintenance:t('nav_maintenance')||'Fleet Maintenance', warehouse:'Warehouse', driver:t('nav_driver_view'), packing:t('nav_packing_lists'), returns:'Returns', learning:'AI Learning Engine', fleet_tracking:'Fleet Tracking', fleet_sync:'Fleet Sync', so_dashboard:'Standing Orders Dashboard', seasonality:'Customer Seasonality', today:'Today' };
   const el = document.getElementById('pageTitle');
   if (el) el.textContent = titles[currentPage] || '';
-  const pages = { dashboard: renderDashboard, orders: renderOrders, ticket_review: renderTicketReview, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, standing_orders: renderStandingOrders, so_dashboard: renderSODashboard, seasonality: renderSeasonality, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, warehouse: renderWarehouse, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
+  const pages = { dashboard: renderDashboard, orders: renderOrders, ticket_review: renderTicketReview, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, standing_orders: renderStandingOrders, so_dashboard: renderSODashboard, seasonality: renderSeasonality, today: renderToday, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, warehouse: renderWarehouse, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
   const fn = pages[currentPage];
   if (fn) {
     const result = fn();
@@ -16596,7 +16602,7 @@ function soEsc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&
 
 async function renderStandingOrders() {
   if (window._params?.runId) return renderStandingOrderRunDetail(window._params.runId);
-  var el = document.getElementById('moduleContent');
+  var el = document.getElementById('pageContent') || document.getElementById('moduleContent');
   el.innerHTML = '<div style="padding:20px;text-align:center"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
 
   try {
@@ -16625,7 +16631,7 @@ async function renderStandingOrders() {
       runs.forEach(function(r) {
         var statusColor = r.status === 'completed' ? '#059669' : r.status === 'sent' ? '#2563EB' : r.status === 'draft' ? '#9CA3AF' : r.status === 'cancelled' ? '#DC2626' : '#D97706';
         var statusIcon = r.status === 'completed' ? 'fa-check-circle' : r.status === 'sent' ? 'fa-paper-plane' : r.status === 'draft' ? 'fa-file-pen' : 'fa-clock';
-        html += '<div onclick="navigateTo(\'standing_orders\',{runId:' + r.id + '})" style="cursor:pointer;background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center;transition:all .15s;flex-wrap:wrap;gap:12px" onmouseover="this.style.borderColor=\'#93C5FD\';this.style.background=\'#F8FAFF\'" onmouseout="this.style.borderColor=\'#E5E7EB\';this.style.background=\'#fff\'">';
+        html += '<div onclick="navigate(\'standing_orders\',{runId:' + r.id + '})" style="cursor:pointer;background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center;transition:all .15s;flex-wrap:wrap;gap:12px" onmouseover="this.style.borderColor=\'#93C5FD\';this.style.background=\'#F8FAFF\'" onmouseout="this.style.borderColor=\'#E5E7EB\';this.style.background=\'#fff\'">';
         html += '<div style="display:flex;align-items:center;gap:14px">';
         html += '<div style="width:44px;height:44px;border-radius:10px;background:' + statusColor + '15;display:flex;align-items:center;justify-content:center"><i class="fas ' + statusIcon + '" style="color:' + statusColor + ';font-size:18px"></i></div>';
         html += '<div>';
@@ -16719,7 +16725,7 @@ async function soDoGenerateRun() {
     var modal = document.getElementById('soGenModal');
     if (modal) modal.remove();
     shellToast('Run generated: ' + d.total_entries + ' entries (' + d.standing_count + ' standing, ' + d.broadcast_count + ' broadcast)');
-    navigateTo('standing_orders', { runId: d.run_id });
+    navigate('standing_orders', { runId: d.run_id });
   } catch (e) {
     btn.disabled = false; btn.innerHTML = '<i class="fas fa-bolt"></i> Generate Run';
     shellToast(e.response?.data?.error || e.message, 'error');
@@ -16730,7 +16736,7 @@ window.soDoGenerateRun = soDoGenerateRun;
 // ==================== RUN DETAIL VIEW ====================
 
 async function renderStandingOrderRunDetail(runId) {
-  var el = document.getElementById('moduleContent');
+  var el = document.getElementById('pageContent') || document.getElementById('moduleContent');
   el.innerHTML = '<div style="padding:20px;text-align:center"><i class="fas fa-spinner fa-spin"></i> Loading run...</div>';
 
   try {
@@ -16744,7 +16750,7 @@ async function renderStandingOrderRunDetail(runId) {
     // Back button + header
     html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">';
     html += '<div style="display:flex;align-items:center;gap:12px">';
-    html += '<button onclick="navigateTo(\'standing_orders\')" class="btn btn-outline" style="padding:8px 12px"><i class="fas fa-arrow-left"></i></button>';
+    html += '<button onclick="navigate(\'standing_orders\')" class="btn btn-outline" style="padding:8px 12px"><i class="fas fa-arrow-left"></i></button>';
     html += '<div>';
     html += '<h2 style="margin:0;font-size:20px;font-weight:700;color:#111827">Delivery: ' + soEsc(run.run_date) + ' <span style="font-weight:400;color:#6B7280;font-size:14px">(' + soEsc(run.delivery_day) + ')</span></h2>';
     var statusColor = run.status === 'completed' ? '#059669' : run.status === 'sent' ? '#2563EB' : run.status === 'draft' ? '#9CA3AF' : '#D97706';
@@ -17163,7 +17169,7 @@ var _soDashData = null;
 var _soDashAutoRefresh = null;
 
 async function renderSODashboard() {
-  var el = document.getElementById('mainContent');
+  var el = document.getElementById('pageContent') || document.getElementById('mainContent');
   if (!el) return;
   el.innerHTML = '<div style="padding:40px;text-align:center"><i class="fas fa-spinner fa-spin fa-2x" style="color:#2563EB"></i><p style="margin-top:12px;color:#6B7280">Loading dashboard...</p></div>';
 
@@ -17188,7 +17194,7 @@ async function renderSODashboard() {
 window.renderSODashboard = renderSODashboard;
 
 function soDashRender() {
-  var el = document.getElementById('mainContent');
+  var el = document.getElementById('pageContent') || document.getElementById('mainContent');
   if (!el || !_soDashData) return;
   var d = _soDashData;
   var runs = d.runs || [];
@@ -17202,8 +17208,8 @@ function soDashRender() {
   // ---- Quick actions bar ----
   html += '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px">';
   html += '<button onclick="soDashRunDigest()" class="btn btn-sm" style="background:#7C3AED;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600" title="Scans everything and creates tasks for the team"><i class="fas fa-magic"></i> Run Daily Digest</button>';
-  html += '<button onclick="navigateTo(\'standing_orders\')" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600"><i class="fas fa-bell-concierge"></i> Standing Orders</button>';
-  html += '<button onclick="navigateTo(\'seasonality\')" class="btn btn-sm" style="background:#D97706;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600"><i class="fas fa-sun"></i> Seasonality</button>';
+  html += '<button onclick="navigate(\'standing_orders\')" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600"><i class="fas fa-bell-concierge"></i> Standing Orders</button>';
+  html += '<button onclick="navigate(\'seasonality\')" class="btn btn-sm" style="background:#D97706;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600"><i class="fas fa-sun"></i> Seasonality</button>';
   html += '</div>';
 
   // ---- Top action-needed banner ----
@@ -17249,7 +17255,7 @@ function soDashRender() {
     if (activeRun.cutoff_time) html += '<div style="font-size:12px;color:#6B7280;margin-top:2px">Cutoff: ' + soEsc(activeRun.cutoff_time) + '</div>';
     html += '</div>';
     html += '<div style="display:flex;gap:8px">';
-    html += '<button onclick="navigateTo(\'standing_orders\',{runId:' + activeRun.id + '})" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px">Full Details <i class="fas fa-arrow-right"></i></button>';
+    html += '<button onclick="navigate(\'standing_orders\',{runId:' + activeRun.id + '})" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px">Full Details <i class="fas fa-arrow-right"></i></button>';
     html += '</div></div>';
 
     // Customer status rows
@@ -17265,9 +17271,10 @@ function soDashRender() {
     html += '</tr></thead><tbody>';
 
     (activeRun.entries || []).forEach(function(e) {
-      var stColor = e.status === 'confirmed' ? '#059669' : e.status === 'declined' ? '#DC2626' : e.status === 'modified' ? '#7C3AED' : e.status === 'sent' ? '#D97706' : e.status === 'no_response' ? '#9CA3AF' : '#2563EB';
-      var stIcon = e.status === 'confirmed' ? 'fa-check' : e.status === 'declined' ? 'fa-times' : e.status === 'modified' ? 'fa-comment-dots' : e.status === 'sent' ? 'fa-clock' : e.status === 'no_response' ? 'fa-minus' : 'fa-ellipsis';
       var rowBg = e.status === 'modified' ? '#FEFCE8' : (e.status === 'sent' ? '#FFF7ED' : '');
+      // Traffic-light emoji for status
+      var stEmoji = e.status === 'confirmed' ? '✅' : e.status === 'declined' ? '🔴' : e.status === 'modified' ? '🟣' : e.status === 'sent' ? '🟡' : e.status === 'no_response' ? '⚪' : '🔵';
+      var stLabel = e.status === 'confirmed' ? 'Confirmed' : e.status === 'declined' ? 'Declined' : e.status === 'modified' ? 'Changed!' : e.status === 'sent' ? 'Waiting' : e.status === 'no_response' ? 'No Reply' : 'Pending';
 
       html += '<tr style="border-bottom:1px solid #F3F4F6;' + (rowBg ? 'background:' + rowBg : '') + '">';
       html += '<td style="padding:10px 14px"><strong>' + soEsc(e.customer_name) + '</strong>';
@@ -17275,17 +17282,18 @@ function soDashRender() {
       html += '</td>';
       html += '<td style="padding:10px 14px"><span style="font-size:11px;padding:2px 6px;border-radius:3px;background:' + (e.entry_type === 'standing' ? '#DBEAFE' : '#F3E8FF') + ';color:' + (e.entry_type === 'standing' ? '#1D4ED8' : '#7C3AED') + ';font-weight:600">' + (e.entry_type === 'standing' ? 'Standing' : 'Broadcast') + '</span></td>';
       html += '<td style="padding:10px 14px;font-size:12px;color:' + (e.zone_color || '#6B7280') + ';font-weight:600">' + soEsc(e.zone_name || '-') + '</td>';
-      html += '<td style="padding:10px 14px"><span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:5px;font-size:11px;font-weight:600;background:' + stColor + '15;color:' + stColor + '"><i class="fas ' + stIcon + '"></i> ' + soEsc(e.status).replace('_', ' ') + '</span>';
+      // Traffic-light status: big emoji + short label
+      html += '<td style="padding:10px 14px"><span style="font-size:28px;vertical-align:middle">' + stEmoji + '</span> <span style="font-size:13px;font-weight:700;vertical-align:middle">' + stLabel + '</span>';
       if (e.status === 'modified' && e.modified_items) html += '<div style="font-size:11px;color:#7C3AED;margin-top:2px">"' + soEsc(e.modified_items).substring(0, 60) + '"</div>';
       html += '</td>';
-      html += '<td style="padding:10px 14px">' + (e.order_id ? '<span style="font-size:11px;color:#059669;font-weight:600"><i class="fas fa-check"></i> #' + e.order_id + '</span>' : '<span style="font-size:11px;color:#9CA3AF">-</span>') + '</td>';
+      html += '<td style="padding:10px 14px">' + (e.order_id ? '<span style="font-size:18px">✅</span> <span style="font-size:12px;color:#059669;font-weight:600">#' + e.order_id + '</span>' : '<span style="font-size:11px;color:#9CA3AF">-</span>') + '</td>';
       html += '<td style="padding:10px 14px;text-align:center">';
       if (e.status === 'modified' || e.status === 'sent') {
-        html += '<button onclick="soShowThread(' + e.id + ')" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer" title="View messages"><i class="fas fa-comment"></i></button> ';
+        html += '<button onclick="soShowThread(' + e.id + ')" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600" title="View messages"><i class="fas fa-comment"></i> View</button> ';
       }
       if (e.status === 'modified') {
-        html += '<button onclick="soConfirmEntry(' + e.id + ')" class="btn btn-sm" style="background:#059669;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer" title="Confirm"><i class="fas fa-check"></i></button> ';
-        html += '<button onclick="soDeclineEntry(' + e.id + ')" class="btn btn-sm" style="background:#DC2626;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer" title="Decline"><i class="fas fa-times"></i></button>';
+        html += '<button onclick="soConfirmEntry(' + e.id + ')" class="btn btn-sm" style="background:#059669;color:#fff;border:none;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600" title="Confirm"><i class="fas fa-check"></i></button> ';
+        html += '<button onclick="soDeclineEntry(' + e.id + ')" class="btn btn-sm" style="background:#DC2626;color:#fff;border:none;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600" title="Decline"><i class="fas fa-times"></i></button>';
       }
       html += '</td></tr>';
     });
@@ -17294,7 +17302,7 @@ function soDashRender() {
     html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:40px;text-align:center;margin-bottom:20px">';
     html += '<i class="fas fa-inbox" style="font-size:40px;color:#D1D5DB"></i>';
     html += '<p style="margin-top:12px;color:#6B7280;font-size:15px">No active confirmation runs</p>';
-    html += '<button onclick="navigateTo(\'standing_orders\')" class="btn btn-primary" style="margin-top:12px;background:#2563EB;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:14px"><i class="fas fa-plus"></i> Create New Run</button>';
+    html += '<button onclick="navigate(\'standing_orders\')" class="btn btn-primary" style="margin-top:12px;background:#2563EB;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:14px"><i class="fas fa-plus"></i> Create New Run</button>';
     html += '</div>';
   }
 
@@ -17310,15 +17318,14 @@ function soDashRender() {
   }
   actions.forEach(function(a) {
     var bg = a.status === 'modified' ? '#FEFCE8' : '#FFF7ED';
-    var icon = a.status === 'modified' ? 'fa-comment-dots' : 'fa-clock';
-    var color = a.status === 'modified' ? '#D97706' : '#EA580C';
-    html += '<div style="padding:10px 14px;border-bottom:1px solid #F3F4F6;background:' + bg + ';display:flex;align-items:center;gap:10px">';
-    html += '<i class="fas ' + icon + '" style="color:' + color + ';font-size:14px;flex-shrink:0"></i>';
-    html += '<div style="flex:1;min-width:0"><strong style="font-size:13px;color:#111827">' + soEsc(a.customer_name) + '</strong>';
-    if (a.status === 'modified' && a.modified_items) html += '<div style="font-size:11px;color:#7C3AED;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">"' + soEsc(a.modified_items) + '"</div>';
-    else html += '<div style="font-size:11px;color:#6B7280">Waiting for reply &middot; ' + soEsc(a.run_date) + '</div>';
+    var emoji = a.status === 'modified' ? '🟣' : '🟡';
+    html += '<div style="padding:12px 14px;border-bottom:1px solid #F3F4F6;background:' + bg + ';display:flex;align-items:center;gap:12px">';
+    html += '<span style="font-size:24px;flex-shrink:0">' + emoji + '</span>';
+    html += '<div style="flex:1;min-width:0"><strong style="font-size:14px;color:#111827">' + soEsc(a.customer_name) + '</strong>';
+    if (a.status === 'modified' && a.modified_items) html += '<div style="font-size:12px;color:#7C3AED;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">"' + soEsc(a.modified_items) + '"</div>';
+    else html += '<div style="font-size:12px;color:#6B7280">Waiting for reply &middot; ' + soEsc(a.run_date) + '</div>';
     html += '</div>';
-    html += '<button onclick="soShowThread(' + a.id + ')" style="flex-shrink:0;background:#2563EB;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer"><i class="fas fa-comment"></i></button>';
+    html += '<button onclick="soShowThread(' + a.id + ')" style="flex-shrink:0;background:#2563EB;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer"><i class="fas fa-comment"></i> View</button>';
     html += '</div>';
   });
   html += '</div></div>';
@@ -17352,7 +17359,7 @@ function soDashRender() {
   html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;margin-bottom:20px;overflow:hidden">';
   html += '<div style="padding:12px 16px;border-bottom:1px solid #E5E7EB;background:#FFFBEB;display:flex;justify-content:space-between;align-items:center">';
   html += '<h4 style="margin:0;font-size:14px;font-weight:700;color:#92400E"><i class="fas fa-sun" style="margin-right:6px"></i>Seasonal Snapshot</h4>';
-  html += '<button onclick="navigateTo(\'seasonality\')" class="btn btn-sm" style="background:#D97706;color:#fff;border:none;padding:5px 12px;border-radius:5px;cursor:pointer;font-size:11px">Manage <i class="fas fa-arrow-right"></i></button>';
+  html += '<button onclick="navigate(\'seasonality\')" class="btn btn-sm" style="background:#D97706;color:#fff;border:none;padding:5px 12px;border-radius:5px;cursor:pointer;font-size:11px">Manage <i class="fas fa-arrow-right"></i></button>';
   html += '</div>';
   html += '<div style="padding:14px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px">';
   html += soDashMiniStat('In Season', stats.in_season || 0, '#059669');
@@ -17390,7 +17397,7 @@ function soDashRender() {
     html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;margin-bottom:20px">';
     html += '<div style="padding:12px 16px;border-bottom:1px solid #E5E7EB"><h4 style="margin:0;font-size:14px;font-weight:700;color:#374151"><i class="fas fa-history" style="margin-right:6px"></i>Recent Completed Runs</h4></div>';
     pastRuns.forEach(function(r) {
-      html += '<div onclick="navigateTo(\'standing_orders\',{runId:' + r.id + '})" style="padding:10px 16px;border-bottom:1px solid #F3F4F6;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onmouseover="this.style.background=\'#F9FAFB\'" onmouseout="this.style.background=\'\'">';
+      html += '<div onclick="navigate(\'standing_orders\',{runId:' + r.id + '})" style="padding:10px 16px;border-bottom:1px solid #F3F4F6;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onmouseover="this.style.background=\'#F9FAFB\'" onmouseout="this.style.background=\'\'">';
       html += '<div><strong style="font-size:13px">' + soEsc(r.run_date) + '</strong> <span style="color:#6B7280;font-size:12px">(' + soEsc(r.delivery_day) + ')</span></div>';
       html += '<div style="display:flex;gap:12px;font-size:12px">';
       html += '<span style="color:#059669"><i class="fas fa-check"></i> ' + (r.confirmed_count || 0) + '</span>';
@@ -17479,7 +17486,7 @@ var _seasonalCustomers = [];
 var _seasonFilter = 'all';
 
 async function renderSeasonality() {
-  var el = document.getElementById('mainContent');
+  var el = document.getElementById('pageContent') || document.getElementById('mainContent');
   if (!el) return;
   el.innerHTML = '<div style="padding:40px;text-align:center"><i class="fas fa-spinner fa-spin fa-2x" style="color:#D97706"></i></div>';
 
@@ -17494,7 +17501,7 @@ async function renderSeasonality() {
 window.renderSeasonality = renderSeasonality;
 
 function seasonRender() {
-  var el = document.getElementById('mainContent');
+  var el = document.getElementById('pageContent') || document.getElementById('mainContent');
   if (!el) return;
   var custs = _seasonalCustomers;
   var html = '<div style="max-width:1100px;margin:0 auto;padding:0 16px">';
@@ -17731,5 +17738,571 @@ async function seasonShowLog(customerId) {
   } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
 }
 window.seasonShowLog = seasonShowLog;
+
+// ==================== TODAY — DUMB-PROOF MORNING BRIEFING ====================
+
+var _todayData = null;
+var _todayRefreshTimer = null;
+
+async function renderToday() {
+  var el = document.getElementById('mainContent') || document.getElementById('pageContent');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:60px;text-align:center"><div style="font-size:48px;margin-bottom:16px">☕</div><div style="font-size:18px;color:#6B7280;font-weight:600">Loading your morning briefing...</div></div>';
+
+  try {
+    var resp = await API.get('/today');
+    _todayData = resp.data;
+    todayRender();
+    // Auto-refresh every 30 seconds
+    if (_todayRefreshTimer) clearInterval(_todayRefreshTimer);
+    _todayRefreshTimer = setInterval(async function() {
+      try {
+        var r = await API.get('/today');
+        _todayData = r.data;
+        todayRender();
+      } catch (e) {}
+    }, 30000);
+  } catch (e) {
+    el.innerHTML = '<div style="padding:60px;text-align:center"><div style="font-size:48px;margin-bottom:16px">😕</div><div style="font-size:18px;color:#DC2626">Failed to load. Try refreshing.</div></div>';
+  }
+}
+
+function todayRender() {
+  var el = document.getElementById('mainContent') || document.getElementById('pageContent');
+  if (!el || !_todayData) return;
+  var d = _todayData;
+  var items = d.items || [];
+
+  // Color map
+  var overallColors = { green: '#059669', yellow: '#D97706', red: '#DC2626' };
+  var overallBgs = { green: '#ECFDF5', yellow: '#FFFBEB', red: '#FEF2F2' };
+  var overallBorders = { green: '#A7F3D0', yellow: '#FDE68A', red: '#FECACA' };
+  var oc = overallColors[d.overall] || '#6B7280';
+  var obg = overallBgs[d.overall] || '#F9FAFB';
+  var ob = overallBorders[d.overall] || '#E5E7EB';
+
+  var html = '<div style="max-width:700px;margin:0 auto;padding:0 12px">';
+
+  // ---- GIANT STATUS BANNER ----
+  html += '<div style="background:' + obg + ';border:3px solid ' + ob + ';border-radius:20px;padding:32px 24px;text-align:center;margin-bottom:20px">';
+  html += '<div style="font-size:64px;line-height:1">' + soEsc(d.overall_emoji) + '</div>';
+  html += '<div style="font-size:28px;font-weight:900;color:' + oc + ';margin-top:8px">' + soEsc(d.overall_message) + '</div>';
+  html += '<div style="font-size:14px;color:#6B7280;margin-top:6px">' + soEsc(d.date) + ' &middot; Auto-refreshes every 30s</div>';
+  html += '</div>';
+
+  // ---- AUTOPILOT BUTTON ----
+  html += '<div style="margin-bottom:20px;text-align:center">';
+  html += '<button onclick="todayStartAutopilot()" style="background:linear-gradient(135deg,#2563EB,#7C3AED);color:#fff;border:none;padding:18px 36px;border-radius:14px;font-size:20px;font-weight:800;cursor:pointer;box-shadow:0 4px 14px rgba(37,99,235,0.3);width:100%;max-width:500px">';
+  html += '<i class="fas fa-rocket" style="margin-right:10px"></i> Start Today\'s Deliveries';
+  html += '</button>';
+  html += '</div>';
+
+  // ---- TO-DO LIST ----
+  if (items.length === 0) {
+    html += '<div style="background:#ECFDF5;border:2px solid #A7F3D0;border-radius:16px;padding:40px;text-align:center">';
+    html += '<div style="font-size:48px">🎉</div>';
+    html += '<div style="font-size:20px;font-weight:700;color:#059669;margin-top:8px">You\'re all caught up!</div>';
+    html += '<div style="font-size:14px;color:#6B7280;margin-top:4px">Nothing needs your attention right now. Nice work!</div>';
+    html += '</div>';
+  } else {
+    html += '<div style="display:flex;flex-direction:column;gap:10px">';
+    items.forEach(function(item, idx) {
+      var colors = {
+        red: { bg: '#FEF2F2', border: '#FECACA', text: '#991B1B', btn: '#DC2626' },
+        orange: { bg: '#FFF7ED', border: '#FED7AA', text: '#9A3412', btn: '#EA580C' },
+        yellow: { bg: '#FFFBEB', border: '#FDE68A', text: '#92400E', btn: '#D97706' },
+        blue: { bg: '#EFF6FF', border: '#BFDBFE', text: '#1E40AF', btn: '#2563EB' },
+        green: { bg: '#ECFDF5', border: '#A7F3D0', text: '#065F46', btn: '#059669' },
+        gray: { bg: '#F9FAFB', border: '#E5E7EB', text: '#374151', btn: '#6B7280' }
+      };
+      var c = colors[item.color] || colors.gray;
+
+      html += '<div style="background:' + c.bg + ';border:2px solid ' + c.border + ';border-radius:14px;padding:16px 20px;display:flex;align-items:center;gap:16px;min-height:72px">';
+
+      // Emoji / number
+      html += '<div style="font-size:32px;flex-shrink:0;width:48px;text-align:center">' + soEsc(item.emoji) + '</div>';
+
+      // Text
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-size:17px;font-weight:800;color:' + c.text + ';line-height:1.3">' + soEsc(item.title) + '</div>';
+      if (item.subtitle) html += '<div style="font-size:13px;color:#6B7280;margin-top:2px;line-height:1.3">' + soEsc(item.subtitle) + '</div>';
+      html += '</div>';
+
+      // Action button
+      html += '<button onclick="todayAction(\'' + soEsc(item.action) + '\',' + JSON.stringify({
+        entry_id: item.entry_id, run_id: item.run_id,
+        customer_id: item.customer_id, task_id: item.task_id
+      }).replace(/"/g, '&quot;') + ')" style="flex-shrink:0;background:' + c.btn + ';color:#fff;border:none;padding:12px 20px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap">';
+      html += soEsc(item.action_label);
+      html += '</button>';
+
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  // ---- Quick links row ----
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:20px">';
+  html += '<button onclick="navigate(\'so_dashboard\')" style="background:#fff;border:2px solid #E5E7EB;border-radius:12px;padding:16px 8px;text-align:center;cursor:pointer;font-size:13px;font-weight:600;color:#374151"><i class="fas fa-tv" style="font-size:20px;color:#2563EB;display:block;margin-bottom:6px"></i>Full Dashboard</button>';
+  html += '<button onclick="navigate(\'standing_orders\')" style="background:#fff;border:2px solid #E5E7EB;border-radius:12px;padding:16px 8px;text-align:center;cursor:pointer;font-size:13px;font-weight:600;color:#374151"><i class="fas fa-bell-concierge" style="font-size:20px;color:#7C3AED;display:block;margin-bottom:6px"></i>Standing Orders</button>';
+  html += '<button onclick="navigate(\'seasonality\')" style="background:#fff;border:2px solid #E5E7EB;border-radius:12px;padding:16px 8px;text-align:center;cursor:pointer;font-size:13px;font-weight:600;color:#374151"><i class="fas fa-sun" style="font-size:20px;color:#D97706;display:block;margin-bottom:6px"></i>Seasonality</button>';
+  html += '</div>';
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// Handle to-do item actions
+async function todayAction(action, params) {
+  try {
+    if (action === 'review_modified') {
+      // Go to the thread for this entry
+      if (typeof soShowThread === 'function') soShowThread(params.entry_id);
+      else navigate('standing_orders', { runId: params.run_id });
+    } else if (action === 'generate_messages') {
+      todayStartAutopilot();
+    } else if (action === 'send_texts') {
+      if (!confirm('Send all texts for this delivery run?')) return;
+      todayShowLoading('Sending texts...');
+      await API.post('/standing-orders/runs/' + params.run_id + '/send');
+      shellToast('All texts sent!');
+      renderToday();
+      if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+    } else if (action === 'send_reminders') {
+      if (!confirm('Send reminders to everyone who hasn\'t replied?')) return;
+      todayShowLoading('Sending reminders...');
+      var resp = await API.post('/standing-orders/runs/' + params.run_id + '/send-reminders');
+      shellToast('Sent ' + (resp.data.sent || 0) + ' reminders!');
+      renderToday();
+    } else if (action === 'welcome_back') {
+      if (!confirm('Send welcome-back text to ' + (params.customer_name || 'this customer') + '?')) return;
+      todayShowLoading('Sending welcome text...');
+      await API.post('/customers/' + params.customer_id + '/season-arrival', { send_welcome: true });
+      shellToast('Welcome text sent!');
+      renderToday();
+      if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+    } else if (action === 'farewell') {
+      if (!confirm('Send farewell text to ' + (params.customer_name || 'this customer') + '?')) return;
+      todayShowLoading('Sending farewell text...');
+      await API.post('/customers/' + params.customer_id + '/season-departure', { send_farewell: true, ask_final_order: true });
+      shellToast('Farewell text sent!');
+      renderToday();
+      if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+    } else if (action === 'view_task') {
+      // Switch to tasks module
+      if (typeof launchModule === 'function') launchModule('tasks', 'task_' + params.task_id);
+      else shellToast('Open Tasks module to view this');
+    } else if (action === 'expire_run') {
+      if (!confirm('Mark all no-response customers as expired for this run?')) return;
+      todayShowLoading('Expiring...');
+      await API.post('/standing-orders/runs/' + params.run_id + '/expire');
+      shellToast('No-responses expired!');
+      renderToday();
+    }
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.todayAction = todayAction;
+
+function todayShowLoading(msg) {
+  var el = document.getElementById('mainContent') || document.getElementById('pageContent');
+  if (el) {
+    el.innerHTML = '<div style="max-width:700px;margin:0 auto;padding:80px 20px;text-align:center"><i class="fas fa-spinner fa-spin" style="font-size:48px;color:#2563EB"></i><div style="font-size:20px;font-weight:700;color:#374151;margin-top:16px">' + soEsc(msg || 'Working...') + '</div></div>';
+  }
+}
+
+// ==================== AUTOPILOT WIZARD ====================
+
+var _apWizData = null;
+
+async function todayStartAutopilot() {
+  var el = document.getElementById('mainContent') || document.getElementById('pageContent');
+  if (!el) return;
+  el.innerHTML = '<div style="max-width:600px;margin:0 auto;padding:60px 20px;text-align:center"><i class="fas fa-spinner fa-spin" style="font-size:48px;color:#7C3AED"></i><div style="font-size:20px;font-weight:700;color:#374151;margin-top:16px">Checking delivery status...</div></div>';
+
+  try {
+    var resp = await API.get('/standing-orders/autopilot/status');
+    _apWizData = resp.data;
+    apWizRender();
+  } catch (e) {
+    el.innerHTML = '<div style="padding:60px;text-align:center"><div style="font-size:48px">😕</div><div style="font-size:18px;color:#DC2626;margin-top:12px">Error: ' + soEsc(e.response?.data?.error || e.message) + '</div><button onclick="renderToday()" style="margin-top:16px;padding:12px 24px;border-radius:10px;background:#2563EB;color:#fff;border:none;font-size:16px;font-weight:700;cursor:pointer">Back to Today</button></div>';
+  }
+}
+window.todayStartAutopilot = todayStartAutopilot;
+
+function apWizRender() {
+  var el = document.getElementById('mainContent') || document.getElementById('pageContent');
+  if (!el || !_apWizData) return;
+  var d = _apWizData;
+
+  var html = '<div style="max-width:600px;margin:0 auto;padding:0 12px">';
+
+  // Back button
+  html += '<button onclick="renderToday()" style="background:none;border:none;color:#6B7280;font-size:14px;font-weight:600;cursor:pointer;padding:8px 0;margin-bottom:8px"><i class="fas fa-arrow-left" style="margin-right:6px"></i> Back to Today</button>';
+
+  // Step progress bar
+  var totalSteps = 5;
+  var currentStep = d.step_number || 1;
+  html += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:24px">';
+  for (var s = 1; s <= totalSteps; s++) {
+    var sc = s < currentStep ? '#059669' : s === currentStep ? '#2563EB' : '#D1D5DB';
+    html += '<div style="flex:1;height:8px;border-radius:4px;background:' + sc + '"></div>';
+  }
+  html += '</div>';
+
+  // Step label
+  html += '<div style="text-align:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700;color:#2563EB;text-transform:uppercase;letter-spacing:1px">Step ' + currentStep + ' of ' + totalSteps + '</span></div>';
+  html += '<div style="text-align:center;margin-bottom:24px"><div style="font-size:24px;font-weight:900;color:#111827">' + soEsc(d.step_label) + '</div></div>';
+
+  // Main card with message
+  html += '<div style="background:#fff;border:2px solid #E5E7EB;border-radius:16px;padding:24px;margin-bottom:20px;text-align:center">';
+  html += '<div style="font-size:16px;color:#374151;line-height:1.6">' + soEsc(d.message) + '</div>';
+
+  // Counts display if available
+  if (d.counts) {
+    var ct = d.counts;
+    html += '<div style="display:flex;justify-content:center;gap:16px;margin-top:16px;flex-wrap:wrap">';
+    if (ct.total > 0) html += apWizCount(ct.total, 'Total', '#374151');
+    if (ct.confirmed > 0) html += apWizCount(ct.confirmed, 'Confirmed', '#059669');
+    if (ct.sent > 0) html += apWizCount(ct.sent, 'Waiting', '#D97706');
+    if (ct.modified > 0) html += apWizCount(ct.modified, 'Changed', '#7C3AED');
+    if (ct.declined > 0) html += apWizCount(ct.declined, 'Declined', '#DC2626');
+    if (ct.no_response > 0) html += apWizCount(ct.no_response, 'No Reply', '#9CA3AF');
+    html += '</div>';
+  }
+
+  // Modified entries list
+  if (d.modified_entries && d.modified_entries.length > 0) {
+    html += '<div style="margin-top:16px;text-align:left">';
+    d.modified_entries.forEach(function(m) {
+      html += '<div style="background:#FEFCE8;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;margin-top:8px">';
+      html += '<strong style="color:#92400E">' + soEsc(m.customer_name) + ':</strong> ';
+      html += '<span style="color:#78350F">' + soEsc((m.modified_items || '').substring(0, 100)) + '</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Action buttons
+  html += '<div style="display:flex;flex-direction:column;gap:10px">';
+
+  if (d.step === 'generate') {
+    if (d.next_date) {
+      html += apWizBtn('apWizGenerate(\'' + soEsc(d.next_date) + '\')', 'Pull Customers for ' + soEsc(d.next_day) + ' ' + soEsc(d.next_date), '#2563EB', 'fa-users', true);
+    } else {
+      html += '<div style="padding:16px;text-align:center;color:#DC2626;font-weight:600">No delivery days configured. Set up zones first.</div>';
+    }
+  } else if (d.step === 'generate_messages') {
+    html += apWizBtn('apWizGenerateMessages(' + d.run_id + ')', 'Generate AI Texts for Everyone', '#7C3AED', 'fa-magic', true);
+    html += apWizBtn('navigate(\'standing_orders\',{runId:' + d.run_id + '})', 'Review Manually Instead', '#6B7280', 'fa-list', false);
+  } else if (d.step === 'send_texts') {
+    html += apWizBtn('apWizSendTexts(' + d.run_id + ')', 'Send All Texts NOW', '#059669', 'fa-paper-plane', true);
+    html += apWizBtn('navigate(\'standing_orders\',{runId:' + d.run_id + '})', 'Preview Messages First', '#6B7280', 'fa-eye', false);
+  } else if (d.step === 'review_changes') {
+    html += apWizBtn('navigate(\'standing_orders\',{runId:' + d.run_id + '})', 'Review Changes', '#7C3AED', 'fa-comment-dots', true);
+    html += apWizBtn('apWizSendReminders(' + d.run_id + ')', 'Send Reminders to Others', '#D97706', 'fa-bell', false);
+  } else if (d.step === 'waiting') {
+    html += apWizBtn('apWizSendReminders(' + d.run_id + ')', 'Send Reminders', '#D97706', 'fa-bell', true);
+    html += apWizBtn('apWizExpire(' + d.run_id + ')', 'Expire No-Responses', '#6B7280', 'fa-hourglass-end', false);
+    html += '<div style="text-align:center;color:#6B7280;font-size:13px;margin-top:4px">Replies arrive automatically — this page refreshes every 30s</div>';
+    // Auto-refresh wizard too
+    setTimeout(function() { todayStartAutopilot(); }, 30000);
+  } else if (d.step === 'complete') {
+    html += apWizBtn('apWizExpire(' + d.run_id + ')', 'Close Out Run', '#059669', 'fa-check-circle', true);
+  } else if (d.step === 'done') {
+    html += '<div style="text-align:center;padding:16px"><div style="font-size:48px">✅</div><div style="font-size:18px;font-weight:700;color:#059669;margin-top:8px">This run is complete!</div></div>';
+  }
+
+  html += '</div>';
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function apWizCount(val, label, color) {
+  return '<div style="text-align:center"><div style="font-size:24px;font-weight:800;color:' + color + '">' + val + '</div><div style="font-size:11px;color:#6B7280;font-weight:600">' + label + '</div></div>';
+}
+
+function apWizBtn(onclick, label, color, icon, primary) {
+  var style = primary
+    ? 'background:' + color + ';color:#fff;padding:18px 24px;font-size:18px;font-weight:800;border-radius:14px;box-shadow:0 4px 14px ' + color + '40'
+    : 'background:#fff;color:' + color + ';border:2px solid ' + color + ';padding:14px 24px;font-size:15px;font-weight:700;border-radius:12px';
+  return '<button onclick="' + onclick + '" style="' + style + ';cursor:pointer;width:100%;text-align:center;border:' + (primary ? 'none' : '2px solid ' + color) + '"><i class="fas ' + icon + '" style="margin-right:8px"></i>' + soEsc(label) + '</button>';
+}
+
+async function apWizGenerate(runDate) {
+  todayShowLoading('Pulling customers for delivery...');
+  try {
+    var resp = await API.post('/standing-orders/autopilot/generate', { run_date: runDate });
+    shellToast(resp.data.total_entries + ' customers pulled!');
+    todayStartAutopilot();
+    if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+  } catch (e) {
+    if (e.response?.status === 409 && e.response?.data?.run_id) {
+      shellToast('Run already exists — loading it');
+      todayStartAutopilot();
+    } else {
+      shellToast(e.response?.data?.error || e.message, 'error');
+      todayStartAutopilot();
+    }
+  }
+}
+window.apWizGenerate = apWizGenerate;
+
+async function apWizGenerateMessages(runId) {
+  todayShowLoading('AI is writing personalized texts... (this takes a moment)');
+  try {
+    var resp = await API.post('/standing-orders/runs/' + runId + '/generate-messages', {});
+    shellToast(resp.data.generated + ' AI messages created!');
+    todayStartAutopilot();
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); todayStartAutopilot(); }
+}
+window.apWizGenerateMessages = apWizGenerateMessages;
+
+async function apWizSendTexts(runId) {
+  if (!confirm('Send texts to all customers in this run?')) return;
+  todayShowLoading('Sending texts...');
+  try {
+    var resp = await API.post('/standing-orders/runs/' + runId + '/send');
+    shellToast(resp.data.sent + ' texts sent!');
+    todayStartAutopilot();
+    if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); todayStartAutopilot(); }
+}
+window.apWizSendTexts = apWizSendTexts;
+
+async function apWizSendReminders(runId) {
+  if (!confirm('Send reminders to everyone who hasn\'t replied?')) return;
+  todayShowLoading('Sending reminders...');
+  try {
+    var resp = await API.post('/standing-orders/runs/' + runId + '/send-reminders');
+    shellToast(resp.data.sent + ' reminders sent!');
+    todayStartAutopilot();
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); todayStartAutopilot(); }
+}
+window.apWizSendReminders = apWizSendReminders;
+
+async function apWizExpire(runId) {
+  if (!confirm('Mark all non-responders as expired and close this run?')) return;
+  todayShowLoading('Closing out run...');
+  try {
+    await API.post('/standing-orders/runs/' + runId + '/expire');
+    shellToast('Run closed out!');
+    todayStartAutopilot();
+    if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); todayStartAutopilot(); }
+}
+window.apWizExpire = apWizExpire;
+
+// ==================== AUDIO + VISUAL SMS ALERTS ====================
+
+var _smsAlertLastSeen = new Date().toISOString();
+var _smsAlertTimer = null;
+var _smsAlertAudioCtx = null;
+
+function initSmsAlerts() {
+  // Start polling for new inbound SMS every 15 seconds
+  if (_smsAlertTimer) clearInterval(_smsAlertTimer);
+  _smsAlertTimer = setInterval(checkNewSms, 15000);
+}
+
+async function checkNewSms() {
+  try {
+    var resp = await API.get('/sms/recent-inbound?since=' + encodeURIComponent(_smsAlertLastSeen));
+    var msgs = resp.data.messages || [];
+    if (msgs.length > 0) {
+      _smsAlertLastSeen = msgs[0].created_at || new Date().toISOString();
+      // Show alert for the most recent one
+      var m = msgs[0];
+      playSmsChime();
+      showSmsToast(m);
+      pulseNotifBell();
+      if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+    }
+  } catch (e) {}
+}
+
+function playSmsChime() {
+  try {
+    if (!_smsAlertAudioCtx) _smsAlertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    var ctx = _smsAlertAudioCtx;
+    // Play a pleasant two-tone chime
+    var notes = [659.25, 783.99]; // E5, G5
+    notes.forEach(function(freq, i) {
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.15 + 0.5);
+      osc.start(ctx.currentTime + i * 0.15);
+      osc.stop(ctx.currentTime + i * 0.15 + 0.5);
+    });
+  } catch (e) {}
+}
+
+function showSmsToast(msg) {
+  // Remove any existing SMS toast
+  var old = document.getElementById('smsAlertToast');
+  if (old) old.remove();
+
+  var name = msg.customer_name || msg.customer_phone || 'Customer';
+  var body = (msg.message_body || '').substring(0, 120);
+  var isModified = msg.entry_status === 'modified';
+
+  var toast = document.createElement('div');
+  toast.id = 'smsAlertToast';
+  toast.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:' + (isModified ? '#FEF3C7' : '#ECFDF5') + ';border-bottom:4px solid ' + (isModified ? '#F59E0B' : '#10B981') + ';padding:20px 24px;box-shadow:0 4px 20px rgba(0,0,0,0.15);animation:smsSlideDown 0.3s ease-out';
+  toast.innerHTML = '<div style="max-width:700px;margin:0 auto;display:flex;align-items:center;gap:16px">'
+    + '<div style="font-size:40px;flex-shrink:0">' + (isModified ? '🟣' : '💬') + '</div>'
+    + '<div style="flex:1;min-width:0">'
+    + '<div style="font-size:20px;font-weight:800;color:' + (isModified ? '#92400E' : '#065F46') + '">' + soEsc(name) + ' replied!</div>'
+    + '<div style="font-size:15px;color:#374151;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">"' + soEsc(body) + '"</div>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;flex-shrink:0">'
+    + '<button onclick="smsToastHandle(' + (msg.entry_id || 0) + ')" style="background:#2563EB;color:#fff;border:none;padding:12px 20px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer">Handle Now</button>'
+    + '<button onclick="smsToastDismiss()" style="background:#E5E7EB;color:#374151;border:none;padding:12px 16px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer">Later</button>'
+    + '</div></div>';
+  document.body.appendChild(toast);
+
+  // Auto-dismiss after 12 seconds
+  setTimeout(function() { smsToastDismiss(); }, 12000);
+}
+
+function smsToastHandle(entryId) {
+  smsToastDismiss();
+  if (entryId && typeof soShowThread === 'function') {
+    soShowThread(entryId);
+  } else {
+    navigate('so_dashboard');
+  }
+}
+window.smsToastHandle = smsToastHandle;
+
+function smsToastDismiss() {
+  var t = document.getElementById('smsAlertToast');
+  if (t) { t.style.opacity = '0'; t.style.transform = 'translateY(-100%)'; setTimeout(function() { t.remove(); }, 300); }
+}
+window.smsToastDismiss = smsToastDismiss;
+
+function pulseNotifBell() {
+  var bell = document.querySelector('.shell-notif-btn');
+  if (!bell) return;
+  bell.style.animation = 'bellPulse 0.5s ease-in-out 3';
+  setTimeout(function() { bell.style.animation = ''; }, 1500);
+}
+
+// Inject CSS animations for alerts
+(function injectAlertStyles() {
+  if (document.getElementById('smsAlertStyles')) return;
+  var style = document.createElement('style');
+  style.id = 'smsAlertStyles';
+  style.textContent = '@keyframes smsSlideDown { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } } '
+    + '@keyframes bellPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.4); } } '
+    + '@keyframes mobileNavPulse { 0%,100% { box-shadow: none; } 50% { box-shadow: 0 0 0 4px rgba(239,68,68,0.3); } } '
+    + '#smsAlertToast { transition: opacity 0.3s, transform 0.3s; }';
+  document.head.appendChild(style);
+})();
+
+// ==================== TRAFFIC-LIGHT STATUS CIRCLES ====================
+// Helper to render a big colored circle for entry status
+function statusCircle(status, size) {
+  size = size || 36;
+  var colors = {
+    confirmed: { bg: '#059669', icon: '✅', label: 'Confirmed' },
+    modified: { bg: '#7C3AED', icon: '🟣', label: 'Changed' },
+    sent: { bg: '#D97706', icon: '🟡', label: 'Waiting' },
+    pending: { bg: '#3B82F6', icon: '🔵', label: 'Pending' },
+    declined: { bg: '#DC2626', icon: '🔴', label: 'Declined' },
+    no_response: { bg: '#9CA3AF', icon: '⚪', label: 'No Reply' }
+  };
+  var c = colors[status] || { bg: '#6B7280', icon: '⚫', label: status };
+  return '<div style="display:inline-flex;align-items:center;gap:6px" title="' + c.label + '">'
+    + '<span style="font-size:' + size + 'px;line-height:1">' + c.icon + '</span>'
+    + '</div>';
+}
+
+// ==================== MOBILE BOTTOM NAV ====================
+
+function initMobileNav() {
+  if (document.getElementById('mobileBottomNav')) return;
+  // Only show on mobile/tablet
+  if (window.innerWidth > 768) return;
+
+  var nav = document.createElement('div');
+  nav.id = 'mobileBottomNav';
+  nav.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9998;background:#fff;border-top:2px solid #E5E7EB;display:flex;justify-content:space-around;padding:8px 0 env(safe-area-inset-bottom,8px);box-shadow:0 -2px 10px rgba(0,0,0,0.08)';
+  nav.innerHTML = mobileNavItems();
+  document.body.appendChild(nav);
+
+  // Add bottom padding to main content so nothing is hidden
+  var mc = document.querySelector('.main-content') || document.querySelector('.page-content');
+  if (mc) mc.style.paddingBottom = '80px';
+}
+
+function mobileNavItems() {
+  var active = typeof currentPage !== 'undefined' ? currentPage : '';
+  var items = [
+    { id: 'today', icon: 'fa-clipboard-check', label: 'Today', color: '#2563EB' },
+    { id: 'so_dashboard', icon: 'fa-comments', label: 'Messages', color: '#7C3AED' },
+    { id: '_alerts', icon: 'fa-bell', label: 'Alerts', color: '#DC2626' },
+    { id: '_more', icon: 'fa-bars', label: 'More', color: '#6B7280' }
+  ];
+  return items.map(function(item) {
+    var isActive = active === item.id;
+    var onclick = item.id === '_alerts' ? 'mobileNavAlerts()' : item.id === '_more' ? 'mobileNavMore()' : 'navigate(\'' + item.id + '\')';
+    return '<button onclick="' + onclick + '" style="flex:1;background:none;border:none;padding:8px 4px;cursor:pointer;text-align:center;opacity:' + (isActive ? '1' : '0.6') + '">'
+      + '<i class="fas ' + item.icon + '" style="font-size:22px;color:' + item.color + ';display:block;margin-bottom:3px"></i>'
+      + '<div style="font-size:11px;font-weight:700;color:' + (isActive ? item.color : '#6B7280') + '">' + item.label + '</div>'
+      + '</button>';
+  }).join('');
+}
+
+function mobileNavAlerts() {
+  // Toggle notification dropdown
+  if (typeof toggleNotifDropdown === 'function') toggleNotifDropdown();
+}
+window.mobileNavAlerts = mobileNavAlerts;
+
+function mobileNavMore() {
+  // Toggle sidebar
+  sidebarOpen = !sidebarOpen;
+  updateSidebar();
+}
+window.mobileNavMore = mobileNavMore;
+
+function updateMobileNav() {
+  var nav = document.getElementById('mobileBottomNav');
+  if (nav) nav.innerHTML = mobileNavItems();
+}
+
+// Listen for resize to show/hide mobile nav
+window.addEventListener('resize', function() {
+  if (window.innerWidth <= 768) initMobileNav();
+  else {
+    var nav = document.getElementById('mobileBottomNav');
+    if (nav) nav.remove();
+  }
+});
+
+// ==================== INIT DUMB-PROOF FEATURES ====================
+
+// Auto-init when logistics module loads
+var _dpInitDone = false;
+function initDumbProofFeatures() {
+  if (_dpInitDone) return;
+  _dpInitDone = true;
+  initSmsAlerts();
+  initMobileNav();
+}
+
+// Hook into the logistics init
+var _origLogisticsInit = window._logisticsInit;
+window._logisticsInit = function() {
+  if (_origLogisticsInit) _origLogisticsInit();
+  initDumbProofFeatures();
+};
 
 // end logistics module

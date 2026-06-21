@@ -1938,6 +1938,7 @@ var SHELL_ALL_MODULES = [
 
 var SHELL_MODULE_PAGES = {
   logistics: [
+    { id: 'today', label: 'Today', icon: 'fa-clipboard-check' },
     { id: 'dashboard', label: 'Dashboard', icon: 'fa-tachometer-alt' },
     { id: 'orders', label: 'Orders', icon: 'fa-clipboard-list' },
     { id: 'ticket_review', label: 'Ticket Review', icon: 'fa-rectangle-list' },

@@ -2002,4 +2002,541 @@ app.put('/api/sms-templates/:id', async (c) => {
   return c.json({ success: true })
 })
 
+// ==================== "TODAY" — DUMB-PROOF MORNING BRIEFING ====================
+
+// Returns a flat, prioritized list of to-do items with one-tap actions
+app.get('/api/today', async (c) => {
+  const db = c.env.DB
+  const today = new Date().toISOString().split('T')[0]
+  const items: any[] = []
+
+  try {
+    // 1. Modified orders — HIGHEST PRIORITY (customer replied with changes)
+    const mods = await db.prepare(`
+      SELECT ce.id, ce.customer_name, ce.customer_phone, ce.modified_items, ce.status,
+        cr.run_date, cr.id as run_id
+      FROM confirmation_entries ce
+      JOIN confirmation_runs cr ON ce.run_id = cr.id
+      WHERE ce.status = 'modified' AND cr.status IN ('sent','sending')
+      ORDER BY ce.updated_at DESC
+    `).all()
+    for (const m of (mods.results as any[] || [])) {
+      items.push({
+        id: 'mod_' + m.id,
+        type: 'modified_order',
+        priority: 1,
+        color: 'red',
+        icon: 'exclamation-triangle',
+        emoji: '🔴',
+        title: m.customer_name + ' changed their order',
+        subtitle: m.modified_items ? '"' + (m.modified_items as string).substring(0, 80) + '"' : 'Review their changes',
+        action: 'review_modified',
+        action_label: 'Review',
+        entry_id: m.id,
+        run_id: m.run_id,
+        customer_name: m.customer_name
+      })
+    }
+
+    // 2. Active run with unsent entries (draft run needs AI messages + send)
+    const draftRuns = await db.prepare(`
+      SELECT cr.id, cr.run_date, cr.delivery_day, cr.status,
+        COUNT(ce.id) as total_entries,
+        SUM(CASE WHEN ce.status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+        SUM(CASE WHEN ce.draft_message IS NOT NULL AND ce.draft_message != '' THEN 1 ELSE 0 END) as has_message_count
+      FROM confirmation_runs cr
+      JOIN confirmation_entries ce ON ce.run_id = cr.id
+      WHERE cr.status = 'draft'
+      GROUP BY cr.id
+      ORDER BY cr.run_date ASC
+    `).all()
+    for (const dr of (draftRuns.results as any[] || [])) {
+      const hasMessages = (dr.has_message_count as number) > 0
+      if (!hasMessages) {
+        items.push({
+          id: 'draft_msg_' + dr.id,
+          type: 'generate_messages',
+          priority: 2,
+          color: 'blue',
+          icon: 'magic',
+          emoji: '🔵',
+          title: 'Generate AI texts for ' + dr.delivery_day + ' ' + dr.run_date,
+          subtitle: dr.total_entries + ' customers ready — need AI messages first',
+          action: 'generate_messages',
+          action_label: 'Generate AI Texts',
+          run_id: dr.id
+        })
+      } else {
+        items.push({
+          id: 'draft_send_' + dr.id,
+          type: 'send_texts',
+          priority: 2,
+          color: 'green',
+          icon: 'paper-plane',
+          emoji: '🟢',
+          title: 'Send texts for ' + dr.delivery_day + ' ' + dr.run_date,
+          subtitle: dr.pending_count + ' texts ready to send',
+          action: 'send_texts',
+          action_label: 'Send All Texts',
+          run_id: dr.id
+        })
+      }
+    }
+
+    // 3. Waiting for replies (sent entries, no response yet)
+    const waitingRuns = await db.prepare(`
+      SELECT cr.id, cr.run_date, cr.delivery_day, cr.cutoff_time,
+        SUM(CASE WHEN ce.status = 'sent' THEN 1 ELSE 0 END) as waiting_count,
+        SUM(CASE WHEN ce.status = 'confirmed' THEN 1 ELSE 0 END) as confirmed_count,
+        COUNT(ce.id) as total_entries
+      FROM confirmation_runs cr
+      JOIN confirmation_entries ce ON ce.run_id = cr.id
+      WHERE cr.status = 'sent'
+      GROUP BY cr.id
+      ORDER BY cr.run_date ASC
+    `).all()
+    for (const wr of (waitingRuns.results as any[] || [])) {
+      if ((wr.waiting_count as number) > 0) {
+        // Check if cutoff is approaching
+        const cutoffSoon = wr.cutoff_time ? new Date(wr.cutoff_time as string).getTime() - Date.now() < 4 * 3600000 : false
+        items.push({
+          id: 'wait_' + wr.id,
+          type: 'waiting_replies',
+          priority: cutoffSoon ? 2 : 4,
+          color: cutoffSoon ? 'orange' : 'yellow',
+          icon: 'clock',
+          emoji: cutoffSoon ? '🟠' : '🟡',
+          title: wr.waiting_count + ' haven\'t replied — ' + wr.delivery_day + ' ' + wr.run_date,
+          subtitle: wr.confirmed_count + ' confirmed so far' + (cutoffSoon ? ' — CUTOFF SOON!' : ''),
+          action: 'send_reminders',
+          action_label: cutoffSoon ? 'Send Reminders NOW' : 'Send Reminders',
+          run_id: wr.id
+        })
+      }
+    }
+
+    // 4. Seasonal customers arriving
+    const arriving = await db.prepare(`
+      SELECT id, business_name, season_start_month, season_start_day
+      FROM customers
+      WHERE active = 1 AND is_seasonal = 1 AND season_status = 'arriving_soon'
+    `).all()
+    for (const a of (arriving.results as any[] || [])) {
+      items.push({
+        id: 'arrive_' + a.id,
+        type: 'season_arriving',
+        priority: 3,
+        color: 'blue',
+        icon: 'sun',
+        emoji: '☀️',
+        title: a.business_name + ' is coming back!',
+        subtitle: 'Seasonal customer returning — send welcome text',
+        action: 'welcome_back',
+        action_label: 'Welcome Back',
+        customer_id: a.id,
+        customer_name: a.business_name
+      })
+    }
+
+    // 5. Seasonal customers departing
+    const departing = await db.prepare(`
+      SELECT id, business_name, season_end_month, season_end_day
+      FROM customers
+      WHERE active = 1 AND is_seasonal = 1 AND season_status = 'departing_soon'
+    `).all()
+    for (const d of (departing.results as any[] || [])) {
+      items.push({
+        id: 'depart_' + d.id,
+        type: 'season_departing',
+        priority: 3,
+        color: 'orange',
+        icon: 'suitcase-rolling',
+        emoji: '🧳',
+        title: d.business_name + ' is leaving soon',
+        subtitle: 'Send farewell text + ask about final order',
+        action: 'farewell',
+        action_label: 'Send Farewell',
+        customer_id: d.id,
+        customer_name: d.business_name
+      })
+    }
+
+    // 6. Unread tasks assigned to team (standing-order tagged)
+    const tasks = await db.prepare(`
+      SELECT id, task_number, title, priority, customer_name, created_at
+      FROM tasks
+      WHERE status = 'pending' AND tags LIKE '%standing-orders%'
+      ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, created_at DESC
+      LIMIT 10
+    `).all()
+    for (const t of (tasks.results as any[] || [])) {
+      items.push({
+        id: 'task_' + t.id,
+        type: 'open_task',
+        priority: (t.priority === 'high' || t.priority === 'critical') ? 2 : 5,
+        color: t.priority === 'high' || t.priority === 'critical' ? 'orange' : 'gray',
+        icon: 'list-check',
+        emoji: t.priority === 'high' || t.priority === 'critical' ? '⚠️' : '📋',
+        title: t.title,
+        subtitle: t.customer_name ? 'Customer: ' + t.customer_name : 'Team task',
+        action: 'view_task',
+        action_label: 'View',
+        task_id: t.id
+      })
+    }
+
+    // 7. Runs that can be expired (past cutoff, has no_response)
+    const expirable = await db.prepare(`
+      SELECT cr.id, cr.run_date, cr.delivery_day, cr.cutoff_time,
+        SUM(CASE WHEN ce.status = 'sent' THEN 1 ELSE 0 END) as no_resp_count
+      FROM confirmation_runs cr
+      JOIN confirmation_entries ce ON ce.run_id = cr.id
+      WHERE cr.status = 'sent' AND cr.cutoff_time IS NOT NULL
+        AND cr.cutoff_time < datetime('now')
+      GROUP BY cr.id
+      HAVING no_resp_count > 0
+    `).all()
+    for (const ex of (expirable.results as any[] || [])) {
+      items.push({
+        id: 'expire_' + ex.id,
+        type: 'expire_run',
+        priority: 3,
+        color: 'gray',
+        icon: 'hourglass-end',
+        emoji: '⏰',
+        title: 'Close out ' + ex.delivery_day + ' ' + ex.run_date + ' run',
+        subtitle: ex.no_resp_count + ' people never replied — mark as expired',
+        action: 'expire_run',
+        action_label: 'Expire No-Responses',
+        run_id: ex.id
+      })
+    }
+
+    // Sort by priority (lowest number = highest priority)
+    items.sort((a, b) => a.priority - b.priority)
+
+    // Overall status
+    const redCount = items.filter(i => i.color === 'red').length
+    const orangeCount = items.filter(i => i.color === 'orange').length
+    const blueCount = items.filter(i => i.color === 'blue' || i.color === 'green').length
+    let overall: 'green' | 'yellow' | 'red' = 'green'
+    let overall_message = 'All good! Nothing needs you right now.'
+    let overall_emoji = '✅'
+    if (redCount > 0) {
+      overall = 'red'
+      overall_message = redCount + ' thing' + (redCount > 1 ? 's' : '') + ' need you NOW!'
+      overall_emoji = '🚨'
+    } else if (orangeCount > 0) {
+      overall = 'yellow'
+      overall_message = orangeCount + ' thing' + (orangeCount > 1 ? 's' : '') + ' need attention'
+      overall_emoji = '⚠️'
+    } else if (blueCount > 0) {
+      overall = 'yellow'
+      overall_message = blueCount + ' thing' + (blueCount > 1 ? 's' : '') + ' to do when you\'re ready'
+      overall_emoji = '📋'
+    }
+
+    return c.json({
+      overall, overall_message, overall_emoji,
+      items,
+      total: items.length,
+      red_count: redCount,
+      orange_count: orangeCount,
+      date: today
+    })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
+// ==================== AUTOPILOT WIZARD ====================
+
+// Step-by-step wizard: get current autopilot state for a delivery date
+app.get('/api/standing-orders/autopilot/status', async (c) => {
+  const db = c.env.DB
+  const runDate = c.req.query('date')
+
+  try {
+    // Check for existing runs for this date (or any active run)
+    let run: any = null
+    if (runDate) {
+      run = await db.prepare(`
+        SELECT * FROM confirmation_runs WHERE run_date = ? ORDER BY created_at DESC LIMIT 1
+      `).bind(runDate).first()
+    }
+    if (!run) {
+      // Get any active run
+      run = await db.prepare(`
+        SELECT * FROM confirmation_runs WHERE status IN ('draft','sending','sent')
+        ORDER BY run_date ASC LIMIT 1
+      `).first()
+    }
+
+    if (!run) {
+      // No active run — need to generate one. Figure out next delivery date.
+      const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+      const zones = await db.prepare('SELECT * FROM delivery_zones WHERE active = 1').all()
+      const deliveryDays = new Set<string>()
+      for (const z of (zones.results as any[] || [])) {
+        for (const d of (z.delivery_days || '').split(',').map((s: string) => s.trim())) {
+          if (d) deliveryDays.add(d)
+        }
+      }
+
+      // Find next delivery date from today
+      let nextDate = ''
+      let nextDay = ''
+      for (let i = 0; i <= 7; i++) {
+        const d = new Date(Date.now() + i * 86400000)
+        const dn = dayNames[d.getUTCDay()]
+        if (deliveryDays.has(dn)) {
+          nextDate = d.toISOString().split('T')[0]
+          nextDay = dn
+          break
+        }
+      }
+
+      return c.json({
+        step: 'generate',
+        step_number: 1,
+        step_label: 'Create Delivery Run',
+        next_date: nextDate,
+        next_day: nextDay,
+        delivery_days: Array.from(deliveryDays),
+        message: nextDate
+          ? `Next delivery is ${nextDay} ${nextDate}. Ready to pull customers?`
+          : 'No delivery days configured in zones.'
+      })
+    }
+
+    // We have a run — figure out what step we're on
+    const entries = await db.prepare(`
+      SELECT ce.id, ce.status, ce.draft_message, ce.customer_name, ce.entry_type,
+        ce.order_id, ce.modified_items, ce.customer_phone
+      FROM confirmation_entries ce WHERE ce.run_id = ?
+    `).bind(run.id).all()
+    const all = entries.results as any[] || []
+    const pending = all.filter(e => e.status === 'pending')
+    const sent = all.filter(e => e.status === 'sent')
+    const confirmed = all.filter(e => e.status === 'confirmed')
+    const modified = all.filter(e => e.status === 'modified')
+    const declined = all.filter(e => e.status === 'declined')
+    const noResp = all.filter(e => e.status === 'no_response')
+    const hasMessages = all.some(e => e.draft_message)
+
+    let step = '', stepNum = 0, stepLabel = '', message = '', action = ''
+
+    if (run.status === 'draft' && !hasMessages) {
+      step = 'generate_messages'
+      stepNum = 2
+      stepLabel = 'Generate AI Texts'
+      message = `Run created with ${all.length} customers. Let's write AI-personalized texts for them!`
+      action = 'generate_messages'
+    } else if (run.status === 'draft' && hasMessages && pending.length > 0) {
+      step = 'send_texts'
+      stepNum = 3
+      stepLabel = 'Send Texts'
+      message = `AI texts ready for ${pending.length} customers. Send them all now?`
+      action = 'send_texts'
+    } else if (run.status === 'sent' && modified.length > 0) {
+      step = 'review_changes'
+      stepNum = 4
+      stepLabel = 'Review Changes'
+      message = `${modified.length} customer${modified.length > 1 ? 's' : ''} replied with changes. Review them!`
+      action = 'review_changes'
+    } else if (run.status === 'sent' && sent.length > 0) {
+      step = 'waiting'
+      stepNum = 4
+      stepLabel = 'Waiting for Replies'
+      message = `${confirmed.length} confirmed, ${sent.length} still waiting. ${declined.length > 0 ? declined.length + ' declined.' : ''}`
+      action = sent.length > 0 ? 'send_reminders' : ''
+    } else if (run.status === 'sent' && sent.length === 0) {
+      step = 'complete'
+      stepNum = 5
+      stepLabel = 'All Done!'
+      message = `${confirmed.length} confirmed, ${declined.length} declined, ${noResp.length} no response. Run complete!`
+      action = 'complete'
+    } else if (run.status === 'completed') {
+      step = 'done'
+      stepNum = 5
+      stepLabel = 'Completed'
+      message = `This run is done. ${confirmed.length} orders confirmed.`
+      action = ''
+    } else {
+      step = 'unknown'
+      stepNum = 0
+      stepLabel = 'Check Status'
+      message = `Run status: ${run.status}`
+    }
+
+    return c.json({
+      step, step_number: stepNum, step_label: stepLabel, message, action,
+      run_id: run.id, run_date: run.run_date, delivery_day: run.delivery_day,
+      run_status: run.status,
+      counts: {
+        total: all.length, pending: pending.length, sent: sent.length,
+        confirmed: confirmed.length, modified: modified.length,
+        declined: declined.length, no_response: noResp.length,
+        has_messages: hasMessages
+      },
+      modified_entries: modified.map(m => ({
+        id: m.id, customer_name: m.customer_name, modified_items: m.modified_items
+      }))
+    })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
+// Autopilot: one-tap generate run for next delivery date
+app.post('/api/standing-orders/autopilot/generate', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  const body = await c.req.json().catch(() => ({}))
+  const runDate = body.run_date
+
+  if (!runDate) return c.json({ error: 'run_date required' }, 400)
+
+  // Check if run already exists for this date
+  const existing = await db.prepare(
+    'SELECT id FROM confirmation_runs WHERE run_date = ? AND status != ?'
+  ).bind(runDate, 'cancelled').first()
+  if (existing) {
+    return c.json({ error: 'Run already exists for this date', run_id: existing.id }, 409)
+  }
+
+  // Determine day of week
+  const d = new Date(runDate + 'T12:00:00Z')
+  const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+  const deliveryDay = dayNames[d.getUTCDay()]
+
+  // Get all active zones for this day
+  const allZones = await db.prepare('SELECT * FROM delivery_zones WHERE active = 1').all()
+  const zones = (allZones.results as any[]).filter(z => {
+    const days = (z.delivery_days || '').split(',').map((s: string) => s.trim())
+    return days.includes(deliveryDay)
+  })
+
+  if (zones.length === 0) {
+    return c.json({ error: `No zones deliver on ${deliveryDay}` }, 400)
+  }
+
+  const zoneIds = zones.map(z => z.id)
+  const zoneIdStr = zoneIds.join(',')
+
+  // Default cutoff: day before at 6pm
+  const cutoff = new Date(d.getTime() - 6 * 3600000)
+  const cutoffStr = cutoff.toISOString().replace('Z', '')
+
+  // Create run
+  const runRes = await db.prepare(`
+    INSERT INTO confirmation_runs (run_date, delivery_day, zone_ids, status, cutoff_time, created_by, created_by_name)
+    VALUES (?, ?, ?, 'draft', ?, ?, ?)
+  `).bind(runDate, deliveryDay, zoneIdStr, cutoffStr, user?.id || null, user?.name || 'Autopilot').run()
+  const runId = runRes.meta.last_row_id
+
+  let totalEntries = 0
+  const processedCustomerIds = new Set<number>()
+
+  // Standing orders
+  const placeholders = zoneIds.map(() => '?').join(',')
+  const standingCustomers = await db.prepare(`
+    SELECT DISTINCT rs.id as schedule_id, rs.customer_id, rs.address_id, rs.confirm_mode, rs.auto_confirm,
+      c.business_name, c.phone, c.sms_phone, c.sms_opt_in, c.is_seasonal, c.season_status,
+      a.zone_id
+    FROM recurring_schedules rs
+    JOIN customers c ON rs.customer_id = c.id
+    LEFT JOIN addresses a ON rs.address_id = a.id
+    WHERE rs.status = 'active' AND c.active = 1
+      AND (rs.confirm_mode IS NULL OR rs.confirm_mode != 'skip')
+      AND (c.is_seasonal = 0 OR c.season_status IS NULL OR c.season_status NOT IN ('out_of_season'))
+      AND a.zone_id IN (${placeholders})
+  `).bind(...zoneIds).all()
+
+  for (const sc of standingCustomers.results as any[]) {
+    const items = await db.prepare(`
+      SELECT rsi.product_id, rsi.quantity, p.name as product_name, p.unit_type, p.sku
+      FROM recurring_schedule_items rsi
+      JOIN products p ON rsi.product_id = p.id
+      WHERE rsi.schedule_id = ?
+    `).bind(sc.schedule_id).all()
+
+    const proposedItems = (items.results as any[]).map(i => ({
+      product_id: i.product_id, product_name: i.product_name,
+      quantity: i.quantity, unit_type: i.unit_type || 'bag', sku: i.sku
+    }))
+
+    const phone = sc.sms_phone || sc.phone
+    await db.prepare(`
+      INSERT INTO confirmation_entries (run_id, customer_id, customer_name, customer_phone,
+        entry_type, zone_id, proposed_items, status, confirm_mode)
+      VALUES (?, ?, ?, ?, 'standing', ?, ?, 'pending', ?)
+    `).bind(
+      runId, sc.customer_id, sc.business_name, phone,
+      sc.zone_id, JSON.stringify(proposedItems),
+      sc.confirm_mode || (sc.auto_confirm ? 'auto' : 'text_confirm')
+    ).run()
+    processedCustomerIds.add(sc.customer_id)
+    totalEntries++
+  }
+
+  // Broadcast customers
+  const broadcastCustomers = await db.prepare(`
+    SELECT DISTINCT c.id, c.business_name, c.phone, c.sms_phone, c.sms_opt_in,
+      c.is_seasonal, c.season_status, a.zone_id
+    FROM customers c
+    JOIN addresses a ON a.customer_id = c.id
+    WHERE c.active = 1 AND c.sms_opt_in = 1
+      AND (c.is_seasonal = 0 OR c.season_status IS NULL OR c.season_status NOT IN ('out_of_season'))
+      AND a.zone_id IN (${placeholders})
+  `).bind(...zoneIds).all()
+
+  for (const bc of broadcastCustomers.results as any[]) {
+    if (processedCustomerIds.has(bc.id)) continue
+    const phone = bc.sms_phone || bc.phone
+    if (!phone) continue
+    await db.prepare(`
+      INSERT INTO confirmation_entries (run_id, customer_id, customer_name, customer_phone,
+        entry_type, zone_id, status, confirm_mode)
+      VALUES (?, ?, ?, ?, 'broadcast', ?, 'pending', 'text_confirm')
+    `).bind(runId, bc.id, bc.business_name, phone, bc.zone_id).run()
+    processedCustomerIds.add(bc.id)
+    totalEntries++
+  }
+
+  // Notification
+  await createAutoNotification(db, {
+    title: `Autopilot: ${deliveryDay} ${runDate} run created`,
+    message: `${totalEntries} customers pulled for delivery. AI messages next.`,
+    notification_type: 'info', ref_type: 'confirmation_run', ref_id: runId as number
+  })
+
+  return c.json({
+    success: true, run_id: runId, total_entries: totalEntries,
+    run_date: runDate, delivery_day: deliveryDay
+  })
+})
+
+// ==================== INBOUND SMS POLLING (for real-time audio alerts) ====================
+
+// Returns recent inbound SMS not yet "seen" by the dashboard
+app.get('/api/sms/recent-inbound', async (c) => {
+  const db = c.env.DB
+  const since = c.req.query('since') || new Date(Date.now() - 300000).toISOString() // last 5 min default
+
+  try {
+    const msgs = await db.prepare(`
+      SELECT sm.id, sm.customer_id, sm.customer_phone, sm.message_body, sm.created_at,
+        ce.customer_name, ce.status as entry_status, ce.id as entry_id
+      FROM sms_messages sm
+      LEFT JOIN confirmation_entries ce ON sm.confirmation_entry_id = ce.id
+      WHERE sm.direction = 'inbound' AND sm.created_at >= ?
+      ORDER BY sm.created_at DESC LIMIT 20
+    `).bind(since).all()
+    return c.json({ messages: msgs.results || [] })
+  } catch (e: any) {
+    return c.json({ messages: [], error: e.message })
+  }
+})
+
 export const standingOrdersApp = app
