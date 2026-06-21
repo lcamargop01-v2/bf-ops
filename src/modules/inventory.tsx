@@ -1898,5 +1898,285 @@ app.get('/api/inventory/snapshot-compare', async (c) => {
   })
 })
 
+// ==================== SMART RESTOCK (DEMAND ANALYSIS) ====================
+
+// Analyze buying habits at each location vs current stock
+// Combines: order_items (logistics/delivery orders) + pos_sale_items (POS sales)
+// Returns per-product demand metrics and restock suggestions
+app.get('/api/inventory/smart-restock', async (c) => {
+  const db = c.env.DB
+  const targetLocationId = parseInt(c.req.query('location_id') || '0')
+  const days = parseInt(c.req.query('days') || '90') // lookback period
+  const minOrders = parseInt(c.req.query('min_orders') || '2') // min order count to be relevant
+
+  // Get all active locations
+  let locations: any
+  try {
+    locations = await db.prepare('SELECT id, name, code, type FROM locations WHERE active = 1').all()
+  } catch (e) {
+    locations = { results: [] }
+  }
+  const locMap: Record<number, any> = {}
+  for (const l of locations.results as any[]) locMap[l.id] = l
+
+  // --- 1. DEMAND from logistics orders (order_items) ---
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString().split('T')[0]
+
+  let orderDemand: any
+  try {
+    orderDemand = await db.prepare(`
+      SELECT oi.product_id, p.name as product_name, p.sku, p.category, p.unit_type, p.price,
+        SUM(oi.quantity) as total_qty,
+        COUNT(DISTINCT o.id) as order_count,
+        COUNT(DISTINCT o.customer_id) as unique_customers,
+        MIN(o.created_at) as first_order,
+        MAX(o.created_at) as last_order
+      FROM order_items oi
+      JOIN orders o ON oi.order_id = o.id
+      JOIN products p ON oi.product_id = p.id
+      WHERE o.status NOT IN ('cancelled')
+        AND o.created_at >= ?
+        AND p.active = 1
+      GROUP BY oi.product_id
+      HAVING order_count >= ?
+      ORDER BY total_qty DESC
+    `).bind(cutoff, minOrders).all()
+  } catch (e) {
+    orderDemand = { results: [] }
+  }
+
+  // --- 2. DEMAND from POS sales (pos_sale_items) per location ---
+  let posDemand: any
+  try {
+    posDemand = await db.prepare(`
+      SELECT psi.product_id, psi.location_id,
+        SUM(psi.quantity) as total_qty,
+        COUNT(DISTINCT psi.sale_id) as sale_count
+      FROM pos_sale_items psi
+      JOIN pos_sales ps ON psi.sale_id = ps.id
+      WHERE ps.status = 'completed'
+        AND ps.created_at >= ?
+      GROUP BY psi.product_id, psi.location_id
+    `).bind(cutoff).all()
+  } catch (e) {
+    posDemand = { results: [] }
+  }
+
+  // Build POS demand map: { product_id: { loc_id: qty, ... } }
+  const posMap: Record<number, Record<number, number>> = {}
+  for (const row of posDemand.results as any[]) {
+    if (!posMap[row.product_id]) posMap[row.product_id] = {}
+    posMap[row.product_id][row.location_id] = row.total_qty
+  }
+
+  // --- 3. CURRENT STOCK per location ---
+  let stockRows: any
+  try {
+    stockRows = await db.prepare(`
+      SELECT is2.product_id, is2.location_id, is2.qty_on_hand, is2.qty_available, is2.qty_on_hold
+      FROM inventory_stock is2
+    `).all()
+  } catch (e) {
+    stockRows = { results: [] }
+  }
+
+  // Stock map: { product_id: { loc_id: { on_hand, available }, ... } }
+  const stockMap: Record<number, Record<number, any>> = {}
+  for (const row of stockRows.results as any[]) {
+    if (!stockMap[row.product_id]) stockMap[row.product_id] = {}
+    stockMap[row.product_id][row.location_id] = {
+      on_hand: row.qty_on_hand,
+      available: row.qty_available,
+      on_hold: row.qty_on_hold
+    }
+  }
+
+  // --- 4. BUILD ANALYSIS per product ---
+  const analysis: any[] = []
+
+  for (const item of orderDemand.results as any[]) {
+    const pid = item.product_id
+    const stock = stockMap[pid] || {}
+    const posDemandForProduct = posMap[pid] || {}
+
+    // Total demand = logistics orders + POS
+    const totalLogisticsDemand = item.total_qty
+    let totalPosDemand = 0
+    for (const locId of Object.keys(posDemandForProduct)) {
+      totalPosDemand += posDemandForProduct[parseInt(locId)]
+    }
+    const totalDemand = totalLogisticsDemand + totalPosDemand
+
+    // Calc rates
+    const weeksInPeriod = Math.max(1, days / 7)
+    const avgWeeklyDemand = Math.round((totalDemand / weeksInPeriod) * 10) / 10
+    const avgDailyDemand = Math.round((totalDemand / days) * 10) / 10
+
+    // Per-location breakdown
+    const locationBreakdown: any[] = []
+    for (const loc of locations.results as any[]) {
+      const locStock = stock[loc.id] || { on_hand: 0, available: 0, on_hold: 0 }
+      const locPosDemand = posDemandForProduct[loc.id] || 0
+
+      // For logistics orders, warehouse (distribution) fills deliveries
+      // Retail location only sees POS demand directly
+      let locDemand = locPosDemand
+      if (loc.type === 'distribution') {
+        locDemand += totalLogisticsDemand // warehouse fulfills delivery orders
+      }
+
+      const weeklyDemand = Math.round((locDemand / weeksInPeriod) * 10) / 10
+      const dailyDemand = locDemand > 0 ? (locDemand / days) : 0
+      const daysOfSupply = dailyDemand > 0 ? Math.round(locStock.available / dailyDemand) : (locStock.available > 0 ? 999 : 0)
+
+      locationBreakdown.push({
+        location_id: loc.id,
+        location_name: loc.name,
+        location_code: loc.code,
+        location_type: loc.type,
+        stock_on_hand: locStock.on_hand,
+        stock_available: locStock.available,
+        stock_on_hold: locStock.on_hold,
+        demand_total: locDemand,
+        demand_weekly: weeklyDemand,
+        days_of_supply: daysOfSupply,
+        status: daysOfSupply <= 7 ? 'critical' : daysOfSupply <= 14 ? 'low' : daysOfSupply <= 30 ? 'watch' : 'ok'
+      })
+    }
+
+    // Overall stock totals
+    let totalOnHand = 0, totalAvailable = 0
+    for (const loc of Object.values(stock) as any[]) {
+      totalOnHand += loc.on_hand
+      totalAvailable += loc.available
+    }
+
+    const overallDailyDemand = totalDemand / days
+    const overallDaysOfSupply = overallDailyDemand > 0 ? Math.round(totalAvailable / overallDailyDemand) : (totalAvailable > 0 ? 999 : 0)
+
+    analysis.push({
+      product_id: pid,
+      product_name: item.product_name,
+      sku: item.sku,
+      category: item.category,
+      unit_type: item.unit_type,
+      price: item.price,
+      demand: {
+        total_qty: totalDemand,
+        logistics_qty: totalLogisticsDemand,
+        pos_qty: totalPosDemand,
+        order_count: item.order_count,
+        unique_customers: item.unique_customers,
+        avg_weekly: avgWeeklyDemand,
+        avg_daily: avgDailyDemand,
+        first_order: item.first_order,
+        last_order: item.last_order
+      },
+      stock: {
+        total_on_hand: totalOnHand,
+        total_available: totalAvailable,
+        days_of_supply: overallDaysOfSupply,
+        status: overallDaysOfSupply <= 7 ? 'critical' : overallDaysOfSupply <= 14 ? 'low' : overallDaysOfSupply <= 30 ? 'watch' : 'ok'
+      },
+      locations: locationBreakdown
+    })
+  }
+
+  // --- 5. Generate SUGGESTIONS ---
+  // Filter to target location if specified
+  const filtered = targetLocationId ? analysis.filter(a => {
+    const locData = a.locations.find((l: any) => l.location_id === targetLocationId)
+    return locData && (locData.status === 'critical' || locData.status === 'low' || locData.status === 'watch')
+  }) : analysis.filter(a => a.stock.status !== 'ok')
+
+  const suggestions: any[] = []
+  for (const item of filtered) {
+    const targetLoc = targetLocationId
+      ? item.locations.find((l: any) => l.location_id === targetLocationId)
+      : item.locations.find((l: any) => l.status === 'critical' || l.status === 'low')
+
+    if (!targetLoc) continue
+
+    // How much do we need? Enough for 3 weeks of demand
+    const weeksInPeriod = Math.max(1, days / 7)
+    const targetWeeks = 3
+    const neededQty = Math.max(0, Math.ceil(targetLoc.demand_weekly * targetWeeks) - targetLoc.stock_available)
+    if (neededQty <= 0) continue
+
+    // Can another location supply it?
+    const otherLoc = item.locations.find((l: any) =>
+      l.location_id !== targetLoc.location_id && l.stock_available > neededQty && l.days_of_supply > 21
+    )
+
+    suggestions.push({
+      product_id: item.product_id,
+      product_name: item.product_name,
+      sku: item.sku,
+      category: item.category,
+      unit_type: item.unit_type,
+      to_location: { id: targetLoc.location_id, name: targetLoc.location_name, code: targetLoc.location_code },
+      current_stock: targetLoc.stock_available,
+      weekly_demand: targetLoc.demand_weekly,
+      days_of_supply: targetLoc.days_of_supply,
+      suggested_qty: neededQty,
+      status: targetLoc.status,
+      action: otherLoc ? 'transfer' : 'purchase',
+      from_location: otherLoc ? { id: otherLoc.location_id, name: otherLoc.location_name, code: otherLoc.location_code, available: otherLoc.stock_available } : null
+    })
+  }
+
+  // Sort suggestions: critical first, then low, then by qty needed
+  const statusOrder: Record<string, number> = { critical: 0, low: 1, watch: 2, ok: 3 }
+  suggestions.sort((a, b) => (statusOrder[a.status] || 3) - (statusOrder[b.status] || 3) || b.suggested_qty - a.suggested_qty)
+
+  return c.json({
+    analysis_period_days: days,
+    cutoff_date: cutoff,
+    target_location: targetLocationId ? locMap[targetLocationId] : null,
+    locations: locations.results,
+    total_products_analyzed: analysis.length,
+    summary: {
+      critical: analysis.filter(a => a.stock.status === 'critical').length,
+      low: analysis.filter(a => a.stock.status === 'low').length,
+      watch: analysis.filter(a => a.stock.status === 'watch').length,
+      ok: analysis.filter(a => a.stock.status === 'ok').length,
+    },
+    suggestions,
+    products: analysis
+  })
+})
+
+// Create transfer from smart restock suggestions (batch)
+app.post('/api/inventory/smart-restock/create-transfer', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json()
+  const { from_location_id, to_location_id, items, notes } = body
+  // items: [{ product_id, quantity }]
+
+  if (!from_location_id || !to_location_id || !items?.length) {
+    return c.json({ error: 'from_location_id, to_location_id, and items required' }, 400)
+  }
+
+  // Generate transfer number
+  const d = new Date()
+  const prefix = 'SR' // Smart Restock
+  const num = prefix + d.getFullYear().toString().slice(2) + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0') + '-' + Math.random().toString(36).substring(2, 6).toUpperCase()
+
+  const result = await db.prepare(
+    `INSERT INTO inventory_transfers (transfer_number, from_location_id, to_location_id, status, notes, created_by, created_at)
+     VALUES (?, ?, ?, 'pending', ?, ?, CURRENT_TIMESTAMP)`
+  ).bind(num, from_location_id, to_location_id, notes || 'Auto-generated from Smart Restock analysis', body.created_by || null).run()
+
+  const transferId = result.meta.last_row_id
+
+  for (const item of items) {
+    await db.prepare(
+      'INSERT INTO inventory_transfer_items (transfer_id, product_id, qty_requested) VALUES (?, ?, ?)'
+    ).bind(transferId, item.product_id, item.quantity).run()
+  }
+
+  return c.json({ success: true, transfer_id: transferId, transfer_number: num })
+})
+
 export default app
 export { app as inventoryApp, takeSnapshot }

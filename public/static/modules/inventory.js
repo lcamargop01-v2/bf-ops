@@ -184,6 +184,11 @@ async function invRender() {
     root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
     var html = await invRenderAuditLog();
     root.innerHTML = invRenderNav() + html;
+  } else if (invPage === 'smart_restock') {
+    root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Analyzing demand patterns...</div>';
+    var html = await invRenderSmartRestock();
+    root = document.getElementById('inventory-app'); if (!root) return;
+    root.innerHTML = invRenderNav() + html;
   } else if (invPage === 'categories') {
     root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Analyzing products...</div>';
     var html = await invRenderCategoriesPage();
@@ -210,6 +215,7 @@ function invRenderNav() {
     { id: 'products', icon: 'fa-tags', label: 'Products' },
     { id: 'count', icon: 'fa-calculator', label: 'Count' },
     { id: 'transfers', icon: 'fa-truck-ramp-box', label: 'Transfers' },
+    { id: 'smart_restock', icon: 'fa-wand-magic-sparkles', label: 'Smart Restock' },
     { id: 'batches', icon: 'fa-layer-group', label: 'Batches' },
     { id: 'losses', icon: 'fa-triangle-exclamation', label: 'Losses' },
 
@@ -2768,6 +2774,314 @@ async function invRenderSnapshotCompareView() {
 
   html += '</div>';
   return html;
+}
+
+// ==================== SMART RESTOCK ====================
+var _srData = null;
+var _srLocationId = '';
+var _srDays = '90';
+var _srFilter = 'suggestions'; // suggestions, all, critical, low
+var _srSearch = '';
+var _srSelected = {}; // { product_id: qty } for batch transfer creation
+
+async function invRenderSmartRestock() {
+  try {
+    var params = '?days=' + _srDays;
+    if (_srLocationId) params += '&location_id=' + _srLocationId;
+    var resp = await invAPI.get('/api/inventory/smart-restock' + params, { headers: invHeaders() });
+    _srData = resp.data;
+  } catch(e) {
+    return '<div class="inv-card" style="padding:24px;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> Error loading analysis: ' + (e.message || e) + '</div>';
+  }
+
+  var d = _srData;
+  var locs = d.locations || [];
+  var suggestions = d.suggestions || [];
+  var products = d.products || [];
+
+  // Location picker
+  var locOpts = '<option value="">All Locations</option>';
+  locs.forEach(function(l) {
+    locOpts += '<option value="' + l.id + '"' + (_srLocationId == l.id ? ' selected' : '') + '>' + l.code + ' — ' + l.name + '</option>';
+  });
+
+  // Period picker
+  var dayOpts = [30,60,90,180].map(function(v) {
+    return '<option value="' + v + '"' + (_srDays == v ? ' selected' : '') + '>' + v + ' days</option>';
+  }).join('');
+
+  // Filter tabs
+  var tabs = [
+    { id: 'suggestions', label: 'Suggestions', count: suggestions.length, icon: 'fa-lightbulb', color: '#F59E0B' },
+    { id: 'critical', label: 'Critical', count: d.summary.critical, icon: 'fa-fire', color: '#DC2626' },
+    { id: 'low', label: 'Low Stock', count: d.summary.low, icon: 'fa-arrow-down', color: '#F97316' },
+    { id: 'all', label: 'All Products', count: d.total_products_analyzed, icon: 'fa-boxes-stacked', color: '#6366F1' }
+  ];
+
+  var html = '<div class="inv-sr">';
+
+  // Header
+  html += '<div class="inv-sr-header">' +
+    '<div class="inv-sr-title"><i class="fas fa-wand-magic-sparkles" style="color:#F59E0B"></i> Smart Restock</div>' +
+    '<div class="inv-sr-controls">' +
+      '<select class="inv-sr-select" onchange="_srLocationId=this.value;invRender()">' + locOpts + '</select>' +
+      '<select class="inv-sr-select" onchange="_srDays=this.value;invRender()">' + dayOpts + '</select>' +
+    '</div>' +
+  '</div>';
+
+  // Summary cards
+  var statusCards = [
+    { label: 'Critical', count: d.summary.critical, icon: 'fa-fire', color: '#DC2626', bg: '#FEF2F2' },
+    { label: 'Low Stock', count: d.summary.low, icon: 'fa-arrow-down', color: '#F97316', bg: '#FFF7ED' },
+    { label: 'Watch', count: d.summary.watch, icon: 'fa-eye', color: '#CA8A04', bg: '#FEFCE8' },
+    { label: 'OK', count: d.summary.ok, icon: 'fa-check-circle', color: '#059669', bg: '#F0FDF4' },
+  ];
+  html += '<div class="inv-sr-stats">' +
+    statusCards.map(function(sc) {
+      return '<div class="inv-sr-stat" style="border-left:3px solid ' + sc.color + ';background:' + sc.bg + '" onclick="_srFilter=\'' + sc.label.toLowerCase().replace(' stock','') + '\';invRender()">' +
+        '<div class="inv-sr-stat-icon" style="color:' + sc.color + '"><i class="fas ' + sc.icon + '"></i></div>' +
+        '<div class="inv-sr-stat-val">' + sc.count + '</div>' +
+        '<div class="inv-sr-stat-label">' + sc.label + '</div></div>';
+    }).join('') +
+  '</div>';
+
+  // Tabs + search
+  html += '<div class="inv-sr-tabs">' +
+    '<div class="inv-sr-tab-row">' +
+    tabs.map(function(t) {
+      return '<button class="inv-sr-tab' + (_srFilter === t.id ? ' active' : '') + '" onclick="_srFilter=\'' + t.id + '\';_srSelected={};invRender()">' +
+        '<i class="fas ' + t.icon + '" style="color:' + t.color + '"></i> ' + t.label +
+        (t.count > 0 ? ' <span class="inv-sr-tab-count">' + t.count + '</span>' : '') +
+      '</button>';
+    }).join('') +
+    '</div>' +
+    '<input class="inv-sr-search" placeholder="Search products..." value="' + (_srSearch || '') + '" oninput="_srSearch=this.value;invSrRerender()">' +
+  '</div>';
+
+  // Content area
+  html += '<div id="invSrContent">' + invSrRenderContent() + '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+function invSrRerender() {
+  var ct = document.getElementById('invSrContent');
+  if (ct) ct.innerHTML = invSrRenderContent();
+}
+
+function invSrRenderContent() {
+  if (!_srData) return '';
+  var d = _srData;
+  var html = '';
+
+  if (_srFilter === 'suggestions') {
+    html = invSrRenderSuggestions(d.suggestions || []);
+  } else {
+    var products = d.products || [];
+    if (_srFilter === 'critical') products = products.filter(function(p) { return p.stock.status === 'critical'; });
+    else if (_srFilter === 'low') products = products.filter(function(p) { return p.stock.status === 'low'; });
+
+    if (_srSearch) {
+      var q = _srSearch.toLowerCase();
+      products = products.filter(function(p) {
+        return (p.product_name || '').toLowerCase().indexOf(q) >= 0 || (p.sku || '').toLowerCase().indexOf(q) >= 0 || (p.category || '').toLowerCase().indexOf(q) >= 0;
+      });
+    }
+
+    html = invSrRenderProductList(products);
+  }
+  return html;
+}
+
+function invSrRenderSuggestions(suggestions) {
+  if (suggestions.length === 0) {
+    return '<div class="inv-sr-empty"><i class="fas fa-check-circle" style="color:#059669;font-size:32px"></i><h3>All stocked up!</h3><p>No restock suggestions for the selected location and period.</p></div>';
+  }
+
+  // Group by action type
+  var transfers = suggestions.filter(function(s) { return s.action === 'transfer'; });
+  var purchases = suggestions.filter(function(s) { return s.action === 'purchase'; });
+
+  var html = '';
+
+  // Transfer suggestions
+  if (transfers.length > 0) {
+    html += '<div class="inv-sr-section">' +
+      '<div class="inv-sr-section-hdr">' +
+        '<div><i class="fas fa-arrows-left-right" style="color:#3B82F6"></i> <strong>Transfer from Other Location</strong> <span class="inv-sr-section-count">' + transfers.length + ' items</span></div>' +
+        '<button class="inv-sr-action-btn transfer" onclick="invSrSelectAll(\'transfer\')"><i class="fas fa-check-double"></i> Select All</button>' +
+      '</div>';
+
+    transfers.forEach(function(s) {
+      var statusColor = s.status === 'critical' ? '#DC2626' : s.status === 'low' ? '#F97316' : '#CA8A04';
+      var isSelected = _srSelected[s.product_id] > 0;
+      html += '<div class="inv-sr-suggestion ' + s.status + (isSelected ? ' selected' : '') + '" onclick="invSrToggle(' + s.product_id + ',' + s.suggested_qty + ')">' +
+        '<div class="inv-sr-sug-check"><i class="fas ' + (isSelected ? 'fa-check-square' : 'fa-square') + '"></i></div>' +
+        '<div class="inv-sr-sug-info">' +
+          '<div class="inv-sr-sug-name">' + invEsc(s.product_name) + '</div>' +
+          '<div class="inv-sr-sug-meta">' + invEsc(s.sku || '') + ' &bull; ' + invEsc(s.category || '') + '</div>' +
+        '</div>' +
+        '<div class="inv-sr-sug-demand">' +
+          '<div class="inv-sr-sug-demand-val">' + s.weekly_demand + '<small>/wk</small></div>' +
+          '<div class="inv-sr-sug-supply" style="color:' + statusColor + '">' + s.days_of_supply + 'd supply</div>' +
+        '</div>' +
+        '<div class="inv-sr-sug-stock">' +
+          '<div>Now: <strong>' + s.current_stock + '</strong></div>' +
+          '<div>Need: <strong style="color:#3B82F6">+' + s.suggested_qty + '</strong></div>' +
+        '</div>' +
+        '<div class="inv-sr-sug-from">' +
+          '<i class="fas fa-arrow-right" style="color:#3B82F6"></i>' +
+          '<div><small>from</small><br><strong>' + invEsc(s.from_location.code) + '</strong><br><small>' + s.from_location.available + ' avail</small></div>' +
+        '</div>' +
+      '</div>';
+    });
+
+    // Batch create transfer button
+    var selectedCount = 0;
+    transfers.forEach(function(s) { if (_srSelected[s.product_id] > 0) selectedCount++; });
+    if (selectedCount > 0) {
+      html += '<div class="inv-sr-batch-bar">' +
+        '<span>' + selectedCount + ' item' + (selectedCount !== 1 ? 's' : '') + ' selected</span>' +
+        '<button class="inv-sr-create-btn" onclick="invSrCreateTransfer()"><i class="fas fa-truck-ramp-box"></i> Create Transfer</button>' +
+      '</div>';
+    }
+    html += '</div>';
+  }
+
+  // Purchase suggestions
+  if (purchases.length > 0) {
+    html += '<div class="inv-sr-section">' +
+      '<div class="inv-sr-section-hdr">' +
+        '<div><i class="fas fa-cart-shopping" style="color:#059669"></i> <strong>Needs Purchase Order</strong> <span class="inv-sr-section-count">' + purchases.length + ' items</span></div>' +
+      '</div>';
+    purchases.forEach(function(s) {
+      var statusColor = s.status === 'critical' ? '#DC2626' : s.status === 'low' ? '#F97316' : '#CA8A04';
+      html += '<div class="inv-sr-suggestion ' + s.status + ' purchase">' +
+        '<div class="inv-sr-sug-info" style="flex:1">' +
+          '<div class="inv-sr-sug-name">' + invEsc(s.product_name) + '</div>' +
+          '<div class="inv-sr-sug-meta">' + invEsc(s.sku || '') + ' &bull; ' + invEsc(s.category || '') + '</div>' +
+        '</div>' +
+        '<div class="inv-sr-sug-demand">' +
+          '<div class="inv-sr-sug-demand-val">' + s.weekly_demand + '<small>/wk</small></div>' +
+          '<div class="inv-sr-sug-supply" style="color:' + statusColor + '">' + s.days_of_supply + 'd supply</div>' +
+        '</div>' +
+        '<div class="inv-sr-sug-stock">' +
+          '<div>Now: <strong>' + s.current_stock + '</strong></div>' +
+          '<div>Need: <strong style="color:#059669">+' + s.suggested_qty + '</strong></div>' +
+        '</div>' +
+        '<div class="inv-sr-sug-po"><span style="color:#9CA3AF;font-size:11px">Low everywhere<br>Order from supplier</span></div>' +
+      '</div>';
+    });
+    html += '</div>';
+  }
+
+  return html;
+}
+
+function invSrRenderProductList(products) {
+  if (products.length === 0) {
+    return '<div class="inv-sr-empty"><i class="fas fa-search" style="color:#9CA3AF;font-size:24px"></i><p>No products match this filter</p></div>';
+  }
+
+  var html = '<div class="inv-sr-products">';
+  products.forEach(function(p) {
+    var statusColor = p.stock.status === 'critical' ? '#DC2626' : p.stock.status === 'low' ? '#F97316' : p.stock.status === 'watch' ? '#CA8A04' : '#059669';
+    var statusLabel = p.stock.status === 'critical' ? 'CRITICAL' : p.stock.status === 'low' ? 'LOW' : p.stock.status === 'watch' ? 'WATCH' : 'OK';
+    html += '<div class="inv-sr-product">' +
+      '<div class="inv-sr-prod-main">' +
+        '<div class="inv-sr-prod-info">' +
+          '<div class="inv-sr-prod-name">' + invEsc(p.product_name) + '</div>' +
+          '<div class="inv-sr-prod-meta">' + invEsc(p.sku || '') + ' &bull; ' + invEsc(p.category || '') + ' &bull; ' + p.demand.unique_customers + ' customers</div>' +
+        '</div>' +
+        '<span class="inv-sr-badge" style="background:' + statusColor + '15;color:' + statusColor + ';border:1px solid ' + statusColor + '40">' + statusLabel + '</span>' +
+      '</div>' +
+      '<div class="inv-sr-prod-metrics">' +
+        '<div class="inv-sr-metric"><div class="inv-sr-metric-val">' + p.demand.avg_weekly + '</div><div class="inv-sr-metric-label">Avg/Week</div></div>' +
+        '<div class="inv-sr-metric"><div class="inv-sr-metric-val">' + p.demand.order_count + '</div><div class="inv-sr-metric-label">Orders</div></div>' +
+        '<div class="inv-sr-metric"><div class="inv-sr-metric-val">' + p.stock.total_available + '</div><div class="inv-sr-metric-label">Total Stock</div></div>' +
+        '<div class="inv-sr-metric"><div class="inv-sr-metric-val" style="color:' + statusColor + '">' + (p.stock.days_of_supply >= 999 ? '∞' : p.stock.days_of_supply + 'd') + '</div><div class="inv-sr-metric-label">Days Supply</div></div>' +
+      '</div>' +
+      '<div class="inv-sr-prod-locs">' +
+        (p.locations || []).map(function(l) {
+          var lc = l.status === 'critical' ? '#DC2626' : l.status === 'low' ? '#F97316' : l.status === 'watch' ? '#CA8A04' : '#059669';
+          var pct = l.demand_weekly > 0 ? Math.min(100, Math.round((l.stock_available / (l.demand_weekly * 4)) * 100)) : (l.stock_available > 0 ? 100 : 0);
+          return '<div class="inv-sr-loc-bar">' +
+            '<div class="inv-sr-loc-name">' + invEsc(l.location_code) + '</div>' +
+            '<div class="inv-sr-loc-progress"><div class="inv-sr-loc-fill" style="width:' + pct + '%;background:' + lc + '"></div></div>' +
+            '<div class="inv-sr-loc-qty">' + l.stock_available + ' <small>(' + l.demand_weekly + '/wk)</small></div>' +
+          '</div>';
+        }).join('') +
+      '</div>' +
+    '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+function invSrToggle(productId, suggestedQty) {
+  if (_srSelected[productId]) { delete _srSelected[productId]; }
+  else { _srSelected[productId] = suggestedQty; }
+  invSrRerender();
+}
+
+function invSrSelectAll(actionType) {
+  if (!_srData) return;
+  var suggestions = (_srData.suggestions || []).filter(function(s) { return s.action === actionType; });
+  // If all selected, deselect all
+  var allSelected = suggestions.every(function(s) { return _srSelected[s.product_id] > 0; });
+  if (allSelected) {
+    suggestions.forEach(function(s) { delete _srSelected[s.product_id]; });
+  } else {
+    suggestions.forEach(function(s) { _srSelected[s.product_id] = s.suggested_qty; });
+  }
+  invSrRerender();
+}
+
+async function invSrCreateTransfer() {
+  if (!_srData) return;
+  var suggestions = (_srData.suggestions || []).filter(function(s) { return s.action === 'transfer' && _srSelected[s.product_id] > 0; });
+  if (suggestions.length === 0) { invToast('No items selected', 'error'); return; }
+
+  // Group by from_location → to_location
+  var groups = {};
+  suggestions.forEach(function(s) {
+    var key = s.from_location.id + '_' + s.to_location.id;
+    if (!groups[key]) groups[key] = { from: s.from_location.id, to: s.to_location.id, from_name: s.from_location.name, to_name: s.to_location.name, items: [] };
+    groups[key].items.push({ product_id: s.product_id, quantity: _srSelected[s.product_id], name: s.product_name });
+  });
+
+  // Confirm
+  var msg = 'Create transfer(s)?\\n\\n';
+  Object.values(groups).forEach(function(g) {
+    msg += g.from_name + ' → ' + g.to_name + ': ' + g.items.length + ' items\\n';
+    g.items.forEach(function(i) { msg += '  • ' + i.name + ' × ' + i.quantity + '\\n'; });
+  });
+  if (!confirm(msg)) return;
+
+  try {
+    var created = [];
+    for (var key of Object.keys(groups)) {
+      var g = groups[key];
+      var resp = await invAPI.post('/api/inventory/smart-restock/create-transfer', {
+        from_location_id: g.from,
+        to_location_id: g.to,
+        items: g.items.map(function(i) { return { product_id: i.product_id, quantity: i.quantity }; }),
+        notes: 'Smart Restock: ' + g.items.length + ' items based on ' + _srDays + '-day demand analysis',
+        created_by: invUser?.id
+      }, { headers: invHeaders() });
+      created.push(resp.data.transfer_number);
+    }
+    invToast('Transfer(s) created: ' + created.join(', '));
+    _srSelected = {};
+    invRender();
+  } catch(e) {
+    invToast('Error: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+
+function invEsc(s) {
+  var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML;
 }
 
 // Take a snapshot manually
