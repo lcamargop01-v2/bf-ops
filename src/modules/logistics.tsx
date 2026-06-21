@@ -483,14 +483,78 @@ app.patch('/api/orders/:id/status', async (c) => {
     }
   }
 
+  // === INVENTORY: Release holds when order is cancelled ===
+  // Must check previous status BEFORE updating, to know if product was on hold or already deducted
+  if (status === 'cancelled') {
+    const db = c.env.DB
+    const prevOrder = await db.prepare('SELECT status FROM orders WHERE id = ?').bind(id).first() as any
+    const wasLoaded = prevOrder?.status === 'loaded' || prevOrder?.status === 'in_transit'
+    const linkedSale = await db.prepare('SELECT id, location_id FROM pos_sales WHERE order_id = ?').bind(id).first() as any
+    const locId = linkedSale?.location_id || 2
+    const orderItems = await db.prepare(
+      'SELECT oi.quantity, oi.product_id FROM order_items oi WHERE oi.order_id = ?'
+    ).bind(id).all()
+    for (const item of orderItems.results as any[]) {
+      if (wasLoaded) {
+        // Product already deducted at load time — restore qty_on_hand
+        await db.prepare(`
+          UPDATE inventory_stock SET qty_on_hand = qty_on_hand + ?, updated_at = CURRENT_TIMESTAMP
+          WHERE product_id = ? AND location_id = ?
+        `).bind(item.quantity, item.product_id, locId).run()
+      } else {
+        // Product still on hold — release the hold
+        await db.prepare(`
+          UPDATE inventory_stock SET qty_on_hold = MAX(0, qty_on_hold - ?), updated_at = CURRENT_TIMESTAMP
+          WHERE product_id = ? AND location_id = ?
+        `).bind(item.quantity, item.product_id, locId).run()
+      }
+      await db.prepare(`
+        INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+        VALUES (?, ?, 'cancel_release', 0, 'Order cancelled — inventory released', 'order', ?, ?, 'system')
+      `).bind(item.product_id, locId, id, 'Order #' + id + ' cancelled').run()
+    }
+    // If linked to POS sale, void that sale's inventory too (handled by POS void endpoint)
+  }
+
+  // Now perform the actual status update
   await c.env.DB.prepare("UPDATE orders SET status = ?, updated_at = datetime('now') WHERE id = ?").bind(status, id).run()
   return c.json({ success: true })
 })
 
 app.delete('/api/orders/:id', async (c) => {
   const id = c.req.param('id')
-  await c.env.DB.prepare('DELETE FROM order_items WHERE order_id = ?').bind(id).run()
-  await c.env.DB.prepare('DELETE FROM orders WHERE id = ?').bind(id).run()
+  const db = c.env.DB
+
+  // === INVENTORY: Release any holds before deleting order ===
+  const order = await db.prepare('SELECT status FROM orders WHERE id = ?').bind(id).first() as any
+  if (order && !['completed', 'delivered', 'cancelled'].includes(order.status)) {
+    const linkedSale = await db.prepare('SELECT id, location_id FROM pos_sales WHERE order_id = ?').bind(id).first() as any
+    const locId = linkedSale?.location_id || 2
+    const orderItems = await db.prepare(
+      'SELECT oi.quantity, oi.product_id FROM order_items oi WHERE oi.order_id = ?'
+    ).bind(id).all()
+    const wasLoaded = order.status === 'loaded' || order.status === 'in_transit'
+    for (const item of orderItems.results as any[]) {
+      if (wasLoaded) {
+        await db.prepare(`
+          UPDATE inventory_stock SET qty_on_hand = qty_on_hand + ?, updated_at = CURRENT_TIMESTAMP
+          WHERE product_id = ? AND location_id = ?
+        `).bind(item.quantity, item.product_id, locId).run()
+      } else {
+        await db.prepare(`
+          UPDATE inventory_stock SET qty_on_hold = MAX(0, qty_on_hold - ?), updated_at = CURRENT_TIMESTAMP
+          WHERE product_id = ? AND location_id = ?
+        `).bind(item.quantity, item.product_id, locId).run()
+      }
+      await db.prepare(`
+        INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+        VALUES (?, ?, 'order_deleted', 0, 'Order deleted — inventory released', 'order', ?, ?, 'system')
+      `).bind(item.product_id, locId, id, 'Order #' + id + ' deleted').run()
+    }
+  }
+
+  await db.prepare('DELETE FROM order_items WHERE order_id = ?').bind(id).run()
+  await db.prepare('DELETE FROM orders WHERE id = ?').bind(id).run()
   return c.json({ success: true })
 })
 
@@ -5730,7 +5794,16 @@ app.post('/api/warehouse/route-stop/:id/load', async (c) => {
   // Update order status to loaded
   await db.prepare("UPDATE orders SET status = 'loaded', updated_at = datetime('now') WHERE id = ? AND status IN ('new','confirmed','scheduled')")
     .bind(stop.order_id).run()
-  // Log activity
+
+  // === INVENTORY: Convert holds to deductions when product physically leaves the shelf ===
+  // Find the source location: check if this order came from POS (has linked pos_sale)
+  const linkedSale = await db.prepare(
+    'SELECT id, location_id, fulfillment_type FROM pos_sales WHERE order_id = ?'
+  ).bind(stop.order_id).first() as any
+  // POS orders use sale's location_id; manual logistics orders default to distribution center (loc 2)
+  const inventoryLocationId = linkedSale?.location_id || 2
+
+  // Log activity & convert inventory holds
   const items = await db.prepare(
     'SELECT oi.quantity, p.name as product_name, p.id as product_id FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?'
   ).bind(stop.order_id).all()
@@ -5739,6 +5812,25 @@ app.post('/api/warehouse/route-stop/:id/load', async (c) => {
       `INSERT INTO warehouse_activity (activity_type, product_id, quantity, direction, reference_type, reference_id, notes, performed_by)
        VALUES ('order_loaded', ?, ?, 'out', 'order', ?, ?, ?)`
     ).bind(item.product_id, item.quantity, stop.order_id, `Loaded for ${stop.order_number}`, loaded_by || null).run()
+
+    // Convert hold → deduction: product is leaving the shelf now
+    // qty_on_hold-- (release the reservation), qty_on_hand-- (physically gone)
+    await db.prepare(`
+      UPDATE inventory_stock
+      SET qty_on_hold = MAX(0, qty_on_hold - ?),
+          qty_on_hand = MAX(0, qty_on_hand - ?),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE product_id = ? AND location_id = ?
+    `).bind(item.quantity, item.quantity, item.product_id, inventoryLocationId).run()
+
+    // Audit trail for the inventory conversion
+    await db.prepare(`
+      INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+      VALUES (?, ?, 'shipment', ?, 'Order loaded onto truck — hold converted to deduction', 'order', ?, ?, ?)
+    `).bind(
+      item.product_id, inventoryLocationId, -(item.quantity as number),
+      stop.order_id, `Order ${stop.order_number} loaded`, loaded_by || 'warehouse'
+    ).run()
   }
   return c.json({ success: true })
 })
@@ -5749,11 +5841,39 @@ app.post('/api/warehouse/route/:id/load-all', async (c) => {
   const { loaded_by } = await c.req.json()
   const db = c.env.DB
   const stops = await db.prepare(
-    'SELECT rs.id, rs.order_id FROM route_stops rs WHERE rs.route_id = ? AND rs.loaded_at IS NULL'
+    'SELECT rs.id, rs.order_id, o.order_number FROM route_stops rs JOIN orders o ON rs.order_id = o.id WHERE rs.route_id = ? AND rs.loaded_at IS NULL'
   ).bind(routeId).all()
   for (const stop of stops.results as any[]) {
     await db.prepare("UPDATE route_stops SET loaded_at = datetime('now'), loaded_by = ? WHERE id = ?").bind(loaded_by || null, stop.id).run()
     await db.prepare("UPDATE orders SET status = 'loaded', updated_at = datetime('now') WHERE id = ? AND status IN ('new','confirmed','scheduled')").bind(stop.order_id).run()
+
+    // === INVENTORY: Convert holds to deductions for each order ===
+    const linkedSale = await db.prepare(
+      'SELECT id, location_id, fulfillment_type FROM pos_sales WHERE order_id = ?'
+    ).bind(stop.order_id).first() as any
+    const inventoryLocationId = linkedSale?.location_id || 2
+
+    const orderItems = await db.prepare(
+      'SELECT oi.quantity, p.id as product_id FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?'
+    ).bind(stop.order_id).all()
+    for (const item of orderItems.results as any[]) {
+      // Convert hold → deduction
+      await db.prepare(`
+        UPDATE inventory_stock
+        SET qty_on_hold = MAX(0, qty_on_hold - ?),
+            qty_on_hand = MAX(0, qty_on_hand - ?),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE product_id = ? AND location_id = ?
+      `).bind(item.quantity, item.quantity, item.product_id, inventoryLocationId).run()
+
+      await db.prepare(`
+        INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+        VALUES (?, ?, 'shipment', ?, 'Order loaded onto truck — hold converted to deduction', 'order', ?, ?, ?)
+      `).bind(
+        item.product_id, inventoryLocationId, -item.quantity,
+        stop.order_id, `Order ${stop.order_number} bulk-loaded`, loaded_by || 'warehouse'
+      ).run()
+    }
   }
   // Log activity
   await db.prepare(

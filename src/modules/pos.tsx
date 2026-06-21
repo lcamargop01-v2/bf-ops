@@ -384,28 +384,51 @@ app.post('/api/pos/sales', async (c) => {
 
   const saleId = saleRes.meta.last_row_id
 
-  // Insert line items & deduct inventory
+  // Determine inventory action based on status + fulfillment
+  // - hold: RESERVE (qty_on_hold++) — don't deduct yet, customer may not complete
+  // - completed + pickup/walk_in/wholesale/local: DEDUCT (qty_on_hand--) — product leaves immediately
+  // - completed + delivery/dc_pickup: RESERVE (qty_on_hold++) — product stays until shipped
+  // - reserve_retail: DEDUCT from source (transfer scenario)
+  const saleStatus = body.status || 'completed'
+  const isHold = saleStatus === 'hold' || saleStatus === 'draft'
+  const isDelivery = fulfillment === 'delivery' || fulfillment === 'dc_pickup'
+  const shouldReserve = isHold || (isDelivery && saleStatus === 'completed')
+  const shouldDeduct = !shouldReserve  // local pickup, walk_in, wholesale, reserve_retail
+
+  // Insert line items & update inventory
   for (const item of processedItems) {
     await db.prepare(`
       INSERT INTO pos_sale_items (sale_id, product_id, product_name, sku, category, quantity, unit_price, unit_cost, discount_pct, discount_amount, tax_rate, tax_amount, line_total, location_id)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(saleId, item.product_id, item.product_name, item.sku, item.category, item.quantity, item.unit_price, item.unit_cost, item.discount_pct, item.discount_amount, item.tax_rate, item.tax_amount, item.line_total, item.location_id).run()
 
-    // Deduct inventory from the correct location
-    await db.prepare(`
-      UPDATE inventory_stock SET qty_on_hand = qty_on_hand - ?, updated_at = CURRENT_TIMESTAMP
-      WHERE product_id = ? AND location_id = ?
-    `).bind(item.quantity, item.product_id, item.location_id).run()
+    if (shouldDeduct) {
+      // Immediate deduction — product leaves the shelf now
+      await db.prepare(`
+        UPDATE inventory_stock SET qty_on_hand = qty_on_hand - ?, updated_at = CURRENT_TIMESTAMP
+        WHERE product_id = ? AND location_id = ?
+      `).bind(item.quantity, item.product_id, item.location_id).run()
+    } else {
+      // Reserve — product stays on shelf but is spoken for
+      await db.prepare(`
+        UPDATE inventory_stock SET qty_on_hold = qty_on_hold + ?, updated_at = CURRENT_TIMESTAMP
+        WHERE product_id = ? AND location_id = ?
+      `).bind(item.quantity, item.product_id, item.location_id).run()
+    }
 
     // Audit trail
-    const auditAction = fulfillment === 'reserve_retail' ? 'transfer_out' : 'sale'
-    const auditReason = fulfillment !== 'local'
-      ? `POS ${fulfillment} (from loc ${item.location_id} for sale at loc ${saleLocationId})`
-      : 'POS Sale'
+    const auditAction = fulfillment === 'reserve_retail' ? 'transfer_out' : (shouldReserve ? 'hold' : 'sale')
+    const auditReason = isHold
+      ? 'POS Held Sale — inventory reserved'
+      : isDelivery
+        ? `POS ${fulfillment} delivery — inventory reserved until shipped`
+        : fulfillment !== 'local'
+          ? `POS ${fulfillment} (from loc ${item.location_id} for sale at loc ${saleLocationId})`
+          : 'POS Sale — inventory deducted'
     await db.prepare(`
       INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
       VALUES (?, ?, ?, ?, ?, 'pos_sale', ?, ?, ?)
-    `).bind(item.product_id, item.location_id, auditAction, -item.quantity, auditReason, saleId, 'Sale #' + saleNumber, body.cashier_name || '').run()
+    `).bind(item.product_id, item.location_id, auditAction, shouldDeduct ? -item.quantity : 0, auditReason, saleId, 'Sale #' + saleNumber, body.cashier_name || '').run()
   }
 
   // Insert payments
@@ -601,16 +624,29 @@ app.put('/api/pos/sales/:id/void', async (c) => {
   if (!sale) return c.json({ error: 'Sale not found' }, 404)
   if (sale.status === 'voided') return c.json({ error: 'Already voided' }, 400)
 
-  // Restore inventory
+  // Restore inventory — depends on whether it was deducted or reserved
+  const wasHeld = sale.status === 'hold'
+  const wasDelivery = sale.fulfillment_type === 'delivery' || sale.fulfillment_type === 'dc_pickup'
+  const wasReserved = wasHeld || wasDelivery  // these used qty_on_hold instead of qty_on_hand
   const items = await db.prepare('SELECT * FROM pos_sale_items WHERE sale_id = ?').bind(id).all()
   for (const item of items.results as any[]) {
-    await db.prepare('UPDATE inventory_stock SET qty_on_hand = qty_on_hand + ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND location_id = ?')
-      .bind(item.quantity, item.product_id, item.location_id || sale.location_id).run()
+    const locId = item.location_id || sale.location_id
+    if (wasReserved) {
+      // Release the hold
+      await db.prepare('UPDATE inventory_stock SET qty_on_hold = MAX(0, qty_on_hold - ?), updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND location_id = ?')
+        .bind(item.quantity, item.product_id, locId).run()
+    } else {
+      // Restore deducted inventory
+      await db.prepare('UPDATE inventory_stock SET qty_on_hand = qty_on_hand + ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND location_id = ?')
+        .bind(item.quantity, item.product_id, locId).run()
+    }
 
     await db.prepare(`
       INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
-      VALUES (?, ?, 'void_restock', ?, 'Sale voided', 'pos_sale', ?, ?, ?)
-    `).bind(item.product_id, item.location_id || sale.location_id, item.quantity, id, 'Void: ' + sale.sale_number, body.voided_by_name || '').run()
+      VALUES (?, ?, 'void_restock', ?, ?, 'pos_sale', ?, ?, ?)
+    `).bind(item.product_id, locId, wasReserved ? 0 : item.quantity,
+      wasReserved ? 'Sale voided — hold released' : 'Sale voided — inventory restored',
+      id, 'Void: ' + sale.sale_number, body.voided_by_name || '').run()
   }
 
   // Reverse account charge if applicable
@@ -681,6 +717,20 @@ app.get('/api/pos/held', async (c) => {
 app.put('/api/pos/sales/:id/resume', async (c) => {
   const db = c.env.DB
   const id = parseInt(c.req.param('id'))
+
+  // Release inventory holds before resuming
+  const heldItems = await db.prepare('SELECT product_id, quantity, location_id FROM pos_sale_items WHERE sale_id = ?').bind(id).all<any>()
+  for (const item of (heldItems.results || [])) {
+    await db.prepare(`
+      UPDATE inventory_stock SET qty_on_hold = MAX(0, qty_on_hold - ?), updated_at = CURRENT_TIMESTAMP
+      WHERE product_id = ? AND location_id = ?
+    `).bind(item.quantity, item.product_id, item.location_id).run()
+
+    await db.prepare(`
+      INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+      VALUES (?, ?, 'hold_release', 0, 'POS held sale resumed — hold released', 'pos_sale', ?, ?, 'system')
+    `).bind(item.product_id, item.location_id, id, 'Resumed held sale #' + id).run()
+  }
 
   await db.prepare("UPDATE pos_sales SET status = 'draft' WHERE id = ? AND status = 'hold'").bind(id).run()
   await db.prepare('DELETE FROM pos_held_sales WHERE sale_id = ?').bind(id).run()
