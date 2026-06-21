@@ -291,6 +291,8 @@ async function doLogin(e) {
     shellToast(`Welcome, ${currentUser.name}!`);
     // Register service worker for push notifications
     initPushNotifications();
+    // Feature request FAB
+    initFeatureRequestBtn();
     // Auto-navigate to user's default landing if configured
     if (currentUser.default_module) {
       launchModule(currentUser.default_module, currentUser.default_page || null);
@@ -325,6 +327,9 @@ function shellLogout() {
   localStorage.removeItem('bf_token');
   // Clean up any module state
   cleanupActiveModule();
+  // Remove feature request FAB
+  var fab = document.getElementById('shellFeatureReqBtn');
+  if (fab) fab.remove();
   renderLogin();
 }
 
@@ -894,6 +899,190 @@ function showShellModal(title, body) {
 function closeShellModal() {
   var overlay = document.getElementById('shellModalOverlay');
   if (overlay) overlay.style.display = 'none';
+}
+
+// ==================== FEATURE REQUEST (EVERY PAGE) ====================
+
+function initFeatureRequestBtn() {
+  if (document.getElementById('shellFeatureReqBtn')) return;
+  var btn = document.createElement('button');
+  btn.id = 'shellFeatureReqBtn';
+  btn.className = 'shell-feature-req-fab';
+  btn.title = 'Submit Feature Request';
+  btn.innerHTML = '<i class="fas fa-lightbulb"></i>';
+  btn.onclick = openFeatureRequestForm;
+  document.body.appendChild(btn);
+}
+
+function openFeatureRequestForm() {
+  var categories = [
+    { val: 'general', label: 'General' },
+    { val: 'pos', label: 'Point of Sale' },
+    { val: 'inventory', label: 'Inventory' },
+    { val: 'logistics', label: 'Logistics' },
+    { val: 'purchasing', label: 'Purchasing' },
+    { val: 'crm', label: 'CRM' },
+    { val: 'reports', label: 'Reports' },
+    { val: 'tasks', label: 'Tasks' },
+    { val: 'admin', label: 'Admin' },
+    { val: 'mobile', label: 'Mobile / App' },
+    { val: 'bug', label: 'Bug Report' },
+  ];
+  // Auto-detect current module
+  var curMod = activeModule || 'general';
+  var catOptions = categories.map(function(c) {
+    return '<option value="' + c.val + '"' + (c.val === curMod ? ' selected' : '') + '>' + c.label + '</option>';
+  }).join('');
+
+  var html = '<form id="shellFeatureReqForm" onsubmit="submitFeatureRequest(event)">' +
+    '<div style="margin-bottom:14px">' +
+      '<label style="display:block;font-size:12px;font-weight:600;color:#64748B;margin-bottom:4px">Title <span style="color:#EF4444">*</span></label>' +
+      '<input type="text" id="frTitle" required placeholder="Brief summary of your idea or issue" style="width:100%;padding:10px 12px;border:1px solid #E2E8F0;border-radius:8px;font-size:14px;background:white;outline:none" onfocus="this.style.borderColor=\'#3B82F6\'" onblur="this.style.borderColor=\'#E2E8F0\'">' +
+    '</div>' +
+    '<div style="margin-bottom:14px">' +
+      '<label style="display:block;font-size:12px;font-weight:600;color:#64748B;margin-bottom:4px">Description</label>' +
+      '<textarea id="frDesc" rows="4" placeholder="Detailed description: what should it do? Why is it needed? Any specific behavior?" style="width:100%;padding:10px 12px;border:1px solid #E2E8F0;border-radius:8px;font-size:14px;background:white;outline:none;resize:vertical;font-family:inherit" onfocus="this.style.borderColor=\'#3B82F6\'" onblur="this.style.borderColor=\'#E2E8F0\'"></textarea>' +
+    '</div>' +
+    '<div style="display:flex;gap:12px;margin-bottom:14px">' +
+      '<div style="flex:1">' +
+        '<label style="display:block;font-size:12px;font-weight:600;color:#64748B;margin-bottom:4px">Category</label>' +
+        '<select id="frCategory" style="width:100%;padding:10px 12px;border:1px solid #E2E8F0;border-radius:8px;font-size:14px;background:white">' + catOptions + '</select>' +
+      '</div>' +
+      '<div style="flex:1">' +
+        '<label style="display:block;font-size:12px;font-weight:600;color:#64748B;margin-bottom:4px">Priority</label>' +
+        '<select id="frPriority" style="width:100%;padding:10px 12px;border:1px solid #E2E8F0;border-radius:8px;font-size:14px;background:white">' +
+          '<option value="low">Low — Nice to have</option>' +
+          '<option value="normal" selected>Normal</option>' +
+          '<option value="high">High — Important</option>' +
+          '<option value="critical">Critical — Blocking work</option>' +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;padding-top:10px;border-top:1px solid #E2E8F0">' +
+      '<button type="button" onclick="closeShellModal()" style="padding:10px 20px;border-radius:8px;border:1px solid #E2E8F0;background:white;color:#64748B;font-size:13px;font-weight:600;cursor:pointer">Cancel</button>' +
+      '<button type="submit" id="frSubmitBtn" style="padding:10px 20px;border-radius:8px;border:none;background:#3B82F6;color:white;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px"><i class="fas fa-paper-plane"></i> Submit</button>' +
+    '</div>' +
+  '</form>' +
+  '<div style="margin-top:16px;border-top:1px solid #E2E8F0;padding-top:12px">' +
+    '<button onclick="showMyFeatureRequests()" style="background:none;border:none;color:#3B82F6;font-size:12px;font-weight:600;cursor:pointer;padding:0"><i class="fas fa-list"></i> View My Requests</button>' +
+  '</div>';
+
+  showShellModal('<i class="fas fa-lightbulb" style="color:#F59E0B"></i> Feature Request', html);
+}
+
+function submitFeatureRequest(e) {
+  e.preventDefault();
+  var title = document.getElementById('frTitle').value.trim();
+  if (!title) return;
+  var btn = document.getElementById('frSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
+  API.post('/feature-requests', {
+    title: title,
+    description: (document.getElementById('frDesc').value || '').trim(),
+    category: document.getElementById('frCategory').value,
+    priority: document.getElementById('frPriority').value,
+    current_page: window.location.hash || document.title,
+    current_module: activeModule || '',
+    user_agent: navigator.userAgent
+  }).then(function(r) {
+    closeShellModal();
+    shellToast('Feature request submitted! Thank you.', 'success');
+  }).catch(function(err) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit';
+    shellToast('Error: ' + (err.response?.data?.error || err.message), 'error');
+  });
+}
+
+function showMyFeatureRequests() {
+  API.get('/feature-requests?limit=20').then(function(r) {
+    var reqs = r.data.requests || [];
+    var statusColors = { new:'#3B82F6', reviewed:'#8B5CF6', planned:'#6366F1', in_progress:'#F59E0B', completed:'#059669', declined:'#9CA3AF' };
+    var html = '<div style="max-height:400px;overflow-y:auto">';
+    if (reqs.length === 0) {
+      html += '<div style="text-align:center;padding:30px;color:#9CA3AF"><i class="fas fa-inbox" style="font-size:24px;display:block;margin-bottom:8px"></i>No feature requests yet</div>';
+    } else {
+      html += reqs.map(function(req) {
+        var col = statusColors[req.status] || '#9CA3AF';
+        var priIcon = req.priority === 'critical' ? '<i class="fas fa-fire" style="color:#EF4444"></i> ' : req.priority === 'high' ? '<i class="fas fa-arrow-up" style="color:#F59E0B"></i> ' : '';
+        var date = req.created_at ? new Date(req.created_at + 'Z').toLocaleDateString() : '';
+        return '<div style="padding:12px;border:1px solid #E2E8F0;border-radius:10px;margin-bottom:8px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+            '<div style="font-weight:600;font-size:14px">' + priIcon + escHtml(req.title) + '</div>' +
+            '<span style="display:inline-block;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;background:' + col + '20;color:' + col + ';white-space:nowrap">' + (req.status||'new').replace('_',' ').toUpperCase() + '</span>' +
+          '</div>' +
+          (req.description ? '<div style="font-size:12px;color:#64748B;margin-top:4px;white-space:pre-wrap;word-break:break-word">' + escHtml(req.description).substring(0, 200) + '</div>' : '') +
+          '<div style="font-size:11px;color:#9CA3AF;margin-top:6px"><i class="fas fa-tag"></i> ' + escHtml(req.category||'general') + ' &bull; ' + date + '</div>' +
+          (req.admin_notes ? '<div style="font-size:12px;color:#6366F1;margin-top:6px;padding:6px 10px;background:#EEF2FF;border-radius:6px"><i class="fas fa-comment-dots"></i> <strong>Dev:</strong> ' + escHtml(req.admin_notes) + '</div>' : '') +
+        '</div>';
+      }).join('');
+    }
+    html += '</div>' +
+      '<div style="margin-top:12px;text-align:center"><button onclick="openFeatureRequestForm()" style="padding:8px 16px;border-radius:8px;border:none;background:#3B82F6;color:white;font-size:13px;font-weight:600;cursor:pointer"><i class="fas fa-plus"></i> New Request</button></div>';
+    showShellModal('<i class="fas fa-list-check" style="color:#3B82F6"></i> My Feature Requests', html);
+  }).catch(function(err) {
+    shellToast('Error loading requests', 'error');
+  });
+}
+
+// Admin: Feature Requests Management (shown in admin or tasks module)
+function showAdminFeatureRequests() {
+  API.get('/feature-requests?limit=100').then(function(r) {
+    var reqs = r.data.requests || [];
+    var statusColors = { new:'#3B82F6', reviewed:'#8B5CF6', planned:'#6366F1', in_progress:'#F59E0B', completed:'#059669', declined:'#9CA3AF' };
+    var statuses = ['new','reviewed','planned','in_progress','completed','declined'];
+    var html = '<div style="max-height:500px;overflow-y:auto">';
+    if (reqs.length === 0) {
+      html += '<div style="text-align:center;padding:30px;color:#9CA3AF">No feature requests yet</div>';
+    } else {
+      html += reqs.map(function(req) {
+        var col = statusColors[req.status] || '#9CA3AF';
+        var priIcon = req.priority === 'critical' ? '🔥 ' : req.priority === 'high' ? '⬆️ ' : '';
+        var date = req.created_at ? new Date(req.created_at + 'Z').toLocaleDateString() : '';
+        var statusOpts = statuses.map(function(s) {
+          return '<option value="' + s + '"' + (s === req.status ? ' selected' : '') + '>' + s.replace('_',' ') + '</option>';
+        }).join('');
+        return '<div style="padding:12px;border:1px solid #E2E8F0;border-radius:10px;margin-bottom:8px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">' +
+            '<div style="flex:1;min-width:200px"><div style="font-weight:600;font-size:14px">' + priIcon + escHtml(req.title) + '</div>' +
+            (req.description ? '<div style="font-size:12px;color:#64748B;margin-top:4px">' + escHtml(req.description).substring(0, 200) + '</div>' : '') +
+            '<div style="font-size:11px;color:#9CA3AF;margin-top:4px"><i class="fas fa-user"></i> ' + escHtml(req.submitted_by_name||'') + ' &bull; <i class="fas fa-tag"></i> ' + escHtml(req.category||'') + ' &bull; ' + date + '</div></div>' +
+            '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0">' +
+              '<select onchange="updateFeatureReqStatus(' + req.id + ',this.value)" style="padding:4px 8px;border:1px solid #E2E8F0;border-radius:6px;font-size:11px;font-weight:600">' + statusOpts + '</select>' +
+              '<button onclick="deleteFeatureReq(' + req.id + ')" style="padding:4px 8px;border:1px solid #FCA5A5;border-radius:6px;background:#FEF2F2;color:#DC2626;font-size:11px;cursor:pointer" title="Delete"><i class="fas fa-trash"></i></button>' +
+            '</div>' +
+          '</div>' +
+          '<div style="margin-top:8px"><input type="text" placeholder="Add dev note..." value="' + escHtml(req.admin_notes||'').replace(/"/g,'&quot;') + '" onblur="updateFeatureReqNote(' + req.id + ',this.value)" style="width:100%;padding:6px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:12px;background:#F8FAFC"></div>' +
+        '</div>';
+      }).join('');
+    }
+    html += '</div>';
+    showShellModal('<i class="fas fa-code" style="color:#6366F1"></i> Feature Requests (Admin)', html);
+  }).catch(function(err) {
+    shellToast('Error loading requests', 'error');
+  });
+}
+
+function updateFeatureReqStatus(id, status) {
+  API.put('/feature-requests/' + id, { status: status }).then(function() {
+    shellToast('Status updated', 'success');
+  }).catch(function(err) { shellToast('Error: ' + (err.response?.data?.error || err.message), 'error'); });
+}
+
+function updateFeatureReqNote(id, note) {
+  API.put('/feature-requests/' + id, { admin_notes: note }).then(function() {
+    // silent
+  }).catch(function(err) { shellToast('Error saving note', 'error'); });
+}
+
+function deleteFeatureReq(id) {
+  if (!confirm('Delete this feature request?')) return;
+  API.delete('/feature-requests/' + id).then(function() {
+    shellToast('Deleted', 'success');
+    if (currentUser?.role === 'admin') showAdminFeatureRequests();
+    else showMyFeatureRequests();
+  }).catch(function(err) { shellToast('Error: ' + (err.response?.data?.error || err.message), 'error'); });
 }
 
 function cleanupActiveModule() {
@@ -2059,6 +2248,8 @@ async function avSavePreferences(userId) {
       }
       // Register service worker for push notifications
       initPushNotifications();
+      // Feature request FAB
+      initFeatureRequestBtn();
       // Auto-navigate to default landing if configured
       if (currentUser.default_module) {
         launchModule(currentUser.default_module, currentUser.default_page || null);

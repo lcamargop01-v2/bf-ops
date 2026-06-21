@@ -457,4 +457,99 @@ app.post('/api/notifications/send', async (c) => {
   return c.json({ success: true, notification_id: notifId, push: pushResult, email: emailResult })
 })
 
+// ==================== FEATURE REQUESTS ====================
+
+// Submit a feature request (any user, any page)
+app.post('/api/feature-requests', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const body = await c.req.json()
+  const { title, description, category, priority, current_page, current_module, user_agent } = body
+  if (!title || !title.trim()) return c.json({ error: 'Title is required' }, 400)
+
+  const result = await db.prepare(
+    `INSERT INTO feature_requests (title, description, category, priority, submitted_by, submitted_by_name, current_page, current_module, user_agent)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    title.trim(),
+    (description || '').trim(),
+    category || 'general',
+    priority || 'normal',
+    user.id,
+    user.name || user.email,
+    current_page || '',
+    current_module || '',
+    user_agent || ''
+  ).run()
+
+  return c.json({ success: true, id: result.meta.last_row_id })
+})
+
+// List feature requests (admin sees all, user sees their own)
+app.get('/api/feature-requests', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const status = c.req.query('status')
+  const limit = parseInt(c.req.query('limit') || '50')
+
+  let query = 'SELECT * FROM feature_requests WHERE 1=1'
+  const params: any[] = []
+
+  // Non-admins only see their own requests
+  if (user.role !== 'admin') {
+    query += ' AND submitted_by = ?'
+    params.push(user.id)
+  }
+
+  if (status) {
+    query += ' AND status = ?'
+    params.push(status)
+  }
+
+  query += ' ORDER BY created_at DESC LIMIT ?'
+  params.push(limit)
+
+  const result = await db.prepare(query).bind(...params).all()
+  return c.json({ requests: result.results })
+})
+
+// Update feature request status (admin only)
+app.put('/api/feature-requests/:id', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user || user.role !== 'admin') return c.json({ error: 'Admin only' }, 403)
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+
+  const sets: string[] = ['updated_at = CURRENT_TIMESTAMP']
+  const binds: any[] = []
+
+  if (body.status) { sets.push('status = ?'); binds.push(body.status) }
+  if (body.admin_notes !== undefined) { sets.push('admin_notes = ?'); binds.push(body.admin_notes) }
+  if (body.priority) { sets.push('priority = ?'); binds.push(body.priority) }
+
+  binds.push(id)
+  await db.prepare(`UPDATE feature_requests SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run()
+  return c.json({ success: true })
+})
+
+// Delete feature request
+app.delete('/api/feature-requests/:id', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+
+  // Non-admins can only delete own
+  if (user.role !== 'admin') {
+    const req = await db.prepare('SELECT submitted_by FROM feature_requests WHERE id = ?').bind(id).first() as any
+    if (!req || req.submitted_by !== user.id) return c.json({ error: 'Not found or not yours' }, 404)
+  }
+
+  await db.prepare('DELETE FROM feature_requests WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
 export { app as tasksApp }

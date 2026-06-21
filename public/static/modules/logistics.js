@@ -15383,8 +15383,8 @@ function whRenderLoadTrucks(ct, d) {
       ${routes.map(r => {
         const pct = r.stop_count > 0 ? Math.round(((r.loaded_count||0) / r.stop_count) * 100) : 0;
         const allLoaded = pct === 100;
-        return `<div class="wh-load-route" onclick="whShowRouteLoad(${r.id})">
-          <div class="wh-load-route-header">
+        return `<div class="wh-load-route">
+          <div class="wh-load-route-header" onclick="whShowRouteLoad(${r.id})">
             <div>
               <div class="wh-load-route-name">${r.route_number || 'Route #'+r.id}</div>
               <div class="wh-load-route-meta"><i class="fas fa-truck"></i> ${r.truck_name||'—'} &bull; <i class="fas fa-user"></i> ${r.driver_name||'—'} &bull; ${r.stop_count} stops</div>
@@ -15394,6 +15394,11 @@ function whRenderLoadTrucks(ct, d) {
             </div>
           </div>
           <div class="wh-progress" style="height:8px"><div class="wh-progress-bar" style="width:${pct}%;background:${allLoaded?'#059669':'#F97316'}"></div></div>
+          <div style="display:flex;gap:8px;padding:10px 16px;border-top:1px solid var(--gray-100)">
+            <button class="wh-btn secondary" style="flex:1;font-size:12px" onclick="event.stopPropagation();whShowRouteLoad(${r.id})"><i class="fas fa-truck-loading"></i> Quick Load</button>
+            <button class="wh-btn primary" style="flex:1;font-size:12px" onclick="event.stopPropagation();whShowChecklist(${r.id})"><i class="fas fa-clipboard-check"></i> Checklist</button>
+            <button class="wh-btn secondary" style="flex:1;font-size:12px" onclick="event.stopPropagation();whPrintPackingList(${r.id})"><i class="fas fa-print"></i> Print</button>
+          </div>
         </div>`;
       }).join('')}
     </div>`;
@@ -15409,7 +15414,11 @@ async function whShowRouteLoad(routeId) {
     const loaded = stops.filter(s => s.loaded_at);
     const pct = stops.length > 0 ? Math.round((loaded.length / stops.length) * 100) : 0;
     ct.innerHTML = `
-      <button class="wh-back-btn" onclick="whRenderPage()"><i class="fas fa-arrow-left"></i> Back to Routes</button>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <button class="wh-back-btn" onclick="whRenderPage()" style="margin:0"><i class="fas fa-arrow-left"></i> Back</button>
+        <button class="wh-btn primary" style="font-size:12px" onclick="whShowChecklist(${r.id})"><i class="fas fa-clipboard-check"></i> Checklist</button>
+        <button class="wh-btn secondary" style="font-size:12px" onclick="whPrintPackingList(${r.id})"><i class="fas fa-print"></i> Print</button>
+      </div>
       <div class="wh-load-header">
         <div>
           <h2 style="font-weight:800;color:var(--navy)">${r.route_number || 'Route #'+r.id}</h2>
@@ -15472,6 +15481,169 @@ async function whLoadAll(routeId) {
     const { data: dData } = await API.get('/warehouse/dashboard');
     whData = dData;
     whShowRouteLoad(routeId);
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ---- PACKING CHECKLIST (MOBILE) ----
+async function whShowChecklist(routeId) {
+  const ct = document.getElementById('whContent');
+  ct.innerHTML = '<div style="text-align:center;padding:40px"><i class="fas fa-spinner fa-spin fa-2x" style="color:#9ca3af"></i></div>';
+  try {
+    const { data } = await API.get('/warehouse/route/' + routeId + '/checklist');
+    const r = data.route;
+    const stops = data.stops || [];
+    const totalChecked = data.total_checked || 0;
+    const totalItems = data.total_items || 0;
+    const pct = totalItems > 0 ? Math.round((totalChecked / totalItems) * 100) : 0;
+    const allDone = totalChecked === totalItems && totalItems > 0;
+
+    ct.innerHTML = `
+      <button class="wh-back-btn" onclick="whRenderPage()"><i class="fas fa-arrow-left"></i> Back</button>
+      <div class="wh-checklist-header">
+        <div class="wh-checklist-title-row">
+          <div>
+            <h2 style="font-weight:800;color:var(--navy);margin:0;font-size:20px"><i class="fas fa-clipboard-check" style="color:#3B82F6"></i> ${r.route_number || 'Route #'+r.id}</h2>
+            <div style="font-size:13px;color:var(--gray-500);margin-top:2px"><i class="fas fa-truck"></i> ${r.truck_name||'—'} &bull; <i class="fas fa-user"></i> ${r.driver_name||'—'}</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <div class="wh-checklist-counter ${allDone?'complete':''}">${totalChecked}/${totalItems}</div>
+            <button class="wh-btn secondary" style="font-size:11px;padding:6px 10px" onclick="whResetChecklist(${routeId})" title="Reset all checks"><i class="fas fa-rotate-left"></i></button>
+          </div>
+        </div>
+        <div class="wh-progress" style="height:10px;margin-top:10px"><div class="wh-progress-bar" style="width:${pct}%;background:${allDone?'#059669':'#3B82F6'};transition:width 0.3s"></div></div>
+        ${allDone ? '<div style="text-align:center;margin-top:10px;padding:10px;background:#DCFCE7;border-radius:8px;font-weight:700;color:#166534"><i class="fas fa-circle-check"></i> All items checked — ready to load!</div>' : ''}
+      </div>
+      <div class="wh-checklist-stops" id="whChecklistStops">
+        ${stops.map((s, i) => {
+          const items = s.items || [];
+          const stopDone = s.all_checked && items.length > 0;
+          return `<div class="wh-checklist-stop ${stopDone?'done':''}" id="whCLStop_${s.stop_id}">
+            <div class="wh-checklist-stop-hdr" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div class="wh-checklist-stop-num ${stopDone?'done':''}">${stopDone?'<i class=\\'fas fa-check\\'></i>':i+1}</div>
+              <div class="wh-checklist-stop-info">
+                <div class="wh-checklist-stop-name">${escapeHtml(s.business_name)}</div>
+                <div class="wh-checklist-stop-meta">${s.order_number} &bull; ${s.street||''} ${s.city||''}</div>
+              </div>
+              <div class="wh-checklist-stop-progress">${s.checked_count}/${s.total_count}</div>
+            </div>
+            <div class="wh-checklist-items">
+              ${s.priority === 'urgent' || s.priority === 'high' ? '<div style="padding:6px 12px;background:#FEF2F2;border-radius:6px;margin-bottom:8px;font-size:12px;font-weight:700;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> '+s.priority.toUpperCase()+' PRIORITY</div>' : ''}
+              ${s.special_instructions ? '<div style="padding:6px 12px;background:#FFF7ED;border-radius:6px;margin-bottom:8px;font-size:12px;color:#92400E"><i class="fas fa-sticky-note"></i> '+escapeHtml(s.special_instructions)+'</div>' : ''}
+              ${items.map(item => `<div class="wh-checklist-item ${item.checked?'checked':''}" id="whCLItem_${item.id}" onclick="whToggleCheckItem(${item.id},${!item.checked},${routeId})">
+                <div class="wh-checklist-checkbox ${item.checked?'checked':''}"><i class="fas ${item.checked?'fa-check-square':'fa-square'}"></i></div>
+                <div class="wh-checklist-item-info">
+                  <div class="wh-checklist-item-name">${escapeHtml(item.product_name)}</div>
+                  ${item.sku ? '<div class="wh-checklist-item-sku">'+escapeHtml(item.sku)+'</div>' : ''}
+                </div>
+                <div class="wh-checklist-item-qty">${item.quantity} <small>${item.unit_type||'bags'}</small></div>
+              </div>`).join('')}
+              ${!stopDone && items.length > 1 ? `<button class="wh-btn primary" style="width:100%;margin-top:8px;font-size:13px" onclick="event.stopPropagation();whCheckAllStop(${s.stop_id},${routeId})"><i class="fas fa-check-double"></i> Check All for This Stop</button>` : ''}
+              ${stopDone ? `<button class="wh-btn primary" style="width:100%;margin-top:8px;font-size:13px" onclick="event.stopPropagation();whLoadStop(${s.stop_id},${routeId})"><i class="fas fa-truck-loading"></i> Mark Stop as Loaded</button>` : ''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+  } catch(e) {
+    ct.innerHTML = `<div class="wh-empty-big"><i class="fas fa-exclamation-triangle" style="color:var(--red)"></i><h3>Error Loading Checklist</h3><p>${e.message}</p><button class="wh-btn primary" onclick="whRenderPage()">Go Back</button></div>`;
+  }
+}
+
+async function whToggleCheckItem(itemId, checked, routeId) {
+  try {
+    await API.put('/warehouse/checklist/' + itemId + '/toggle', {
+      checked: checked,
+      checked_by: currentUser?.id,
+      checked_by_name: currentUser?.name
+    });
+    // Refresh checklist
+    whShowChecklist(routeId);
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function whCheckAllStop(stopId, routeId) {
+  try {
+    await API.post('/warehouse/checklist/stop/' + stopId + '/check-all', {
+      checked_by: currentUser?.id,
+      checked_by_name: currentUser?.name,
+      route_id: routeId
+    });
+    showToast('All items checked!', 'success');
+    whShowChecklist(routeId);
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function whResetChecklist(routeId) {
+  if (!confirm('Reset all checked items for this route? This will clear all check marks.')) return;
+  try {
+    await API.post('/warehouse/route/' + routeId + '/checklist/reset');
+    showToast('Checklist reset', 'success');
+    whShowChecklist(routeId);
+  } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ---- PRINT PACKING LIST ----
+async function whPrintPackingList(routeId) {
+  try {
+    const { data } = await API.get('/packing-list/' + routeId);
+    const r = data.route;
+    const stops = data.stops || [];
+    const loadingOrder = [...stops].reverse();
+    let totalItems = 0;
+    stops.forEach(s => { if (s.items) s.items.forEach(i => { totalItems += i.quantity; }); });
+
+    const printWin = window.open('', '_blank', 'width=800,height=900');
+    printWin.document.write(`<!DOCTYPE html><html><head><title>Packing List - ${r.route_number||'Route'}</title>
+    <style>
+      * { margin:0; padding:0; box-sizing:border-box; }
+      body { font-family: -apple-system, sans-serif; padding: 20px; color: #1a1a1a; }
+      h1 { font-size: 20px; text-align: center; margin-bottom: 4px; }
+      h2 { font-size: 14px; text-align: center; color: #666; margin-bottom: 12px; }
+      .meta { text-align: center; font-size: 12px; color: #666; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid #333; }
+      .summary { display: flex; justify-content: space-around; margin-bottom: 16px; padding: 10px; background: #f5f5f5; border-radius: 6px; }
+      .summary div { text-align: center; }
+      .summary .val { font-size: 22px; font-weight: 800; }
+      .summary .lbl { font-size: 10px; color: #666; text-transform: uppercase; }
+      .stop { margin-bottom: 16px; border: 1px solid #ddd; border-radius: 6px; page-break-inside: avoid; }
+      .stop-hdr { padding: 10px 12px; background: #f5f5f5; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
+      .stop-hdr .load-num { background: #F97316; color: white; font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 4px; margin-right: 8px; }
+      .stop-hdr .name { font-weight: 700; font-size: 14px; }
+      .stop-hdr .addr { font-size: 11px; color: #666; }
+      table { width: 100%; border-collapse: collapse; }
+      th { background: #eee; text-align: left; padding: 6px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; border-bottom: 1px solid #ddd; }
+      td { padding: 6px 10px; font-size: 13px; border-bottom: 1px solid #eee; }
+      td.qty { text-align: center; font-weight: 700; font-size: 15px; }
+      td.chk { text-align: center; font-size: 16px; }
+      .note { padding: 6px 10px; font-size: 11px; background: #FFF7ED; border-top: 1px solid #ddd; }
+      .footer { margin-top: 20px; display: flex; justify-content: space-between; font-size: 12px; padding-top: 12px; border-top: 1px solid #333; }
+      .footer div { flex: 1; }
+      @media print { body { padding: 10px; } }
+    </style></head><body>
+    <h1>BRITISH FEED & SUPPLIES</h1>
+    <h2>PACKING LIST — ${escapeHtml(r.route_number||'Route')}</h2>
+    <div class="meta">Date: <strong>${formatDate(r.date)}</strong> &nbsp;|&nbsp; Driver: <strong>${r.driver_name||'TBD'}</strong> &nbsp;|&nbsp; Truck: <strong>${r.truck_name||'TBD'}</strong></div>
+    <div class="summary">
+      <div><div class="val">${stops.length}</div><div class="lbl">Stops</div></div>
+      <div><div class="val">${totalItems}</div><div class="lbl">Total Items</div></div>
+      <div><div class="val">${r.max_pallet_spots||12}</div><div class="lbl">Pallet Cap</div></div>
+    </div>
+    ${loadingOrder.map((s, i) => `<div class="stop">
+      <div class="stop-hdr">
+        <div><span class="load-num">LOAD #${i+1}</span> <span class="name">${escapeHtml(s.order_number)} — ${escapeHtml(s.business_name)}</span><br><span class="addr">${escapeHtml(s.street||'')} ${escapeHtml(s.city||'')}</span></div>
+        <div style="font-size:12px;font-weight:700">${(s.items||[]).length} items</div>
+      </div>
+      <table>
+        <thead><tr><th>Product</th><th>SKU</th><th style="text-align:center">Qty</th><th style="text-align:center;width:40px">✓</th></tr></thead>
+        <tbody>${(s.items||[]).map(it => `<tr><td>${escapeHtml(it.name)}</td><td><code>${escapeHtml(it.sku||'')}</code></td><td class="qty">${it.quantity} ${it.unit_type||'bags'}</td><td class="chk">☐</td></tr>`).join('')}</tbody>
+      </table>
+      ${s.special_instructions ? '<div class="note"><strong>Note:</strong> '+escapeHtml(s.special_instructions)+'</div>' : ''}
+    </div>`).join('')}
+    <div class="footer">
+      <div>Loaded By: ________________________</div>
+      <div style="text-align:right">Verified By: ________________________</div>
+    </div>
+    </body></html>`);
+    printWin.document.close();
+    setTimeout(() => printWin.print(), 400);
   } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 

@@ -6076,6 +6076,127 @@ app.post('/api/warehouse/thresholds/bulk', async (c) => {
   return c.json({ success: true, updated: result.meta.changes || 0 })
 })
 
+// ==================== PACKING CHECKLIST (MOBILE WAREHOUSE) ====================
+
+// Get or generate checklist for a route
+app.get('/api/warehouse/route/:id/checklist', async (c) => {
+  const routeId = parseInt(c.req.param('id'))
+  const db = c.env.DB
+
+  const route = await db.prepare(
+    `SELECT r.*, t.name as truck_name, u.name as driver_name
+     FROM routes r LEFT JOIN trucks t ON r.truck_id = t.id LEFT JOIN users u ON r.driver_id = u.id WHERE r.id = ?`
+  ).bind(routeId).first() as any
+  if (!route) return c.json({ error: 'Route not found' }, 404)
+
+  // Check if checklist already exists
+  const existing = await db.prepare('SELECT COUNT(*) as cnt FROM packing_checklist WHERE route_id = ?').bind(routeId).first() as any
+
+  if (existing.cnt === 0) {
+    // Auto-generate checklist from route stops + order items
+    const stops = await db.prepare(
+      `SELECT rs.id as stop_id, rs.order_id, rs.sequence,
+       o.order_number, o.priority, o.special_instructions, c.business_name,
+       a.street, a.city
+       FROM route_stops rs JOIN orders o ON rs.order_id = o.id JOIN customers c ON o.customer_id = c.id
+       LEFT JOIN addresses a ON o.address_id = a.id
+       WHERE rs.route_id = ? ORDER BY rs.sequence`
+    ).bind(routeId).all()
+
+    for (const stop of stops.results as any[]) {
+      const items = await db.prepare(
+        `SELECT oi.quantity, oi.product_id, p.name, p.sku, p.unit_type
+         FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?`
+      ).bind(stop.order_id).all()
+      for (const item of items.results as any[]) {
+        await db.prepare(
+          `INSERT INTO packing_checklist (route_id, stop_id, order_id, product_id, product_name, sku, quantity, unit_type)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(routeId, stop.stop_id, stop.order_id, item.product_id, item.name, item.sku || '', item.quantity, item.unit_type || 'bags').run()
+      }
+    }
+  }
+
+  // Fetch full checklist grouped by stop
+  const stops = await db.prepare(
+    `SELECT rs.id as stop_id, rs.order_id, rs.sequence, rs.loaded_at,
+     o.order_number, o.priority, o.special_instructions, c.business_name,
+     a.street, a.city
+     FROM route_stops rs JOIN orders o ON rs.order_id = o.id JOIN customers c ON o.customer_id = c.id
+     LEFT JOIN addresses a ON o.address_id = a.id
+     WHERE rs.route_id = ? ORDER BY rs.sequence`
+  ).bind(routeId).all()
+
+  const checklist = await db.prepare(
+    `SELECT pc.*, u.name as checker_name
+     FROM packing_checklist pc LEFT JOIN users u ON pc.checked_by = u.id
+     WHERE pc.route_id = ? ORDER BY pc.stop_id, pc.id`
+  ).bind(routeId).all()
+
+  // Group checklist items by stop
+  const itemsByStop: Record<number, any[]> = {}
+  for (const item of checklist.results as any[]) {
+    if (!itemsByStop[item.stop_id]) itemsByStop[item.stop_id] = []
+    itemsByStop[item.stop_id].push(item)
+  }
+
+  const stopsWithItems = (stops.results as any[]).map(s => ({
+    ...s,
+    items: itemsByStop[s.stop_id] || [],
+    all_checked: (itemsByStop[s.stop_id] || []).every((i: any) => i.checked),
+    checked_count: (itemsByStop[s.stop_id] || []).filter((i: any) => i.checked).length,
+    total_count: (itemsByStop[s.stop_id] || []).length
+  }))
+
+  const totalChecked = checklist.results.filter((i: any) => i.checked).length
+  const totalItems = checklist.results.length
+
+  return c.json({ route, stops: stopsWithItems, total_checked: totalChecked, total_items: totalItems })
+})
+
+// Check/uncheck a single checklist item
+app.put('/api/warehouse/checklist/:id/toggle', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const { checked, checked_by, checked_by_name } = await c.req.json()
+  const db = c.env.DB
+
+  const item = await db.prepare('SELECT * FROM packing_checklist WHERE id = ?').bind(id).first()
+  if (!item) return c.json({ error: 'Item not found' }, 404)
+
+  if (checked) {
+    await db.prepare(
+      `UPDATE packing_checklist SET checked = 1, checked_by = ?, checked_by_name = ?, checked_at = datetime('now') WHERE id = ?`
+    ).bind(checked_by || null, checked_by_name || null, id).run()
+  } else {
+    await db.prepare(
+      `UPDATE packing_checklist SET checked = 0, checked_by = NULL, checked_by_name = NULL, checked_at = NULL WHERE id = ?`
+    ).bind(id).run()
+  }
+  return c.json({ success: true })
+})
+
+// Check all items in a stop at once
+app.post('/api/warehouse/checklist/stop/:stopId/check-all', async (c) => {
+  const stopId = parseInt(c.req.param('stopId'))
+  const { checked_by, checked_by_name, route_id } = await c.req.json()
+  const db = c.env.DB
+
+  await db.prepare(
+    `UPDATE packing_checklist SET checked = 1, checked_by = ?, checked_by_name = ?, checked_at = datetime('now') WHERE stop_id = ? AND checked = 0`
+  ).bind(checked_by || null, checked_by_name || null, stopId).run()
+
+  return c.json({ success: true })
+})
+
+// Reset checklist (uncheck all for a route — useful if order changes)
+app.post('/api/warehouse/route/:id/checklist/reset', async (c) => {
+  const routeId = parseInt(c.req.param('id'))
+  const db = c.env.DB
+  // Delete and regenerate
+  await db.prepare('DELETE FROM packing_checklist WHERE route_id = ?').bind(routeId).run()
+  return c.json({ success: true, message: 'Checklist reset — will regenerate on next load' })
+})
+
 // HTML serving is handled by the parent shell — not this module
 export default app
 export { app as logisticsApp }

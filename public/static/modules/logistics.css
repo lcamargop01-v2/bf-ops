@@ -1255,3 +1255,73 @@ tr[draggable="true"]:hover .drag-handle { color: var(--navy); }
   .wh-po-recv-name { font-size:13px; }
   .wh-alert-item-name { font-size:12px; }
 }
+
+/* ==================== PACKING CHECKLIST (MOBILE) ==================== */
+.wh-checklist-header { margin-bottom:16px; }
+.wh-checklist-title-row { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+.wh-checklist-counter {
+  display:inline-flex; align-items:center; justify-content:center; padding:8px 16px;
+  border-radius:10px; font-size:18px; font-weight:800; background:#EFF6FF; color:#2563EB; border:2px solid #BFDBFE;
+  min-width:60px; text-align:center;
+}
+.wh-checklist-counter.complete { background:#DCFCE7; color:#16A34A; border-color:#86EFAC; }
+.wh-checklist-stops { display:flex; flex-direction:column; gap:10px; }
+.wh-checklist-stop {
+  background:white; border-radius:14px; border:1px solid var(--gray-200);
+  overflow:hidden; transition:all 0.2s;
+}
+.wh-checklist-stop.done { border-color:#86EFAC; background:#F0FDF4; }
+.wh-checklist-stop-hdr {
+  display:flex; align-items:center; gap:12px; padding:14px 16px;
+  cursor:pointer; user-select:none; -webkit-user-select:none;
+}
+.wh-checklist-stop-num {
+  width:36px; height:36px; border-radius:50%; background:#1E3A8A; color:white;
+  display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:800; flex-shrink:0;
+}
+.wh-checklist-stop-num.done { background:#059669; }
+.wh-checklist-stop-info { flex:1; min-width:0; }
+.wh-checklist-stop-name { font-size:15px; font-weight:700; color:var(--navy,#1E293B); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wh-checklist-stop-meta { font-size:12px; color:var(--gray-500,#64748B); margin-top:2px; }
+.wh-checklist-stop-progress { font-size:14px; font-weight:700; color:var(--gray-500); flex-shrink:0; }
+.wh-checklist-stop.done .wh-checklist-stop-progress { color:#059669; }
+
+.wh-checklist-items { padding:0 14px 14px; border-top:1px solid var(--gray-100,#F1F5F9); }
+.wh-checklist-stop.collapsed .wh-checklist-items { display:none; }
+
+.wh-checklist-item {
+  display:flex; align-items:center; gap:12px; padding:12px 10px;
+  border-bottom:1px solid var(--gray-100,#F1F5F9); cursor:pointer;
+  user-select:none; -webkit-user-select:none; transition:background 0.15s;
+  -webkit-tap-highlight-color:rgba(59,130,246,0.1); border-radius:8px;
+}
+.wh-checklist-item:last-child { border-bottom:none; }
+.wh-checklist-item:active { background:#EFF6FF; }
+.wh-checklist-item.checked { opacity:0.6; }
+.wh-checklist-item.checked .wh-checklist-item-name { text-decoration:line-through; color:var(--gray-400); }
+
+.wh-checklist-checkbox { font-size:24px; color:#CBD5E1; flex-shrink:0; width:30px; text-align:center; transition:color 0.15s; }
+.wh-checklist-checkbox.checked { color:#059669; }
+
+.wh-checklist-item-info { flex:1; min-width:0; }
+.wh-checklist-item-name { font-size:14px; font-weight:600; color:var(--navy,#1E293B); }
+.wh-checklist-item-sku { font-size:11px; color:var(--gray-400,#9CA3AF); margin-top:1px; font-family:monospace; }
+
+.wh-checklist-item-qty {
+  font-size:16px; font-weight:800; color:var(--navy,#1E293B);
+  background:#F1F5F9; padding:4px 10px; border-radius:8px; flex-shrink:0; text-align:center;
+}
+.wh-checklist-item-qty small { font-size:11px; font-weight:500; color:var(--gray-400); }
+
+/* Mobile-first: make checklist touch-friendly */
+@media (max-width: 768px) {
+  .wh-checklist-item { padding:14px 10px; gap:10px; }
+  .wh-checklist-checkbox { font-size:28px; width:34px; }
+  .wh-checklist-item-name { font-size:15px; }
+  .wh-checklist-item-qty { font-size:18px; padding:6px 12px; }
+  .wh-checklist-stop-hdr { padding:14px 14px; }
+}
+@media (max-width: 480px) {
+  .wh-checklist-title-row { flex-direction:column; gap:8px; }
+  .wh-checklist-counter { align-self:flex-start; }
+}
