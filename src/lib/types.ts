@@ -9,6 +9,8 @@ export type BFBindings = {
   VERIZON_PASSWORD?: string
   VERIZON_APP_ID?: string
   CRON_SECRET?: string
+  MAKE_WEBHOOK_URL?: string
+  MAKE_BROADCAST_WEBHOOK_URL?: string
 }
 
 export type BFVariables = {

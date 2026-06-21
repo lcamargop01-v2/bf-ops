@@ -8,6 +8,7 @@ import { crmApp } from './modules/crm'
 import { reportsApp } from './modules/reports'
 import { posApp } from './modules/pos'
 import { tasksApp } from './modules/tasks'
+import { standingOrdersApp } from './modules/standingOrders'
 
 const app = new Hono<{ Bindings: BFBindings; Variables: BFVariables }>()
 
@@ -568,6 +569,9 @@ app.route('/', posApp)
 
 // Tasks & Notifications module: /api/tasks/*, /api/notifications/*
 app.route('/', tasksApp)
+
+// Standing Orders & SMS Confirmations: /api/standing-orders/*, /api/sms/*
+app.route('/', standingOrdersApp)
 
 // Logistics module: /api/orders, /api/routes, /api/customers, etc.
 app.route('/', logisticsApp)

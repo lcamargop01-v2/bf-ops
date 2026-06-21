@@ -1918,7 +1918,7 @@ function renderPage() {
   const titles = { dashboard:t('nav_dashboard'), orders:t('nav_orders'), ticket_review:'Ticket Review', schedule:t('nav_schedule'), routes:t('nav_routes'), route_builder:'Route Builder', zones:t('zones_title'), recurring:t('recurring_title'), customers:t('nav_customers'), products:t('nav_products'), trucks:t('trucks_title'), drivers_mgmt:t('nav_drivers')||'Drivers', maintenance:t('nav_maintenance')||'Fleet Maintenance', warehouse:'Warehouse', driver:t('nav_driver_view'), packing:t('nav_packing_lists'), returns:'Returns', learning:'AI Learning Engine', fleet_tracking:'Fleet Tracking', fleet_sync:'Fleet Sync' };
   const el = document.getElementById('pageTitle');
   if (el) el.textContent = titles[currentPage] || '';
-  const pages = { dashboard: renderDashboard, orders: renderOrders, ticket_review: renderTicketReview, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, warehouse: renderWarehouse, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
+  const pages = { dashboard: renderDashboard, orders: renderOrders, ticket_review: renderTicketReview, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, standing_orders: renderStandingOrders, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, warehouse: renderWarehouse, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
   const fn = pages[currentPage];
   if (fn) {
     const result = fn();
@@ -16586,5 +16586,457 @@ window._logisticsCleanup = function() {
   currentPage = 'dashboard';
   sidebarOpen = false;
 };
+
+// ==================== STANDING ORDERS & SMS CONFIRMATIONS ====================
+
+var _soCurrentRun = null;
+var _soEntries = [];
+
+function soEsc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function renderStandingOrders() {
+  if (window._params?.runId) return renderStandingOrderRunDetail(window._params.runId);
+  var el = document.getElementById('moduleContent');
+  el.innerHTML = '<div style="padding:20px;text-align:center"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+
+  try {
+    var resp = await API.get('/standing-orders/runs?limit=30');
+    var runs = resp.data.runs || [];
+    var html = '<div style="padding:20px;max-width:1100px;margin:0 auto">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">';
+    html += '<h2 style="margin:0;font-size:22px;font-weight:700;color:#111827"><i class="fas fa-bell-concierge" style="color:#2563EB"></i> Standing Orders & Confirmations</h2>';
+    html += '<button class="btn btn-primary" onclick="soShowGenerateRun()"><i class="fas fa-plus"></i> New Confirmation Run</button>';
+    html += '</div>';
+
+    // Info banner
+    html += '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:flex-start;gap:12px">';
+    html += '<i class="fas fa-info-circle" style="color:#2563EB;margin-top:2px"></i>';
+    html += '<div style="font-size:13px;color:#1E40AF;line-height:1.5">';
+    html += '<strong>How it works:</strong> Generate a confirmation run for a delivery date → system pulls standing orders + broadcast customers by zone → review stock → send texts → customers reply C to confirm or text changes → orders auto-created.';
+    html += '</div></div>';
+
+    if (!runs.length) {
+      html += '<div style="text-align:center;padding:60px 20px;background:#F9FAFB;border-radius:12px;border:1px solid #E5E7EB">';
+      html += '<i class="fas fa-bell-concierge" style="font-size:48px;color:#D1D5DB;margin-bottom:16px"></i>';
+      html += '<p style="color:#6B7280;font-size:15px">No confirmation runs yet. Create one to get started!</p>';
+      html += '</div>';
+    } else {
+      html += '<div style="display:flex;flex-direction:column;gap:10px">';
+      runs.forEach(function(r) {
+        var statusColor = r.status === 'completed' ? '#059669' : r.status === 'sent' ? '#2563EB' : r.status === 'draft' ? '#9CA3AF' : r.status === 'cancelled' ? '#DC2626' : '#D97706';
+        var statusIcon = r.status === 'completed' ? 'fa-check-circle' : r.status === 'sent' ? 'fa-paper-plane' : r.status === 'draft' ? 'fa-file-pen' : 'fa-clock';
+        html += '<div onclick="navigateTo(\'standing_orders\',{runId:' + r.id + '})" style="cursor:pointer;background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center;transition:all .15s;flex-wrap:wrap;gap:12px" onmouseover="this.style.borderColor=\'#93C5FD\';this.style.background=\'#F8FAFF\'" onmouseout="this.style.borderColor=\'#E5E7EB\';this.style.background=\'#fff\'">';
+        html += '<div style="display:flex;align-items:center;gap:14px">';
+        html += '<div style="width:44px;height:44px;border-radius:10px;background:' + statusColor + '15;display:flex;align-items:center;justify-content:center"><i class="fas ' + statusIcon + '" style="color:' + statusColor + ';font-size:18px"></i></div>';
+        html += '<div>';
+        html += '<div style="font-weight:600;color:#111827;font-size:15px">Delivery: ' + soEsc(r.run_date) + ' <span style="font-weight:400;color:#6B7280;font-size:12px">(' + soEsc(r.delivery_day) + ')</span></div>';
+        html += '<div style="font-size:12px;color:#6B7280;margin-top:2px">';
+        html += '<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:4px;font-weight:600;font-size:11px;background:' + statusColor + '18;color:' + statusColor + ';border:1px solid ' + statusColor + '30"><i class="fas ' + statusIcon + '"></i> ' + soEsc(r.status) + '</span>';
+        html += ' &middot; Created ' + soEsc((r.created_at || '').substring(0, 16));
+        if (r.created_by_name) html += ' by ' + soEsc(r.created_by_name);
+        html += '</div></div></div>';
+        // Right side: counts
+        html += '<div style="display:flex;gap:16px;flex-wrap:wrap">';
+        html += '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#111827">' + (r.total_entries || 0) + '</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Total</div></div>';
+        html += '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#059669">' + (r.confirmed_count || 0) + '</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Confirmed</div></div>';
+        html += '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#F59E0B">' + (r.pending_count || 0) + '</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Pending</div></div>';
+        html += '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#8B5CF6">' + (r.modified_count || 0) + '</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Modified</div></div>';
+        html += '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#DC2626">' + (r.declined_count || 0) + '</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Declined</div></div>';
+        html += '</div></div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> ' + soEsc(e.message || 'Failed to load') + '</div>';
+  }
+}
+window.renderStandingOrders = renderStandingOrders;
+
+// Generate Run Modal
+async function soShowGenerateRun() {
+  // Get zones
+  var zonesResp = await API.get('/zones');
+  var zones = zonesResp.data.zones || [];
+  // Default: tomorrow
+  var tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  var defDate = tomorrow.toISOString().split('T')[0];
+  var defCutoff = new Date(tomorrow); defCutoff.setHours(18,0,0,0);
+  var cutoffStr = defCutoff.toISOString().substring(0, 16);
+
+  var html = '<div id="soGenModal" style="position:fixed;inset:0;z-index:1100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4)" onclick="if(event.target===this)this.remove()">';
+  html += '<div style="background:#fff;border-radius:14px;max-width:520px;width:95%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)">';
+  html += '<div style="padding:20px 24px;border-bottom:1px solid #E5E7EB;display:flex;justify-content:space-between;align-items:center">';
+  html += '<h3 style="margin:0;font-size:18px;font-weight:700"><i class="fas fa-magic" style="color:#2563EB"></i> Generate Confirmation Run</h3>';
+  html += '<button onclick="document.getElementById(\'soGenModal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6B7280">&times;</button>';
+  html += '</div><div style="padding:24px">';
+
+  html += '<div style="margin-bottom:16px"><label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px">Delivery Date</label>';
+  html += '<input type="date" id="soGenDate" value="' + defDate + '" class="form-control" style="width:100%;padding:10px 12px;border:1px solid #D1D5DB;border-radius:8px"></div>';
+
+  html += '<div style="margin-bottom:16px"><label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px">Confirmation Cutoff</label>';
+  html += '<input type="datetime-local" id="soGenCutoff" value="' + cutoffStr + '" class="form-control" style="width:100%;padding:10px 12px;border:1px solid #D1D5DB;border-radius:8px"></div>';
+
+  html += '<div style="margin-bottom:16px"><label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px">Zones (leave unchecked = all zones for that day)</label>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;max-height:200px;overflow-y:auto">';
+  zones.forEach(function(z) {
+    html += '<label style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:#F9FAFB;border:1px solid #E5E7EB;border-radius:8px;cursor:pointer;font-size:13px">';
+    html += '<input type="checkbox" class="soZoneCheck" value="' + z.id + '"> ';
+    html += '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + (z.color || '#2563EB') + '"></span> ';
+    html += soEsc(z.name) + ' <span style="color:#9CA3AF;font-size:11px">(' + soEsc(z.delivery_days) + ')</span>';
+    html += '</label>';
+  });
+  html += '</div></div>';
+
+  html += '<div style="margin-bottom:20px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#374151">';
+  html += '<input type="checkbox" id="soGenBroadcast" checked> Include broadcast texts to non-standing customers in these zones';
+  html += '</label></div>';
+
+  html += '<button onclick="soDoGenerateRun()" class="btn btn-primary" style="width:100%;padding:12px;font-size:15px;font-weight:600"><i class="fas fa-bolt"></i> Generate Run</button>';
+  html += '</div></div></div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+window.soShowGenerateRun = soShowGenerateRun;
+
+async function soDoGenerateRun() {
+  var date = document.getElementById('soGenDate').value;
+  var cutoff = document.getElementById('soGenCutoff').value;
+  var broadcast = document.getElementById('soGenBroadcast').checked;
+  var zoneChecks = document.querySelectorAll('.soZoneCheck:checked');
+  var zoneIds = [];
+  zoneChecks.forEach(function(cb) { zoneIds.push(parseInt(cb.value)); });
+
+  var btn = event.target; btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+  try {
+    var resp = await API.post('/standing-orders/runs/generate', {
+      run_date: date,
+      cutoff_time: cutoff || null,
+      zone_ids: zoneIds,
+      include_broadcast: broadcast
+    });
+    var d = resp.data;
+    var modal = document.getElementById('soGenModal');
+    if (modal) modal.remove();
+    shellToast('Run generated: ' + d.total_entries + ' entries (' + d.standing_count + ' standing, ' + d.broadcast_count + ' broadcast)');
+    navigateTo('standing_orders', { runId: d.run_id });
+  } catch (e) {
+    btn.disabled = false; btn.innerHTML = '<i class="fas fa-bolt"></i> Generate Run';
+    shellToast(e.response?.data?.error || e.message, 'error');
+  }
+}
+window.soDoGenerateRun = soDoGenerateRun;
+
+// ==================== RUN DETAIL VIEW ====================
+
+async function renderStandingOrderRunDetail(runId) {
+  var el = document.getElementById('moduleContent');
+  el.innerHTML = '<div style="padding:20px;text-align:center"><i class="fas fa-spinner fa-spin"></i> Loading run...</div>';
+
+  try {
+    var resp = await API.get('/standing-orders/runs/' + runId);
+    var run = resp.data.run;
+    var entries = resp.data.entries || [];
+    _soCurrentRun = run;
+    _soEntries = entries;
+
+    var html = '<div style="padding:20px;max-width:1200px;margin:0 auto">';
+    // Back button + header
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">';
+    html += '<div style="display:flex;align-items:center;gap:12px">';
+    html += '<button onclick="navigateTo(\'standing_orders\')" class="btn btn-outline" style="padding:8px 12px"><i class="fas fa-arrow-left"></i></button>';
+    html += '<div>';
+    html += '<h2 style="margin:0;font-size:20px;font-weight:700;color:#111827">Delivery: ' + soEsc(run.run_date) + ' <span style="font-weight:400;color:#6B7280;font-size:14px">(' + soEsc(run.delivery_day) + ')</span></h2>';
+    var statusColor = run.status === 'completed' ? '#059669' : run.status === 'sent' ? '#2563EB' : run.status === 'draft' ? '#9CA3AF' : '#D97706';
+    html += '<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:4px;font-weight:600;font-size:11px;background:' + statusColor + '18;color:' + statusColor + '">' + soEsc(run.status).toUpperCase() + '</span>';
+    if (run.cutoff_time) html += ' <span style="font-size:12px;color:#6B7280">Cutoff: ' + soEsc(run.cutoff_time) + '</span>';
+    html += '</div></div>';
+    // Action buttons
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    if (run.status === 'draft') {
+      html += '<button onclick="soStockCheck(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px"><i class="fas fa-boxes-stacked"></i> Stock Check</button>';
+      html += '<button onclick="soHoldInventory(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px"><i class="fas fa-lock"></i> Hold Inventory</button>';
+      html += '<button onclick="soSendTexts(' + run.id + ')" class="btn btn-primary" style="padding:8px 14px;font-size:13px"><i class="fas fa-paper-plane"></i> Send Texts</button>';
+    }
+    if (run.status === 'sent') {
+      html += '<button onclick="soStockCheck(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px"><i class="fas fa-boxes-stacked"></i> Stock Check</button>';
+      html += '<button onclick="soExpireRun(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px;color:#DC2626;border-color:#DC2626"><i class="fas fa-clock"></i> Expire Pending</button>';
+    }
+    html += '</div></div>';
+
+    // Summary cards
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:20px">';
+    var stats = [
+      { label: 'Total', val: run.total_entries || 0, color: '#374151', icon: 'fa-list' },
+      { label: 'Confirmed', val: run.confirmed_count || 0, color: '#059669', icon: 'fa-check-circle' },
+      { label: 'Pending', val: run.pending_count || 0, color: '#F59E0B', icon: 'fa-clock' },
+      { label: 'Modified', val: run.modified_count || 0, color: '#8B5CF6', icon: 'fa-pen' },
+      { label: 'Declined', val: run.declined_count || 0, color: '#DC2626', icon: 'fa-times-circle' },
+      { label: 'Broadcast', val: run.broadcast_count || 0, color: '#2563EB', icon: 'fa-bullhorn' }
+    ];
+    stats.forEach(function(s) {
+      html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:14px;text-align:center">';
+      html += '<div style="font-size:24px;font-weight:700;color:' + s.color + '">' + s.val + '</div>';
+      html += '<div style="font-size:11px;color:#6B7280;text-transform:uppercase;margin-top:2px"><i class="fas ' + s.icon + '"></i> ' + s.label + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+
+    // Filter tabs
+    html += '<div id="soFilterTabs" style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">';
+    var filters = ['all', 'standing', 'broadcast', 'confirmed', 'pending', 'sent', 'modified', 'declined', 'no_response'];
+    filters.forEach(function(f) {
+      var active = f === 'all';
+      html += '<button onclick="soFilterEntries(\'' + f + '\',this)" class="so-filter-tab' + (active ? ' active' : '') + '" style="padding:6px 14px;border-radius:6px;border:1px solid #D1D5DB;background:' + (active ? '#2563EB' : '#fff') + ';color:' + (active ? '#fff' : '#374151') + ';font-size:12px;font-weight:600;cursor:pointer">' + f.replace('_', ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); }) + '</button>';
+    });
+    html += '</div>';
+
+    // Entries list
+    html += '<div id="soEntriesList">';
+    html += soRenderEntries(entries, 'all');
+    html += '</div>';
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> ' + soEsc(e.message || 'Failed to load') + '</div>';
+  }
+}
+
+function soRenderEntries(entries, filter) {
+  var filtered = entries;
+  if (filter === 'standing') filtered = entries.filter(function(e) { return e.entry_type === 'standing'; });
+  else if (filter === 'broadcast') filtered = entries.filter(function(e) { return e.entry_type === 'broadcast'; });
+  else if (filter !== 'all') filtered = entries.filter(function(e) { return e.status === filter; });
+
+  if (!filtered.length) return '<div style="text-align:center;padding:40px;color:#9CA3AF;background:#F9FAFB;border-radius:10px"><i class="fas fa-inbox"></i> No entries match this filter</div>';
+
+  var html = '<div style="display:flex;flex-direction:column;gap:8px">';
+  filtered.forEach(function(e) {
+    var stColor = e.status === 'confirmed' ? '#059669' : e.status === 'declined' || e.status === 'no_response' ? '#DC2626' : e.status === 'modified' ? '#8B5CF6' : e.status === 'sent' ? '#2563EB' : '#F59E0B';
+    var stIcon = e.status === 'confirmed' ? 'fa-check-circle' : e.status === 'declined' ? 'fa-times-circle' : e.status === 'modified' ? 'fa-pen' : e.status === 'sent' ? 'fa-paper-plane' : e.status === 'no_response' ? 'fa-clock' : 'fa-hourglass-half';
+    var typeBadge = e.entry_type === 'broadcast'
+      ? '<span style="background:#EFF6FF;color:#2563EB;border:1px solid #BFDBFE;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600"><i class="fas fa-bullhorn"></i> Broadcast</span>'
+      : '<span style="background:#F0FDF4;color:#059669;border:1px solid #BBF7D0;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600"><i class="fas fa-rotate"></i> Standing</span>';
+
+    html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:14px 18px;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">';
+    // Left: customer info
+    html += '<div style="flex:1;min-width:200px">';
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
+    html += '<strong style="font-size:15px;color:#111827">' + soEsc(e.customer_name || 'Unknown') + '</strong> ' + typeBadge;
+    if (e.zone_name) html += ' <span style="font-size:11px;color:' + (e.zone_color || '#6B7280') + ';font-weight:600">' + soEsc(e.zone_name) + '</span>';
+    html += '</div>';
+    html += '<div style="font-size:12px;color:#6B7280">';
+    html += '<i class="fas fa-phone" style="width:14px"></i> ' + soEsc(e.customer_phone || 'No phone');
+    html += '</div>';
+    // Items
+    if (e.proposed_items) {
+      try {
+        var items = JSON.parse(e.proposed_items);
+        html += '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">';
+        items.forEach(function(it) {
+          html += '<span style="background:#F3F4F6;border:1px solid #E5E7EB;padding:2px 8px;border-radius:4px;font-size:11px">' + it.quantity + 'x ' + soEsc(it.product_name) + '</span>';
+        });
+        html += '</div>';
+      } catch {}
+    }
+    // Modified message
+    if (e.status === 'modified' && e.modified_items) {
+      html += '<div style="margin-top:6px;padding:8px 12px;background:#F5F3FF;border:1px solid #DDD6FE;border-radius:6px;font-size:12px;color:#5B21B6"><i class="fas fa-comment-dots"></i> Customer says: <strong>"' + soEsc(e.modified_items) + '"</strong></div>';
+    }
+    if (e.order_id) {
+      html += '<div style="margin-top:4px;font-size:11px;color:#059669"><i class="fas fa-check"></i> Order #' + e.order_id + ' created</div>';
+    }
+    html += '</div>';
+    // Right: status + actions
+    html += '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:140px">';
+    html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:5px;font-weight:600;font-size:12px;background:' + stColor + '15;color:' + stColor + ';border:1px solid ' + stColor + '30"><i class="fas ' + stIcon + '"></i> ' + soEsc(e.status).replace('_', ' ') + '</span>';
+    // Action buttons
+    if (e.status === 'sent' || e.status === 'pending' || e.status === 'modified') {
+      html += '<div style="display:flex;gap:4px">';
+      html += '<button onclick="soConfirmEntry(' + e.id + ')" class="btn btn-sm" style="background:#059669;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer" title="Confirm"><i class="fas fa-check"></i></button>';
+      html += '<button onclick="soDeclineEntry(' + e.id + ')" class="btn btn-sm" style="background:#DC2626;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer" title="Decline"><i class="fas fa-times"></i></button>';
+      html += '<button onclick="soShowThread(' + e.id + ')" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer" title="Messages"><i class="fas fa-comment"></i></button>';
+      html += '</div>';
+    } else if (e.status === 'confirmed') {
+      html += '<button onclick="soShowThread(' + e.id + ')" class="btn btn-sm" style="background:#E5E7EB;color:#374151;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer"><i class="fas fa-comment"></i> Thread</button>';
+    }
+    html += '</div></div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+function soFilterEntries(filter, btn) {
+  // Update tab styling
+  document.querySelectorAll('.so-filter-tab').forEach(function(t) { t.style.background = '#fff'; t.style.color = '#374151'; t.classList.remove('active'); });
+  btn.style.background = '#2563EB'; btn.style.color = '#fff'; btn.classList.add('active');
+  var list = document.getElementById('soEntriesList');
+  if (list) list.innerHTML = soRenderEntries(_soEntries, filter);
+}
+window.soFilterEntries = soFilterEntries;
+
+// ==================== RUN ACTIONS ====================
+
+async function soSendTexts(runId) {
+  if (!confirm('Send confirmation texts to all pending customers in this run? This will trigger Make webhooks.')) return;
+  try {
+    var resp = await API.post('/standing-orders/runs/' + runId + '/send');
+    shellToast('Sent ' + resp.data.sent + ' texts' + (resp.data.failed ? ' (' + resp.data.failed + ' failed)' : ''));
+    if (resp.data.errors?.length) console.warn('SMS errors:', resp.data.errors);
+    renderStandingOrderRunDetail(runId);
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soSendTexts = soSendTexts;
+
+async function soHoldInventory(runId) {
+  if (!confirm('Place inventory holds for all pending standing orders? This will reserve stock at the warehouse.')) return;
+  try {
+    var resp = await API.post('/standing-orders/runs/' + runId + '/hold-inventory');
+    var msg = 'Holds placed: ' + resp.data.holds_placed;
+    if (resp.data.stock_issues?.length) msg += '. ⚠️ ' + resp.data.stock_issues.length + ' stock issues found!';
+    shellToast(msg, resp.data.stock_issues?.length ? 'error' : 'success');
+    // Show stock issues if any
+    if (resp.data.stock_issues?.length) {
+      soShowStockIssues(resp.data.stock_issues);
+    }
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soHoldInventory = soHoldInventory;
+
+async function soStockCheck(runId) {
+  try {
+    var resp = await API.get('/standing-orders/runs/' + runId + '/stock-check');
+    var checks = resp.data.stock_check || [];
+    var html = '<div id="soStockModal" style="position:fixed;inset:0;z-index:1100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4)" onclick="if(event.target===this)this.remove()">';
+    html += '<div style="background:#fff;border-radius:14px;max-width:700px;width:95%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)">';
+    html += '<div style="padding:16px 24px;border-bottom:1px solid #E5E7EB;display:flex;justify-content:space-between;align-items:center">';
+    html += '<h3 style="margin:0;font-size:17px;font-weight:700"><i class="fas fa-boxes-stacked" style="color:#2563EB"></i> Stock Check</h3>';
+    html += '<button onclick="document.getElementById(\'soStockModal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6B7280">&times;</button>';
+    html += '</div><div style="padding:20px">';
+    if (!checks.length) {
+      html += '<p style="color:#6B7280;text-align:center">No stock requirements for this run.</p>';
+    } else {
+      html += '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+      html += '<thead><tr style="background:#F9FAFB;border-bottom:2px solid #E5E7EB"><th style="padding:8px 10px;text-align:left">Product</th><th style="padding:8px 10px;text-align:right">Needed</th><th style="padding:8px 10px;text-align:right">Available</th><th style="padding:8px 10px;text-align:right">On Hold</th><th style="padding:8px 10px;text-align:center">Status</th></tr></thead><tbody>';
+      checks.forEach(function(ck) {
+        var rowBg = ck.sufficient ? '' : 'background:#FEF2F2';
+        html += '<tr style="border-bottom:1px solid #E5E7EB;' + rowBg + '">';
+        html += '<td style="padding:8px 10px;font-weight:500">' + soEsc(ck.product_name) + ' <span style="color:#9CA3AF;font-size:11px">(' + ck.num_entries + ' orders)</span></td>';
+        html += '<td style="padding:8px 10px;text-align:right;font-weight:600">' + ck.total_requested + '</td>';
+        html += '<td style="padding:8px 10px;text-align:right;color:' + (ck.sufficient ? '#059669' : '#DC2626') + ';font-weight:600">' + ck.qty_available + '</td>';
+        html += '<td style="padding:8px 10px;text-align:right;color:#6B7280">' + ck.qty_on_hold + '</td>';
+        html += '<td style="padding:8px 10px;text-align:center">';
+        if (ck.sufficient) html += '<span style="color:#059669;font-weight:600"><i class="fas fa-check-circle"></i> OK</span>';
+        else html += '<span style="color:#DC2626;font-weight:600"><i class="fas fa-exclamation-triangle"></i> Short ' + ck.shortfall + '</span>';
+        html += '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div></div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soStockCheck = soStockCheck;
+
+function soShowStockIssues(issues) {
+  var html = '<div id="soIssuesModal" style="position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4)" onclick="if(event.target===this)this.remove()">';
+  html += '<div style="background:#fff;border-radius:14px;max-width:500px;width:95%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)">';
+  html += '<div style="padding:16px 24px;border-bottom:1px solid #E5E7EB;background:#FEF2F2"><h3 style="margin:0;font-size:16px;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> Stock Shortages</h3></div>';
+  html += '<div style="padding:16px">';
+  issues.forEach(function(is) {
+    html += '<div style="padding:10px;border-bottom:1px solid #F3F4F6;font-size:13px"><strong>' + soEsc(is.customer_name) + '</strong>: ' + soEsc(is.product_name) + ' — requested ' + is.requested + ', available ' + is.available + '</div>';
+  });
+  html += '</div></div></div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function soExpireRun(runId) {
+  if (!confirm('Mark all remaining "sent" entries as "no response" and release inventory holds?')) return;
+  try {
+    var resp = await API.post('/standing-orders/runs/' + runId + '/expire');
+    shellToast('Expired ' + resp.data.expired + ' entries');
+    renderStandingOrderRunDetail(runId);
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soExpireRun = soExpireRun;
+
+// ==================== ENTRY ACTIONS ====================
+
+async function soConfirmEntry(entryId) {
+  if (!confirm('Confirm this entry and create the delivery order?')) return;
+  try {
+    var resp = await API.post('/standing-orders/entries/' + entryId + '/confirm', {});
+    shellToast('Confirmed! Order #' + (resp.data.order_id || 'created'));
+    renderStandingOrderRunDetail(_soCurrentRun.id);
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soConfirmEntry = soConfirmEntry;
+
+async function soDeclineEntry(entryId) {
+  var notes = prompt('Decline reason (optional):');
+  if (notes === null) return;
+  try {
+    await API.post('/standing-orders/entries/' + entryId + '/decline', { notes: notes || '' });
+    shellToast('Entry declined');
+    renderStandingOrderRunDetail(_soCurrentRun.id);
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soDeclineEntry = soDeclineEntry;
+
+// ==================== SMS THREAD VIEW ====================
+
+async function soShowThread(entryId) {
+  try {
+    var resp = await API.get('/standing-orders/entries/' + entryId + '/messages');
+    var messages = resp.data.messages || [];
+    var entry = _soEntries.find(function(e) { return e.id === entryId; });
+
+    var html = '<div id="soThreadModal" style="position:fixed;inset:0;z-index:1100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4)" onclick="if(event.target===this)this.remove()">';
+    html += '<div style="background:#fff;border-radius:14px;max-width:500px;width:95%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.2)">';
+    // Header
+    html += '<div style="padding:16px 20px;border-bottom:1px solid #E5E7EB;display:flex;justify-content:space-between;align-items:center">';
+    html += '<div><h3 style="margin:0;font-size:16px;font-weight:700"><i class="fas fa-comment" style="color:#2563EB"></i> ' + soEsc(entry?.customer_name || 'Customer') + '</h3>';
+    html += '<div style="font-size:12px;color:#6B7280">' + soEsc(entry?.customer_phone || '') + '</div></div>';
+    html += '<button onclick="document.getElementById(\'soThreadModal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6B7280">&times;</button>';
+    html += '</div>';
+    // Messages
+    html += '<div style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;background:#F9FAFB">';
+    if (!messages.length) {
+      html += '<div style="text-align:center;color:#9CA3AF;padding:40px"><i class="fas fa-comment-slash" style="font-size:24px"></i><p>No messages yet</p></div>';
+    }
+    messages.forEach(function(m) {
+      var isOut = m.direction === 'outbound';
+      html += '<div style="display:flex;justify-content:' + (isOut ? 'flex-end' : 'flex-start') + '">';
+      html += '<div style="max-width:80%;padding:10px 14px;border-radius:' + (isOut ? '14px 14px 4px 14px' : '14px 14px 14px 4px') + ';background:' + (isOut ? '#2563EB' : '#fff') + ';color:' + (isOut ? '#fff' : '#111827') + ';font-size:13px;' + (isOut ? '' : 'border:1px solid #E5E7EB') + ';box-shadow:0 1px 2px rgba(0,0,0,.06)">';
+      html += soEsc(m.message_body);
+      html += '<div style="font-size:10px;margin-top:4px;opacity:.7;text-align:right">' + soEsc((m.sent_at || m.received_at || m.created_at || '').substring(11, 16)) + ' &middot; ' + soEsc(m.status) + '</div>';
+      html += '</div></div>';
+    });
+    html += '</div>';
+    // Reply box
+    html += '<div style="padding:12px 16px;border-top:1px solid #E5E7EB;display:flex;gap:8px">';
+    html += '<input type="text" id="soReplyInput" placeholder="Type a reply..." style="flex:1;padding:10px 14px;border:1px solid #D1D5DB;border-radius:10px;font-size:13px" onkeydown="if(event.key===\'Enter\')soSendReply(' + entryId + ')">';
+    html += '<button onclick="soSendReply(' + entryId + ')" style="background:#2563EB;color:#fff;border:none;padding:10px 16px;border-radius:10px;cursor:pointer;font-size:14px"><i class="fas fa-paper-plane"></i></button>';
+    html += '</div></div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soShowThread = soShowThread;
+
+async function soSendReply(entryId) {
+  var input = document.getElementById('soReplyInput');
+  var message = (input?.value || '').trim();
+  if (!message) return;
+  input.value = '';
+  try {
+    await API.post('/standing-orders/entries/' + entryId + '/reply', { message: message });
+    shellToast('Reply sent');
+    // Refresh thread
+    var modal = document.getElementById('soThreadModal');
+    if (modal) modal.remove();
+    soShowThread(entryId);
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soSendReply = soSendReply;
 
 // end logistics module

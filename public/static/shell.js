@@ -1946,6 +1946,7 @@ var SHELL_MODULE_PAGES = {
     { id: 'route_builder', label: 'Route Builder', icon: 'fa-map-location-dot' },
     { id: 'zones', label: 'Zones', icon: 'fa-map-location-dot' },
     { id: 'recurring', label: 'Recurring', icon: 'fa-sync-alt' },
+    { id: 'standing_orders', label: 'Standing Orders', icon: 'fa-bell-concierge' },
     { id: 'customers', label: 'Customers', icon: 'fa-users' },
     { id: 'products', label: 'Products', icon: 'fa-box-open' },
     { id: 'trucks', label: 'Fleet', icon: 'fa-truck' },
