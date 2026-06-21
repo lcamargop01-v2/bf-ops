@@ -1392,9 +1392,11 @@ function helpAskSubmit(e) {
   _helpChatHistory.push({ role: 'assistant', text: '...', loading: true });
   helpRenderChat();
 
-  // Call AI
+  // Call AI — use axios directly with token from localStorage (module may overwrite API)
   var ctx = window._helpContext || {};
-  API.post('/help/ask', { question: q, module: ctx.module || '', page: ctx.page || '' })
+  var _hToken = localStorage.getItem('bf_ops_token');
+  var _hHeaders = _hToken ? { Authorization: 'Bearer ' + _hToken } : {};
+  axios.post('/api/help/ask', { question: q, module: ctx.module || '', page: ctx.page || '' }, { headers: _hHeaders })
     .then(function(resp) {
       // Remove loading message
       _helpChatHistory = _helpChatHistory.filter(function(m) { return !m.loading; });
@@ -1521,7 +1523,10 @@ function submitFeatureRequest(e) {
   var btn = document.getElementById('frSubmitBtn');
   btn.disabled = true;
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
-  API.post('/feature-requests', {
+  // Always use token from localStorage — module scripts may overwrite global API
+  var token = localStorage.getItem('bf_ops_token');
+  var headers = token ? { Authorization: 'Bearer ' + token } : {};
+  axios.post('/api/feature-requests', {
     title: title,
     description: (document.getElementById('frDesc').value || '').trim(),
     category: document.getElementById('frCategory').value,
@@ -1529,7 +1534,7 @@ function submitFeatureRequest(e) {
     current_page: window.location.hash || document.title,
     current_module: activeModule || '',
     user_agent: navigator.userAgent
-  }).then(function(r) {
+  }, { headers: headers }).then(function(r) {
     closeShellModal();
     shellToast('Feature request submitted! Thank you.', 'success');
   }).catch(function(err) {
@@ -2127,7 +2132,7 @@ async function renderAdminPanel() {
         </div>
 
         <!-- Locations -->
-        <div class="shell-admin-card">
+        <div class="shell-admin-card" style="margin-bottom:20px">
           <div class="shell-admin-card-header">
             <h3><i class="fas fa-map-marker-alt" style="color:#3B82F6;margin-right:8px"></i>Locations</h3>
           </div>
@@ -2147,11 +2152,103 @@ async function renderAdminPanel() {
             </tbody>
           </table>
         </div>
+
+        <!-- Fee & Tax Settings -->
+        <div class="shell-admin-card" id="adminFeeSettingsCard">
+          <div class="shell-admin-card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h3><i class="fas fa-sliders" style="color:#F59E0B;margin-right:8px"></i>Fee & Surcharge Settings</h3>
+          </div>
+          <div id="adminFeeContent" style="padding:16px">
+            <div style="text-align:center;color:#94A3B8"><i class="fas fa-spinner fa-spin"></i> Loading fees...</div>
+          </div>
+        </div>
       </div>`;
+
+    // Load fee settings into admin panel
+    _loadAdminFees();
   } catch(err) {
     frame.innerHTML = '<div style="padding:40px;text-align:center"><p style="color:#DC2626">Error loading admin panel: ' + err.message + '</p><button class="shell-save-btn" onclick="renderAdminPanel()"><i class="fas fa-redo"></i> Retry</button></div>';
   }
 }
+
+// ==================== ADMIN: FEE & TAX SETTINGS ====================
+async function _loadAdminFees() {
+  var el = document.getElementById('adminFeeContent');
+  if (!el) return;
+  var token = localStorage.getItem('bf_ops_token');
+  var headers = token ? { Authorization: 'Bearer ' + token } : {};
+  try {
+    var r = await axios.get('/api/pos/fees', { headers: headers });
+    var fees = r.data || [];
+    if (fees.length === 0) {
+      el.innerHTML = '<div style="text-align:center;padding:24px;color:#94A3B8"><i class="fas fa-sliders" style="font-size:32px;display:block;margin-bottom:8px"></i>No fee configurations found</div>';
+      return;
+    }
+    var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px">';
+    fees.forEach(function(fee) {
+      var isFuel = fee.fee_type === 'fuel_surcharge';
+      var icon = isFuel ? 'fa-gas-pump' : 'fa-credit-card';
+      var label = isFuel ? 'Fuel Surcharge' : 'Credit Card Processing Fee';
+      var isOn = fee.is_active || fee.active;
+      var desc = isFuel
+        ? 'Automatically applied to delivery orders. Calculated on the order subtotal.'
+        : 'Applied to credit card payments only. NOT applied to debit, cash, check, or account payments.';
+      var legalBlock = !isFuel
+        ? '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px;margin:10px 0;font-size:11px;line-height:1.5;color:#991B1B">' +
+          '<strong><i class="fas fa-balance-scale"></i> Legal Requirements:</strong><br>' +
+          '&bull; Fee must not exceed actual cost of card acceptance (2-4%)<br>' +
+          '&bull; Must be disclosed before payment is processed<br>' +
+          '&bull; Must NOT be applied to debit transactions<br>' +
+          '&bull; Must be a separate line item on receipt</div>'
+        : '';
+      html += '<div style="background:white;border:1px solid ' + (isOn ? '#FDE68A' : '#E2E8F0') + ';border-radius:12px;padding:20px;position:relative">' +
+        '<div style="position:absolute;top:12px;right:12px">' +
+          (isOn ? '<span style="font-size:10px;padding:2px 8px;border-radius:12px;background:#ECFDF5;color:#059669;font-weight:600">ACTIVE</span>'
+                : '<span style="font-size:10px;padding:2px 8px;border-radius:12px;background:#F1F5F9;color:#94A3B8;font-weight:600">OFF</span>') +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">' +
+          '<div style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:' + (isOn ? '#FEF3C7' : '#F1F5F9') + ';color:' + (isOn ? '#D97706' : '#94A3B8') + ';font-size:18px"><i class="fas ' + icon + '"></i></div>' +
+          '<div style="flex:1"><div style="font-weight:700;font-size:15px">' + escHtml(label) + '</div><div style="font-size:11px;color:#94A3B8;margin-top:2px">' + desc + '</div></div>' +
+        '</div>' +
+        legalBlock +
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">' +
+          '<div><label style="font-size:11px;font-weight:600;color:#64748B;text-transform:uppercase;display:block;margin-bottom:3px">Rate</label>' +
+          '<div style="display:flex;align-items:center"><input type="number" id="adminFeeRate_' + fee.id + '" value="' + (fee.rate || 0) + '" min="0" max="100" step="0.1" style="width:100%;padding:8px;border:1px solid #E2E8F0;border-radius:6px 0 0 6px;font-size:14px">' +
+          '<span style="padding:8px 10px;background:#F1F5F9;border:1px solid #E2E8F0;border-left:none;border-radius:0 6px 6px 0;font-size:13px;color:#64748B">%</span></div></div>' +
+          '<div><label style="font-size:11px;font-weight:600;color:#64748B;text-transform:uppercase;display:block;margin-bottom:3px">Max Cap ($0=none)</label>' +
+          '<input type="number" id="adminFeeMax_' + fee.id + '" value="' + (fee.max_fee || 0) + '" min="0" step="1" style="width:100%;padding:8px;border:1px solid #E2E8F0;border-radius:6px;font-size:14px"></div>' +
+          '<div><label style="font-size:11px;font-weight:600;color:#64748B;text-transform:uppercase;display:block;margin-bottom:3px">Status</label>' +
+          '<select id="adminFeeActive_' + fee.id + '" style="width:100%;padding:8px;border:1px solid #E2E8F0;border-radius:6px;font-size:14px">' +
+          '<option value="1"' + (isOn ? ' selected' : '') + '>Active</option>' +
+          '<option value="0"' + (!isOn ? ' selected' : '') + '>Disabled</option></select></div>' +
+        '</div>' +
+        '<button class="shell-save-btn" style="width:100%;background:#F59E0B;justify-content:center" onclick="_saveAdminFee(' + fee.id + ',this)"><i class="fas fa-save"></i> Save Changes</button>' +
+      '</div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(err) {
+    el.innerHTML = '<div style="text-align:center;padding:16px;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> Error loading fees: ' + (err.message || 'Unknown error') + '</div>';
+  }
+}
+
+async function _saveAdminFee(feeId, btn) {
+  var rate = parseFloat(document.getElementById('adminFeeRate_' + feeId)?.value) || 0;
+  var maxFee = parseFloat(document.getElementById('adminFeeMax_' + feeId)?.value) || 0;
+  var isActive = document.getElementById('adminFeeActive_' + feeId)?.value === '1';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
+  var token = localStorage.getItem('bf_ops_token');
+  var headers = token ? { Authorization: 'Bearer ' + token } : {};
+  try {
+    await axios.put('/api/pos/fees/' + feeId, { rate: rate, max_fee: maxFee, is_active: isActive }, { headers: headers });
+    shellToast('Fee updated successfully');
+    _loadAdminFees();
+  } catch(err) {
+    shellToast('Error: ' + (err.response?.data?.error || err.message), 'error');
+  }
+  if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes'; }
+}
+window._saveAdminFee = _saveAdminFee;
 
 function showAdminNewUserModal() {
   var overlay = document.createElement('div');

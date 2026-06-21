@@ -1778,25 +1778,16 @@ function render() {
 }
 
 function renderSidebarContent() {
+  // Logistics sidebar: routes, deliveries, fleet, warehouse — order management moved to POS
   const items = [
-    { section: 'Quick Start' },
-    { id: 'today', icon: 'fa-clipboard-check', label: 'Today', badge: 'NEW' },
     { section: t('nav_operations') },
     { id: 'dashboard', icon: 'fa-tachometer-alt', label: t('nav_dashboard') },
-    { id: 'orders', icon: 'fa-clipboard-list', label: t('nav_orders') },
-    { id: 'ticket_review', icon: 'fa-rectangle-list', label: 'Ticket Review', dynamicBadge: 'sqReadyCount' },
+    { id: 'ticket_review', icon: 'fa-rectangle-list', label: 'Ticket Review', dynamicBadge: 'sqReadyCount', adminOnly: true },
     { id: 'schedule', icon: 'fa-calendar-alt', label: t('nav_schedule') },
     { id: 'routes', icon: 'fa-route', label: t('nav_routes') },
     { id: 'route_builder', icon: 'fa-map-location-dot', label: 'Route Builder' },
     { id: 'zones', icon: 'fa-map-location-dot', label: t('zones_title') },
-    { id: 'recurring', icon: 'fa-sync-alt', label: t('nav_recurring') },
-    { section: 'Standing Orders' },
-    { id: 'standing_orders', icon: 'fa-bell-concierge', label: 'Standing Orders' },
-    { id: 'so_dashboard', icon: 'fa-tv', label: 'SO Dashboard' },
-    { id: 'seasonality', icon: 'fa-sun', label: 'Seasonality' },
     { section: t('nav_resources') },
-    { id: 'customers', icon: 'fa-users', label: t('nav_customers') },
-    { id: 'products', icon: 'fa-box-open', label: t('nav_products') },
     { id: 'trucks', icon: 'fa-truck', label: t('nav_fleet') },
     { id: 'drivers_mgmt', icon: 'fa-id-card', label: t('nav_drivers') || 'Drivers' },
     { id: 'maintenance', icon: 'fa-wrench', label: t('nav_maintenance') || 'Maintenance' },
@@ -1817,6 +1808,12 @@ function renderSidebarContent() {
   let lastSection = null;
   for (const item of items) {
     if (item.section) { lastSection = item; continue; }
+    // Admin-only items hidden from non-admins
+    if (item.adminOnly) {
+      var _shellUser = null;
+      try { _shellUser = JSON.parse(localStorage.getItem('bf_ops_user') || 'null'); } catch(e2) {}
+      if (!_shellUser || _shellUser.role !== 'admin') continue;
+    }
     if (_ca('logistics', item.id)) {
       if (lastSection) { filteredItems.push(lastSection); lastSection = null; }
       filteredItems.push(item);

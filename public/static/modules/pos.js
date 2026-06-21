@@ -70,6 +70,11 @@ window._posCleanup = function() {
   _s.customer = null;
   _s.view = 'register';
   _s.productCache = {};
+  // Restore logistics navigate if we overrode it in DC mode
+  if (_origLogisticsNavigate) {
+    window.navigate = _origLogisticsNavigate;
+    _origLogisticsNavigate = null;
+  }
 };
 
 function checkExistingSession() {
@@ -182,15 +187,54 @@ function renderOpenSession() {
 }
 
 // ==================== RENDER: MAIN REGISTER VIEW ====================
+// ==================== DISTRIBUTION CENTER (ALDI) SIDEBAR NAV ITEMS ====================
+var _posSidebarItems = [
+  { section: 'Quick Start' },
+  { id: 'today', icon: 'fa-clipboard-check', label: 'Today' },
+  { section: 'Point of Sale' },
+  { id: 'register', icon: 'fa-cash-register', label: 'Register' },
+  { id: 'dashboard', icon: 'fa-chart-bar', label: 'Dashboard' },
+  { id: 'history', icon: 'fa-clock-rotate-left', label: 'Sales History' },
+  { section: 'Order Management' },
+  { id: 'orders', icon: 'fa-clipboard-list', label: 'Customer Orders' },
+  { id: 'recurring', icon: 'fa-sync-alt', label: 'Recurring Orders' },
+  { section: 'Standing Orders' },
+  { id: 'standing_orders', icon: 'fa-bell-concierge', label: 'Standing Orders' },
+  { id: 'so_dashboard', icon: 'fa-tv', label: 'SO Dashboard' },
+  { id: 'seasonality', icon: 'fa-sun', label: 'Seasonality' },
+  { section: 'Resources' },
+  { id: 'customers', icon: 'fa-users', label: 'Customers' },
+  { id: 'inventory-requests', icon: 'fa-boxes-stacked', label: 'Stock Requests' },
+  { id: 'statements', icon: 'fa-file-invoice-dollar', label: 'Statements' }
+];
+
+// Logistics render functions called from POS distribution mode
+var _posLogisticsPages = {
+  today: 'renderToday',
+  orders: 'renderOrders',
+  recurring: 'renderRecurring',
+  standing_orders: 'renderStandingOrders',
+  so_dashboard: 'renderSODashboard',
+  seasonality: 'renderSeasonality'
+};
+
+var _posSidebarOpen = false;
+
 function renderRegisterView() {
   var el = document.getElementById('pos-app');
   if (!el) return;
 
   var locName = getLocationName();
   var locType = getLocationType();
-  var locBadge = locType === 'distribution'
-    ? '<span style="background:rgba(249,115,22,0.2);color:#FB923C;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">DISTRIBUTION</span>'
-    : '<span style="background:rgba(16,185,129,0.2);color:#6EE7B7;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">RETAIL</span>';
+
+  // ---- DISTRIBUTION CENTER: sidebar layout ----
+  if (locType === 'distribution') {
+    _renderDistributionLayout(el, locName);
+    return;
+  }
+
+  // ---- RETAIL STORE: simple topbar layout ----
+  var locBadge = '<span style="background:rgba(16,185,129,0.2);color:#6EE7B7;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">RETAIL</span>';
 
   el.innerHTML =
     '<div class="pos-topbar">' +
@@ -204,8 +248,6 @@ function renderRegisterView() {
         '<button class="pos-topbar-btn" id="posBtnCust"><i class="fas fa-address-book"></i> <span class="hide-mobile">Customers</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnInvReq"><i class="fas fa-boxes-stacked"></i> <span class="hide-mobile">Stock Req</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnStmts"><i class="fas fa-file-invoice-dollar"></i> <span class="hide-mobile">Statements</span></button>' +
-        '<button class="pos-topbar-btn" id="posBtnTaxReport"><i class="fas fa-receipt"></i> <span class="hide-mobile">Tax Report</span></button>' +
-        '<button class="pos-topbar-btn" id="posBtnFeeAdmin"><i class="fas fa-sliders"></i> <span class="hide-mobile">Fees</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnHeld"><i class="fas fa-pause-circle"></i> <span class="hide-mobile">Held</span> <span id="posHeldBadge" class="pos-held-badge" style="display:none">0</span></button>' +
         '<button class="pos-topbar-btn danger" id="posBtnClose"><i class="fas fa-power-off"></i> <span class="hide-mobile">Close</span></button>' +
       '</div>' +
@@ -223,14 +265,186 @@ function renderRegisterView() {
   on('posBtnCust', 'click', function() { switchView('customers'); });
   on('posBtnInvReq', 'click', function() { switchView('inventory-requests'); });
   on('posBtnStmts', 'click', function() { switchView('statements'); });
-  on('posBtnTaxReport', 'click', function() { switchView('tax-report'); });
-  on('posBtnFeeAdmin', 'click', function() { switchView('fee-admin'); });
   on('posBtnHeld', 'click', showHeld);
   on('posBtnClose', 'click', closeSession);
 
   switchView('register');
   loadHeldCount();
 }
+
+// ==================== DISTRIBUTION CENTER LAYOUT (ALDI) ====================
+
+// Ensure logistics.js is loaded (for render functions like renderStandingOrders, renderOrders, etc.)
+function _ensureLogisticsLoaded(callback) {
+  // If logistics functions are already available, callback immediately
+  if (typeof window.renderStandingOrders === 'function') { callback(); return; }
+  // Check if script is already in DOM but not initialized
+  if (document.querySelector('script[src*="logistics.js"]')) {
+    // Wait for it to finish loading
+    var attempts = 0;
+    var check = setInterval(function() {
+      if (typeof window.renderStandingOrders === 'function' || attempts > 50) {
+        clearInterval(check);
+        callback();
+      }
+      attempts++;
+    }, 100);
+    return;
+  }
+  // Load the logistics script
+  var script = document.createElement('script');
+  script.src = '/static/modules/logistics.js?v=' + Date.now();
+  script.dataset.module = 'logistics-preload';
+  script.onload = function() {
+    // Bridge token for logistics API interceptor
+    var parentToken = localStorage.getItem('bf_ops_token');
+    var shellUser = localStorage.getItem('bf_ops_user');
+    if (parentToken) localStorage.setItem('bf_token', parentToken);
+    if (shellUser) localStorage.setItem('bf_user', shellUser);
+    // Ensure logistics' currentUser is set
+    try { if (shellUser) window.currentUser = JSON.parse(shellUser); } catch(e2) {}
+    callback();
+  };
+  document.body.appendChild(script);
+}
+
+// Save/restore logistics navigate function when entering/leaving POS DC mode
+var _origLogisticsNavigate = null;
+
+function _renderDistributionLayout(el, locName) {
+  var sidebarHtml = '<div class="pos-dc-sidebar-header">' +
+    '<div style="display:flex;align-items:center;gap:8px">' +
+      '<i class="fas fa-warehouse" style="font-size:18px;color:#F59E0B"></i>' +
+      '<div><div style="font-weight:700;font-size:14px;color:white">' + esc(locName) + '</div>' +
+      '<div style="font-size:10px;color:rgba(255,255,255,0.6)">Session #' + (_s.session ? _s.session.id : '-') + '</div></div>' +
+    '</div>' +
+    '<button class="pos-dc-close-btn" onclick="window._posSidebarOpen=false;_updateDCSidebar()" title="Close menu"><i class="fas fa-times"></i></button>' +
+  '</div>';
+
+  _posSidebarItems.forEach(function(item) {
+    if (item.section) {
+      sidebarHtml += '<div class="pos-dc-nav-section">' + item.section + '</div>';
+    } else {
+      sidebarHtml += '<div class="pos-dc-nav-item" data-view="' + item.id + '" onclick="_posSwitchDCView(\'' + item.id + '\')">' +
+        '<i class="fas ' + item.icon + '"></i> ' + item.label + '</div>';
+    }
+  });
+
+  // Add held sales + close session at bottom
+  sidebarHtml += '<div class="pos-dc-nav-section" style="margin-top:auto">Session</div>' +
+    '<div class="pos-dc-nav-item" data-view="held" onclick="showHeld()"><i class="fas fa-pause-circle"></i> Held Sales <span id="posHeldBadge" class="pos-held-badge" style="display:none;margin-left:auto">0</span></div>' +
+    '<div class="pos-dc-nav-item pos-dc-nav-danger" onclick="closeSession()"><i class="fas fa-power-off"></i> Close Session</div>';
+
+  el.innerHTML =
+    '<div class="pos-dc-layout">' +
+      '<aside class="pos-dc-sidebar' + (_posSidebarOpen ? ' open' : '') + '" id="posDCSidebar">' + sidebarHtml + '</aside>' +
+      '<div class="pos-dc-sidebar-overlay" id="posDCOverlay" onclick="window._posSidebarOpen=false;_updateDCSidebar()"></div>' +
+      '<div class="pos-dc-main">' +
+        '<div class="pos-dc-topbar">' +
+          '<button class="pos-dc-menu-btn" onclick="window._posSidebarOpen=!window._posSidebarOpen;_updateDCSidebar()"><i class="fas fa-bars"></i></button>' +
+          '<div class="pos-dc-topbar-title" id="posDCPageTitle"><i class="fas fa-cash-register"></i> Register</div>' +
+          '<div style="display:flex;align-items:center;gap:8px">' +
+            '<span style="background:rgba(249,115,22,0.15);color:#FB923C;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">DISTRIBUTION</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="pos-dc-content" id="pageContent">' +
+          '<div id="posViewDashboard" class="pos-view pos-dashboard"></div>' +
+          '<div id="posViewRegister" class="pos-view pos-register"></div>' +
+          '<div id="posViewHistory" class="pos-view pos-history"></div>' +
+          '<div id="posViewCustomers" class="pos-view pos-customers"></div>' +
+          '<div id="posViewInventory-requests" class="pos-view pos-inv-requests"></div>' +
+          '<div id="posViewStatements" class="pos-view pos-statements"></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  // Highlight active nav item
+  _updateDCNavActive('register');
+  switchView('register');
+  loadHeldCount();
+}
+
+function _updateDCSidebar() {
+  var sb = document.getElementById('posDCSidebar');
+  var ov = document.getElementById('posDCOverlay');
+  if (sb) sb.classList.toggle('open', _posSidebarOpen);
+  if (ov) ov.classList.toggle('active', _posSidebarOpen);
+}
+
+function _updateDCNavActive(viewId) {
+  document.querySelectorAll('.pos-dc-nav-item').forEach(function(el) {
+    el.classList.toggle('active', el.dataset.view === viewId);
+  });
+}
+
+// Page titles for distribution center
+var _dcPageTitles = {
+  register: '<i class="fas fa-cash-register"></i> Register',
+  dashboard: '<i class="fas fa-chart-bar"></i> Dashboard',
+  history: '<i class="fas fa-clock-rotate-left"></i> Sales History',
+  customers: '<i class="fas fa-users"></i> Customers',
+  'inventory-requests': '<i class="fas fa-boxes-stacked"></i> Stock Requests',
+  statements: '<i class="fas fa-file-invoice-dollar"></i> Statements',
+  today: '<i class="fas fa-clipboard-check"></i> Today',
+  orders: '<i class="fas fa-clipboard-list"></i> Customer Orders',
+  recurring: '<i class="fas fa-sync-alt"></i> Recurring Orders',
+  standing_orders: '<i class="fas fa-bell-concierge"></i> Standing Orders',
+  so_dashboard: '<i class="fas fa-tv"></i> SO Dashboard',
+  seasonality: '<i class="fas fa-sun"></i> Seasonality'
+};
+
+function _posSwitchDCView(viewId) {
+  // Close sidebar on mobile
+  _posSidebarOpen = false;
+  _updateDCSidebar();
+  _updateDCNavActive(viewId);
+
+  // Update title
+  var titleEl = document.getElementById('posDCPageTitle');
+  if (titleEl) titleEl.innerHTML = _dcPageTitles[viewId] || viewId;
+
+  // Is this a logistics page (rendered by logistics.js)?
+  var logFn = _posLogisticsPages[viewId];
+  if (logFn) {
+    // Hide POS views, show pageContent for logistics
+    document.querySelectorAll('.pos-view').forEach(function(v) { v.classList.remove('active'); v.style.display = 'none'; });
+    var pc = document.getElementById('pageContent');
+    if (pc) {
+      pc.style.display = '';
+      pc.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:200px;color:#94A3B8"><i class="fas fa-spinner fa-spin fa-2x"></i></div>';
+    }
+    _s.view = viewId;
+    _ensureLogisticsLoaded(function() {
+      // Override logistics navigate() to route through POS DC view switcher
+      if (!_origLogisticsNavigate && typeof window.navigate === 'function') {
+        _origLogisticsNavigate = window.navigate;
+      }
+      window.navigate = function(page, params) {
+        window._params = params || {};
+        if (_posLogisticsPages[page]) {
+          _posSwitchDCView(page);
+        } else if (['register','dashboard','history','customers','inventory-requests','statements'].indexOf(page) >= 0) {
+          _posSwitchDCView(page);
+        } else {
+          // Page not in POS — show toast
+          if (typeof showToast === 'function') showToast('Open Logistics module for this page', 'info');
+        }
+      };
+      if (typeof window[logFn] === 'function') {
+        try { window[logFn](); } catch(err) { console.error('POS DC: Error rendering ' + logFn, err); }
+      } else {
+        if (pc) pc.innerHTML = '<div style="padding:40px;text-align:center;color:#94A3B8"><i class="fas fa-exclamation-triangle" style="font-size:32px;display:block;margin-bottom:8px"></i>This page could not be loaded. Try refreshing.</div>';
+      }
+    });
+    return;
+  }
+
+  // POS-native view — restore pos-view display, render into correct container
+  document.querySelectorAll('.pos-view').forEach(function(v) { v.style.display = ''; });
+  switchView(viewId);
+}
+window._posSwitchDCView = _posSwitchDCView;
+window._updateDCSidebar = _updateDCSidebar;
 
 function switchView(view) {
   _s.view = view;
@@ -244,8 +458,7 @@ function switchView(view) {
   else if (view === 'customers') loadCustomerList();
   else if (view === 'inventory-requests') loadInventoryRequests();
   else if (view === 'statements') loadStatements();
-  else if (view === 'tax-report') loadTaxReport();
-  else if (view === 'fee-admin') loadFeeAdmin();
+
 }
 
 // ==================== REGISTER CONTENT ====================

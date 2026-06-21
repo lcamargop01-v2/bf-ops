@@ -612,6 +612,152 @@
   outline: none;
 }
 
+/* ==================== DISTRIBUTION CENTER LAYOUT ====================
+   Sidebar navigation for ALDI/LD location with order management pages
+   ================================================================== */
+.pos-dc-layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: #0F172A;
+}
+
+.pos-dc-sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: linear-gradient(180deg, #1E293B 0%, #0F172A 100%);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  border-right: 1px solid rgba(255,255,255,0.06);
+  transition: transform 0.25s ease;
+  z-index: 100;
+}
+
+.pos-dc-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.pos-dc-close-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.5);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.pos-dc-nav-section {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: rgba(255,255,255,0.35);
+  padding: 16px 16px 4px;
+}
+
+.pos-dc-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  color: rgba(255,255,255,0.65);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-left: 3px solid transparent;
+}
+.pos-dc-nav-item:hover {
+  background: rgba(255,255,255,0.06);
+  color: white;
+}
+.pos-dc-nav-item.active {
+  background: rgba(249,115,22,0.1);
+  color: #FB923C;
+  border-left-color: #F59E0B;
+  font-weight: 600;
+}
+.pos-dc-nav-item i { width: 18px; text-align: center; font-size: 13px; }
+.pos-dc-nav-danger { color: rgba(239,68,68,0.7); }
+.pos-dc-nav-danger:hover { color: #EF4444; background: rgba(239,68,68,0.1); }
+
+.pos-dc-sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 99;
+}
+
+.pos-dc-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #F8FAFC;
+}
+
+.pos-dc-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: white;
+  border-bottom: 1px solid #E2E8F0;
+  min-height: 52px;
+}
+.pos-dc-menu-btn {
+  display: none;
+  background: none;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 16px;
+  color: #475569;
+  cursor: pointer;
+}
+.pos-dc-topbar-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1E293B;
+}
+.pos-dc-topbar-title i { margin-right: 6px; color: #64748B; }
+
+.pos-dc-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+  position: relative;
+}
+/* Logistics pages rendered in pageContent need full height */
+.pos-dc-content .card,
+.pos-dc-content .empty-state { margin: 16px; }
+
+/* ---- Mobile: sidebar becomes overlay drawer ---- */
+@media (max-width: 1024px) {
+  .pos-dc-sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    transform: translateX(-100%);
+    box-shadow: 4px 0 24px rgba(0,0,0,0.3);
+  }
+  .pos-dc-sidebar.open { transform: translateX(0); }
+  .pos-dc-sidebar-overlay.active { display: block; }
+  .pos-dc-close-btn { display: block; }
+  .pos-dc-menu-btn { display: block; }
+}
+
+@media (max-width: 480px) {
+  .pos-dc-sidebar { width: 85vw; min-width: auto; }
+  .pos-dc-topbar { padding: 8px 12px; }
+  .pos-dc-topbar-title { font-size: 14px; }
+}
+
 /* ==================== PRINT STYLES ==================== */
 @media print {
   .no-print { display: none !important; }
