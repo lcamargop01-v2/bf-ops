@@ -230,6 +230,8 @@ function shellLogout() {
 
 function renderHome() {
   activeModule = null;
+  // Clear last module so refresh returns to home
+  try { sessionStorage.removeItem('bf_ops_last_module'); sessionStorage.removeItem('bf_ops_last_page'); } catch(e) {}
   cleanupActiveModule();
   const root = document.getElementById('bf-ops-root');
   const userModules = currentUser.modules || [];
@@ -286,6 +288,9 @@ function launchModule(moduleId, initialPage) {
   if (moduleId === activeModule && !initialPage) return;
   // Store initial page for module to pick up after loading
   window._shellInitialPage = initialPage || null;
+
+  // Remember last active module+page so refresh returns here
+  try { sessionStorage.setItem('bf_ops_last_module', moduleId); sessionStorage.setItem('bf_ops_last_page', initialPage || ''); } catch(e) {}
 
   // Clean up previous module
   cleanupActiveModule();
@@ -2951,8 +2956,12 @@ async function avSavePreferences(userId) {
       initFeatureRequestBtn();
       // AI Help Assistant FAB
       initHelpAssistant();
-      // Auto-navigate to default landing if configured
-      if (currentUser.default_module) {
+      // Restore last active module/page from session (survives refresh), else use default
+      var _lastMod = null, _lastPage = null;
+      try { _lastMod = sessionStorage.getItem('bf_ops_last_module'); _lastPage = sessionStorage.getItem('bf_ops_last_page') || null; } catch(e) {}
+      if (_lastMod) {
+        launchModule(_lastMod, _lastPage);
+      } else if (currentUser.default_module) {
         launchModule(currentUser.default_module, currentUser.default_page || null);
       } else {
         renderHome();

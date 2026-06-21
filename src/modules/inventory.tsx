@@ -712,6 +712,8 @@ app.get('/api/inventory/batches', async (c) => {
   const db = c.env.DB
   const productId = c.req.query('product_id')
   const locationId = c.req.query('location_id')
+  const search = c.req.query('search')
+  const condition = c.req.query('condition')
 
   let query = `SELECT b.*, p.name as product_name, p.sku, p.unit_type,
     l.name as location_name, l.code as location_code, u.name as created_by_name
@@ -722,6 +724,8 @@ app.get('/api/inventory/batches', async (c) => {
   const binds: any[] = []
   if (productId) { query += ' AND b.product_id = ?'; binds.push(parseInt(productId)) }
   if (locationId) { query += ' AND b.location_id = ?'; binds.push(parseInt(locationId)) }
+  if (search) { query += ' AND (p.name LIKE ? OR p.sku LIKE ? OR b.batch_number LIKE ? OR b.notes LIKE ?)'; binds.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`) }
+  if (condition) { query += ' AND b.condition = ?'; binds.push(condition) }
   query += ' ORDER BY b.created_at DESC'
 
   const batches = await db.prepare(query).bind(...binds).all()
@@ -742,15 +746,25 @@ app.post('/api/inventory/batches', async (c) => {
      VALUES (?, ?, ?, ?, ?, ?, ?, date('now'), ?)`
   ).bind(product_id, location_id, batchNum, qty, condition || 'good', notes || null, source || null, user.id).run()
 
+  const batchId = result.meta.last_row_id as number
+
+  // Update inventory stock — batch qty adds to on-hand inventory
+  const stock = await getOrCreateStock(db, product_id, location_id)
+  const oldQty = stock.qty_on_hand || 0
+  const newQty = oldQty + qty
+  await db.prepare('UPDATE inventory_stock SET qty_on_hand = ?, updated_at = datetime("now") WHERE product_id = ? AND location_id = ?')
+    .bind(newQty, product_id, location_id).run()
+
   await auditLog(db, {
-    product_id, location_id, action: 'batch_created', qty_change: 0,
+    product_id, location_id, action: 'batch_created', qty_change: qty,
+    qty_before: oldQty, qty_after: newQty,
     reason: `Batch ${batchNum} created (${condition || 'good'})`,
-    batch_id: result.meta.last_row_id as number,
+    batch_id: batchId,
     notes: notes || null,
     user_id: user.id, user_name: userInfo?.name || user.email
   })
 
-  return c.json({ success: true, id: result.meta.last_row_id, batch_number: batchNum })
+  return c.json({ success: true, id: batchId, batch_number: batchNum })
 })
 
 // Split a batch (break up damaged hay etc.)

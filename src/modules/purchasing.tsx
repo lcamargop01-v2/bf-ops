@@ -643,11 +643,11 @@ app.put('/api/purchasing/bills/:id', async (c) => {
       .bind(calcAmount, id).run()
   }
 
-  // Update header fields
+  // Update header fields — coerce undefined to null for D1 compatibility
   await db.prepare(
     `UPDATE po_bills SET status=COALESCE(?,status), supplier_invoice_number=COALESCE(?,supplier_invoice_number),
      tax=COALESCE(?,tax), due_date=?, paid_date=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
-  ).bind(status, supplier_invoice_number, tax, due_date || null, paid_date || null, notes ?? null, id).run()
+  ).bind(status ?? null, supplier_invoice_number ?? null, tax ?? null, due_date || null, paid_date || null, notes ?? null, id).run()
 
   // If status is being set to 'approved', update product costs from bill line items
   if (status === 'approved') {

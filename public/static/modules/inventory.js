@@ -704,7 +704,11 @@ async function invCancelTransfer(id) {
 // ==================== BATCHES ====================
 async function invRenderBatches() {
   var url = '/api/inventory/batches?';
-  if (invSelectedLocation) url += 'location_id=' + invSelectedLocation;
+  if (invSelectedLocation) url += 'location_id=' + invSelectedLocation + '&';
+  var bSearch = document.getElementById('invBatchSearchInput');
+  if (bSearch && bSearch.value) url += 'search=' + encodeURIComponent(bSearch.value) + '&';
+  var bCond = document.getElementById('invBatchCondFilter');
+  if (bCond && bCond.value) url += 'condition=' + bCond.value + '&';
   var resp = await invAPI.get(url, { headers: invHeaders() });
   var batches = resp.data.batches || [];
 
@@ -713,6 +717,19 @@ async function invRenderBatches() {
   if (invCanEdit('batches')) html += '<button class="inv-btn inv-btn-primary" onclick="invShowNewBatch()"><i class="fas fa-plus"></i> New Batch</button>';
   html += '</div>';
   html += '<p class="inv-muted">Track condition-based lots. Split batches when hay or product quality varies.</p>';
+
+  // Search & filter bar
+  var _bsVal = (bSearch ? bSearch.value : '');
+  var _bcVal = (bCond ? bCond.value : '');
+  html += '<div class="inv-toolbar">';
+  html += '<div class="inv-search-box"><i class="fas fa-search"></i><input id="invBatchSearchInput" type="text" placeholder="Search batches..." value="' + escH(_bsVal) + '" oninput="invDebounceBatchSearch()"></div>';
+  html += '<select id="invBatchCondFilter" onchange="invRender()" class="inv-select"><option value="">All Conditions</option>';
+  ['good','fair','poor','damaged','rejected'].forEach(function(c) {
+    html += '<option value="' + c + '"' + (c === _bcVal ? ' selected' : '') + '>' + c.charAt(0).toUpperCase() + c.slice(1) + '</option>';
+  });
+  html += '</select>';
+  html += '</div>';
+  html += '<div class="inv-stock-count">' + batches.length + ' batch' + (batches.length !== 1 ? 'es' : '') + '</div>';
 
   if (batches.length === 0) {
     html += '<div class="inv-empty"><p>No batches created yet.</p></div>';
@@ -2183,14 +2200,7 @@ async function invShowIncoming(productId, locationId, productName) {
   } catch(e) { invToast('Failed to load incoming data: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
-// Format date helper
-function invFormatDate(dateStr) {
-  if (!dateStr) return '';
-  try {
-    var d = new Date(dateStr);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  } catch(e) { return dateStr; }
-}
+// Format date helper — use invFormatDate() in utilities section below
 
 // Product detail modal (no images — images are on batches)
 async function invShowProductDetail(productId) {
@@ -2375,6 +2385,11 @@ var invSearchTimer = null;
 function invDebounceSearch() {
   clearTimeout(invSearchTimer);
   invSearchTimer = setTimeout(function() { invRender(); }, 300);
+}
+var invBatchSearchTimer = null;
+function invDebounceBatchSearch() {
+  clearTimeout(invBatchSearchTimer);
+  invBatchSearchTimer = setTimeout(function() { invRender(); }, 300);
 }
 
 // ==================== PRODUCTS MANAGEMENT PAGE ====================

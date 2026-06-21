@@ -19,7 +19,8 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #F1F5F9; color: #1E293B; overflow: hidden; height: 100vh; height: 100dvh; -webkit-text-size-adjust: 100%; }
+html { touch-action: manipulation; -ms-touch-action: manipulation; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #F1F5F9; color: #1E293B; overflow: hidden; height: 100vh; height: 100dvh; -webkit-text-size-adjust: 100%; touch-action: manipulation; }
 
 /* ==================== LOGIN ==================== */
 .shell-login-page {
