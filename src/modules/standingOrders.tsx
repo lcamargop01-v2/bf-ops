@@ -115,7 +115,7 @@ app.post('/api/standing-orders/runs/generate', async (c) => {
     const placeholders = zoneIds.map(() => '?').join(',')
     const standingCustomers = await db.prepare(`
       SELECT DISTINCT rs.id as schedule_id, rs.customer_id, rs.address_id, rs.confirm_mode, rs.auto_confirm,
-        c.business_name, c.phone, c.sms_phone, c.sms_opt_in,
+        c.business_name, c.phone, c.sms_phone, c.sms_opt_in, c.is_seasonal, c.season_status,
         a.zone_id
       FROM recurring_schedules rs
       JOIN customers c ON rs.customer_id = c.id
@@ -123,6 +123,7 @@ app.post('/api/standing-orders/runs/generate', async (c) => {
       WHERE rs.status = 'active'
         AND c.active = 1
         AND (rs.confirm_mode IS NULL OR rs.confirm_mode != 'skip')
+        AND (c.is_seasonal = 0 OR c.season_status IS NULL OR c.season_status NOT IN ('out_of_season'))
         AND a.zone_id IN (${placeholders})
     `).bind(...zoneIds).all()
 
@@ -167,11 +168,13 @@ app.post('/api/standing-orders/runs/generate', async (c) => {
       const placeholders = zoneIds.map(() => '?').join(',')
       const broadcastCustomers = await db.prepare(`
         SELECT DISTINCT c.id as customer_id, c.business_name, c.phone, c.sms_phone, c.sms_opt_in,
+          c.is_seasonal, c.season_status,
           a.id as address_id, a.zone_id
         FROM customers c
         JOIN addresses a ON a.customer_id = c.id
         WHERE c.active = 1
           AND (c.sms_opt_in IS NULL OR c.sms_opt_in = 1)
+          AND (c.is_seasonal = 0 OR c.season_status IS NULL OR c.season_status NOT IN ('out_of_season'))
           AND a.zone_id IN (${placeholders})
         ORDER BY c.business_name
       `).bind(...zoneIds).all()
@@ -1147,5 +1150,526 @@ async function recountRun(db: D1Database, runId: number) {
     ).run()
   } catch {}
 }
+
+// ==================== DASHBOARD (easy status board) ====================
+
+// Single endpoint returning everything the team needs to see at a glance
+app.get('/api/standing-orders/dashboard', async (c) => {
+  const db = c.env.DB
+
+  try {
+    // 1. Active / recent runs (last 7 days)
+    const runs = await db.prepare(`
+      SELECT * FROM confirmation_runs
+      WHERE run_date >= date('now', '-7 days') OR status IN ('draft','sending','sent')
+      ORDER BY run_date DESC LIMIT 10
+    `).all()
+
+    // 2. For each active run, get per-entry status breakdown
+    const activeRuns = runs.results as any[] || []
+    const runSummaries: any[] = []
+    for (const run of activeRuns) {
+      const entries = await db.prepare(`
+        SELECT ce.id, ce.customer_id, ce.customer_name, ce.customer_phone,
+          ce.entry_type, ce.status, ce.draft_message, ce.order_id,
+          ce.sms_sent_at, ce.confirmed_at, ce.modified_items,
+          dz.name as zone_name, dz.color as zone_color
+        FROM confirmation_entries ce
+        LEFT JOIN delivery_zones dz ON ce.zone_id = dz.id
+        WHERE ce.run_id = ?
+        ORDER BY 
+          CASE ce.status 
+            WHEN 'modified' THEN 1
+            WHEN 'sent' THEN 2
+            WHEN 'pending' THEN 3
+            WHEN 'confirmed' THEN 4
+            WHEN 'declined' THEN 5
+            WHEN 'no_response' THEN 6
+          END, ce.customer_name
+      `).bind(run.id).all()
+
+      runSummaries.push({
+        ...run,
+        entries: entries.results || []
+      })
+    }
+
+    // 3. Recent SMS activity (last 48h) — the text message log
+    const recentSms = await db.prepare(`
+      SELECT sm.*, ce.customer_name, ce.entry_type,
+        cr.run_date
+      FROM sms_messages sm
+      LEFT JOIN confirmation_entries ce ON sm.confirmation_entry_id = ce.id
+      LEFT JOIN confirmation_runs cr ON ce.run_id = cr.id
+      WHERE sm.created_at >= datetime('now', '-48 hours')
+      ORDER BY sm.created_at DESC
+      LIMIT 100
+    `).all()
+
+    // 4. Action needed: entries requiring attention
+    const needsAction = await db.prepare(`
+      SELECT ce.*, cr.run_date, cr.cutoff_time,
+        dz.name as zone_name
+      FROM confirmation_entries ce
+      JOIN confirmation_runs cr ON ce.run_id = cr.id
+      LEFT JOIN delivery_zones dz ON ce.zone_id = dz.id
+      WHERE ce.status IN ('modified','sent')
+        AND cr.status IN ('sent','sending','draft')
+      ORDER BY 
+        CASE ce.status WHEN 'modified' THEN 0 ELSE 1 END,
+        cr.run_date ASC
+    `).all()
+
+    // 5. Seasonal overview
+    const seasonalStats = await db.prepare(`
+      SELECT
+        COUNT(*) as total_customers,
+        SUM(CASE WHEN is_seasonal = 1 THEN 1 ELSE 0 END) as seasonal_count,
+        SUM(CASE WHEN season_status = 'in_season' THEN 1 ELSE 0 END) as in_season,
+        SUM(CASE WHEN season_status = 'out_of_season' THEN 1 ELSE 0 END) as out_of_season,
+        SUM(CASE WHEN season_status = 'arriving_soon' THEN 1 ELSE 0 END) as arriving_soon,
+        SUM(CASE WHEN season_status = 'departing_soon' THEN 1 ELSE 0 END) as departing_soon
+      FROM customers WHERE active = 1
+    `).first() as any
+
+    // 6. Customers arriving/departing within 30 days
+    const now = new Date()
+    const currentMonth = now.getMonth() + 1 // 1-12
+    const currentDay = now.getDate()
+    const seasonalAlerts = await db.prepare(`
+      SELECT id, business_name, contact_name, phone, sms_phone,
+        is_seasonal, season_start_month, season_start_day,
+        season_end_month, season_end_day, season_status, season_notes
+      FROM customers
+      WHERE active = 1 AND is_seasonal = 1
+        AND (season_status IN ('arriving_soon','departing_soon','in_season','out_of_season'))
+      ORDER BY season_status, business_name
+    `).all()
+
+    return c.json({
+      runs: runSummaries,
+      recent_sms: recentSms.results || [],
+      needs_action: needsAction.results || [],
+      seasonal: {
+        stats: seasonalStats,
+        alerts: seasonalAlerts.results || [],
+        current_month: currentMonth,
+        current_day: currentDay
+      }
+    })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
+// ==================== SEASONALITY MANAGEMENT ====================
+
+// Get all seasonal customers with their status
+app.get('/api/customers/seasonal', async (c) => {
+  const db = c.env.DB
+  const status = c.req.query('status') // in_season, out_of_season, arriving_soon, departing_soon
+
+  let q = `
+    SELECT c.id, c.business_name, c.contact_name, c.phone, c.sms_phone,
+      c.is_seasonal, c.season_start_month, c.season_start_day,
+      c.season_end_month, c.season_end_day, c.season_status, c.season_notes,
+      c.last_season_update, c.active, c.customer_type
+    FROM customers c WHERE c.active = 1
+  `
+  const binds: any[] = []
+  if (status) {
+    q += ' AND c.season_status = ?'
+    binds.push(status)
+  }
+  q += ' ORDER BY c.is_seasonal DESC, c.season_status, c.business_name'
+
+  try {
+    const result = await db.prepare(q).bind(...binds).all()
+    return c.json({ customers: result.results || [] })
+  } catch (e: any) {
+    return c.json({ customers: [], error: e.message })
+  }
+})
+
+// Update customer seasonal info
+app.put('/api/customers/:id/seasonal', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  const customerId = c.req.param('id')
+  const body = await c.req.json()
+
+  const updates: string[] = []
+  const vals: any[] = []
+
+  if (body.is_seasonal !== undefined) { updates.push('is_seasonal = ?'); vals.push(body.is_seasonal ? 1 : 0) }
+  if (body.season_start_month !== undefined) { updates.push('season_start_month = ?'); vals.push(body.season_start_month) }
+  if (body.season_start_day !== undefined) { updates.push('season_start_day = ?'); vals.push(body.season_start_day) }
+  if (body.season_end_month !== undefined) { updates.push('season_end_month = ?'); vals.push(body.season_end_month) }
+  if (body.season_end_day !== undefined) { updates.push('season_end_day = ?'); vals.push(body.season_end_day) }
+  if (body.season_status !== undefined) { updates.push('season_status = ?'); vals.push(body.season_status) }
+  if (body.season_notes !== undefined) { updates.push('season_notes = ?'); vals.push(body.season_notes) }
+
+  updates.push("last_season_update = datetime('now')")
+
+  if (updates.length <= 1) return c.json({ error: 'No fields to update' }, 400)
+  vals.push(customerId)
+
+  await db.prepare(`UPDATE customers SET ${updates.join(', ')} WHERE id = ?`).bind(...vals).run()
+
+  // Log the update
+  if (body.season_status) {
+    const eventType = body.season_status === 'in_season' ? 'arrival'
+      : body.season_status === 'out_of_season' ? 'departure'
+      : 'season_update'
+    await db.prepare(`
+      INSERT INTO customer_season_log (customer_id, event_type, season_year, notes, created_by, created_by_name)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      customerId, eventType, new Date().getFullYear(),
+      body.notes || `Status changed to ${body.season_status}`,
+      user?.id || null, user?.name || user?.email || 'System'
+    ).run()
+  }
+
+  return c.json({ success: true })
+})
+
+// Mark customer as arrived (returning for the season)
+app.post('/api/customers/:id/season-arrival', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  const customerId = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const sendWelcome = body.send_welcome !== false
+
+  // Update status
+  await db.prepare(`
+    UPDATE customers SET season_status = 'in_season', last_season_update = datetime('now') WHERE id = ?
+  `).bind(customerId).run()
+
+  // Log arrival
+  await db.prepare(`
+    INSERT INTO customer_season_log (customer_id, event_type, season_year, notes, created_by, created_by_name)
+    VALUES (?, 'arrival', ?, ?, ?, ?)
+  `).bind(
+    customerId, new Date().getFullYear(),
+    body.notes || 'Customer arrived for the season',
+    user?.id || null, user?.name || user?.email || 'System'
+  ).run()
+
+  // Send welcome-back text if requested
+  let smsSent = false
+  if (sendWelcome) {
+    const customer = await db.prepare(
+      'SELECT id, business_name, phone, sms_phone FROM customers WHERE id = ?'
+    ).bind(customerId).first() as any
+
+    if (customer) {
+      const phone = customer.sms_phone || customer.phone
+      if (phone) {
+        // Get welcome template
+        let template = await db.prepare(
+          "SELECT message_template FROM sms_templates WHERE template_type = 'welcome_back' AND active = 1 LIMIT 1"
+        ).first() as any
+
+        let msg = template?.message_template || 'Hi {customer_name}! Welcome back! Ready for deliveries? Text us your first order!'
+        msg = msg.replace(/{customer_name}/g, customer.business_name || 'there')
+          .replace(/{season_year}/g, String(new Date().getFullYear()))
+
+        // Use AI to personalize if available
+        const apiKey = c.env.OPENAI_API_KEY
+        const baseUrl = c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+        if (apiKey) {
+          try {
+            // Get last order info
+            let lastOrder = ''
+            try {
+              const lo = await db.prepare(`
+                SELECT GROUP_CONCAT(oi.quantity || 'x ' || p.name, ', ') as items
+                FROM orders o JOIN order_items oi ON oi.order_id = o.id JOIN products p ON oi.product_id = p.id
+                WHERE o.customer_id = ? AND o.status NOT IN ('cancelled')
+                ORDER BY o.scheduled_date DESC LIMIT 1
+              `).bind(customerId).first() as any
+              lastOrder = lo?.items || ''
+            } catch {}
+
+            const resp = await fetch(`${baseUrl}/chat/completions`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+              body: JSON.stringify({
+                model: 'gpt-4o-mini', max_tokens: 150, temperature: 0.7,
+                messages: [{
+                  role: 'system',
+                  content: `Write a warm, brief welcome-back SMS for British Feed (animal feed delivery, South Florida). Customer is returning for the season. Under 200 chars. Be genuine and friendly. If they have past orders, reference them. Ask when they want to start deliveries. No emojis. Return ONLY the message.`
+                }, {
+                  role: 'user',
+                  content: `Customer: ${customer.business_name}\nLast order items: ${lastOrder || 'unknown'}\nSeason year: ${new Date().getFullYear()}`
+                }]
+              })
+            })
+            if (resp.ok) {
+              const data = await resp.json() as any
+              const aiMsg = data.choices?.[0]?.message?.content?.trim()
+              if (aiMsg) msg = aiMsg
+            }
+          } catch {}
+        }
+
+        // Log and send
+        const smsRes = await db.prepare(`
+          INSERT INTO sms_messages (customer_id, customer_phone, direction, message_body, status, sent_at)
+          VALUES (?, ?, 'outbound', ?, 'queued', datetime('now'))
+        `).bind(customerId, phone, msg).run()
+
+        // Log welcome text event
+        await db.prepare(`
+          INSERT INTO customer_season_log (customer_id, event_type, season_year, notes, created_by, created_by_name)
+          VALUES (?, 'welcome_text', ?, ?, ?, ?)
+        `).bind(customerId, new Date().getFullYear(), msg, user?.id || null, user?.name || user?.email || 'System').run()
+
+        // Fire Make webhook
+        const webhookUrl = c.env.MAKE_WEBHOOK_URL
+        if (webhookUrl) {
+          try {
+            const resp = await fetch(webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ phone, message: msg, customer_name: customer.business_name, customer_id: customerId, type: 'welcome_back' })
+            })
+            if (resp.ok) {
+              await db.prepare("UPDATE sms_messages SET status = 'sent' WHERE id = ?").bind(smsRes.meta.last_row_id).run()
+            }
+          } catch {}
+        }
+        smsSent = true
+      }
+    }
+  }
+
+  return c.json({ success: true, sms_sent: smsSent })
+})
+
+// Mark customer as departing (leaving for off-season)
+app.post('/api/customers/:id/season-departure', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  const customerId = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const sendFarewell = body.send_farewell !== false
+  const askFinalOrder = body.ask_final_order !== false
+
+  // Update status
+  await db.prepare(`
+    UPDATE customers SET season_status = 'out_of_season', last_season_update = datetime('now') WHERE id = ?
+  `).bind(customerId).run()
+
+  // Log departure
+  await db.prepare(`
+    INSERT INTO customer_season_log (customer_id, event_type, season_year, notes, created_by, created_by_name)
+    VALUES (?, 'departure', ?, ?, ?, ?)
+  `).bind(
+    customerId, new Date().getFullYear(),
+    body.notes || 'Customer departed for off-season',
+    user?.id || null, user?.name || user?.email || 'System'
+  ).run()
+
+  // Send farewell / final order text
+  let smsSent = false
+  if (sendFarewell || askFinalOrder) {
+    const customer = await db.prepare(
+      'SELECT id, business_name, phone, sms_phone FROM customers WHERE id = ?'
+    ).bind(customerId).first() as any
+
+    if (customer) {
+      const phone = customer.sms_phone || customer.phone
+      if (phone) {
+        const templateType = askFinalOrder ? 'final_order' : 'farewell'
+        let template = await db.prepare(
+          "SELECT message_template FROM sms_templates WHERE template_type = ? AND active = 1 LIMIT 1"
+        ).bind(templateType).first() as any
+
+        let msg = template?.message_template || 'Hi {customer_name}! Safe travels! See you next season.'
+        msg = msg.replace(/{customer_name}/g, customer.business_name || 'there')
+          .replace(/{season_year}/g, String(new Date().getFullYear()))
+
+        // AI personalization if available
+        const apiKey = c.env.OPENAI_API_KEY
+        const baseUrl = c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+        if (apiKey) {
+          try {
+            const prompt = askFinalOrder
+              ? `Write a brief farewell + final order SMS for British Feed (animal feed delivery). Customer is leaving for the season. Ask if they need one last delivery before they go. Under 200 chars. Warm and friendly. No emojis. Return ONLY the message.`
+              : `Write a brief farewell SMS for British Feed (animal feed delivery). Customer is leaving for the season. Wish them well, say see you next year. Under 160 chars. Warm. No emojis. Return ONLY the message.`
+
+            const resp = await fetch(`${baseUrl}/chat/completions`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+              body: JSON.stringify({
+                model: 'gpt-4o-mini', max_tokens: 150, temperature: 0.7,
+                messages: [{ role: 'system', content: prompt }, {
+                  role: 'user', content: `Customer: ${customer.business_name}`
+                }]
+              })
+            })
+            if (resp.ok) {
+              const data = await resp.json() as any
+              const aiMsg = data.choices?.[0]?.message?.content?.trim()
+              if (aiMsg) msg = aiMsg
+            }
+          } catch {}
+        }
+
+        const smsRes = await db.prepare(`
+          INSERT INTO sms_messages (customer_id, customer_phone, direction, message_body, status, sent_at)
+          VALUES (?, ?, 'outbound', ?, 'queued', datetime('now'))
+        `).bind(customerId, phone, msg).run()
+
+        await db.prepare(`
+          INSERT INTO customer_season_log (customer_id, event_type, season_year, notes, created_by, created_by_name)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(
+          customerId, askFinalOrder ? 'final_order_text' : 'farewell_text',
+          new Date().getFullYear(), msg,
+          user?.id || null, user?.name || user?.email || 'System'
+        ).run()
+
+        const webhookUrl = c.env.MAKE_WEBHOOK_URL
+        if (webhookUrl) {
+          try {
+            const resp = await fetch(webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ phone, message: msg, customer_name: customer.business_name, customer_id: customerId, type: templateType })
+            })
+            if (resp.ok) {
+              await db.prepare("UPDATE sms_messages SET status = 'sent' WHERE id = ?").bind(smsRes.meta.last_row_id).run()
+            }
+          } catch {}
+        }
+        smsSent = true
+      }
+    }
+  }
+
+  return c.json({ success: true, sms_sent: smsSent })
+})
+
+// Get season log for a customer
+app.get('/api/customers/:id/season-log', async (c) => {
+  const db = c.env.DB
+  const customerId = c.req.param('id')
+  try {
+    const log = await db.prepare(
+      'SELECT * FROM customer_season_log WHERE customer_id = ? ORDER BY created_at DESC LIMIT 50'
+    ).bind(customerId).all()
+    return c.json({ log: log.results || [] })
+  } catch (e: any) {
+    return c.json({ log: [], error: e.message })
+  }
+})
+
+// Batch update season statuses (cron-like — call periodically or manually)
+// Checks all seasonal customers and updates arriving_soon / departing_soon
+app.post('/api/customers/seasonal/refresh-statuses', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+
+  const now = new Date()
+  const currentMonth = now.getMonth() + 1
+  const currentDay = now.getDate()
+
+  // Helper: days until a month/day combo, accounting for year wrap
+  function daysUntil(targetMonth: number, targetDay: number): number {
+    const thisYear = now.getFullYear()
+    let target = new Date(thisYear, targetMonth - 1, targetDay)
+    if (target < now) target = new Date(thisYear + 1, targetMonth - 1, targetDay)
+    return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+  }
+
+  // Helper: check if current date is within season
+  function isInSeason(startM: number, startD: number, endM: number, endD: number): boolean {
+    const startVal = startM * 100 + startD
+    const endVal = endM * 100 + endD
+    const curVal = currentMonth * 100 + currentDay
+    if (startVal <= endVal) {
+      // Season doesn't wrap year (e.g. Mar-Sep)
+      return curVal >= startVal && curVal <= endVal
+    } else {
+      // Season wraps year (e.g. Oct-May)
+      return curVal >= startVal || curVal <= endVal
+    }
+  }
+
+  const customers = await db.prepare(`
+    SELECT id, business_name, is_seasonal, season_start_month, season_start_day,
+      season_end_month, season_end_day, season_status
+    FROM customers WHERE active = 1 AND is_seasonal = 1
+      AND season_start_month IS NOT NULL AND season_end_month IS NOT NULL
+  `).all()
+
+  let updated = 0
+  const changes: any[] = []
+
+  for (const c of customers.results as any[]) {
+    const inSeason = isInSeason(c.season_start_month, c.season_start_day || 1, c.season_end_month, c.season_end_day || 28)
+    const daysToStart = daysUntil(c.season_start_month, c.season_start_day || 1)
+    const daysToEnd = daysUntil(c.season_end_month, c.season_end_day || 28)
+
+    let newStatus = c.season_status
+    if (inSeason) {
+      if (daysToEnd <= 30 && daysToEnd > 0) {
+        newStatus = 'departing_soon'
+      } else {
+        newStatus = 'in_season'
+      }
+    } else {
+      if (daysToStart <= 30 && daysToStart > 0) {
+        newStatus = 'arriving_soon'
+      } else {
+        newStatus = 'out_of_season'
+      }
+    }
+
+    if (newStatus !== c.season_status) {
+      await db.prepare("UPDATE customers SET season_status = ?, last_season_update = datetime('now') WHERE id = ?")
+        .bind(newStatus, c.id).run()
+      await db.prepare(`
+        INSERT INTO customer_season_log (customer_id, event_type, season_year, notes, created_by, created_by_name)
+        VALUES (?, 'season_update', ?, ?, ?, ?)
+      `).bind(c.id, now.getFullYear(), `Auto-updated: ${c.season_status} → ${newStatus}`, user?.id || null, 'System').run()
+      changes.push({ customer: c.business_name, from: c.season_status, to: newStatus })
+      updated++
+    }
+  }
+
+  return c.json({ updated, total: customers.results?.length || 0, changes })
+})
+
+// Get SMS templates
+app.get('/api/sms-templates', async (c) => {
+  const db = c.env.DB
+  try {
+    const result = await db.prepare('SELECT * FROM sms_templates ORDER BY template_type, name').all()
+    return c.json({ templates: result.results || [] })
+  } catch (e: any) {
+    return c.json({ templates: [], error: e.message })
+  }
+})
+
+// Update SMS template
+app.put('/api/sms-templates/:id', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+  const body = await c.req.json()
+  const updates: string[] = []
+  const vals: any[] = []
+  if (body.name !== undefined) { updates.push('name = ?'); vals.push(body.name) }
+  if (body.message_template !== undefined) { updates.push('message_template = ?'); vals.push(body.message_template) }
+  if (body.active !== undefined) { updates.push('active = ?'); vals.push(body.active ? 1 : 0) }
+  if (!updates.length) return c.json({ error: 'No fields' }, 400)
+  vals.push(id)
+  await db.prepare(`UPDATE sms_templates SET ${updates.join(', ')} WHERE id = ?`).bind(...vals).run()
+  return c.json({ success: true })
+})
 
 export const standingOrdersApp = app

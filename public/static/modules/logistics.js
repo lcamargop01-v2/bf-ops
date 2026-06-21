@@ -1915,10 +1915,10 @@ function renderSidebarUser() {
 }
 
 function renderPage() {
-  const titles = { dashboard:t('nav_dashboard'), orders:t('nav_orders'), ticket_review:'Ticket Review', schedule:t('nav_schedule'), routes:t('nav_routes'), route_builder:'Route Builder', zones:t('zones_title'), recurring:t('recurring_title'), customers:t('nav_customers'), products:t('nav_products'), trucks:t('trucks_title'), drivers_mgmt:t('nav_drivers')||'Drivers', maintenance:t('nav_maintenance')||'Fleet Maintenance', warehouse:'Warehouse', driver:t('nav_driver_view'), packing:t('nav_packing_lists'), returns:'Returns', learning:'AI Learning Engine', fleet_tracking:'Fleet Tracking', fleet_sync:'Fleet Sync' };
+  const titles = { dashboard:t('nav_dashboard'), orders:t('nav_orders'), ticket_review:'Ticket Review', schedule:t('nav_schedule'), routes:t('nav_routes'), route_builder:'Route Builder', zones:t('zones_title'), recurring:t('recurring_title'), customers:t('nav_customers'), products:t('nav_products'), trucks:t('trucks_title'), drivers_mgmt:t('nav_drivers')||'Drivers', maintenance:t('nav_maintenance')||'Fleet Maintenance', warehouse:'Warehouse', driver:t('nav_driver_view'), packing:t('nav_packing_lists'), returns:'Returns', learning:'AI Learning Engine', fleet_tracking:'Fleet Tracking', fleet_sync:'Fleet Sync', so_dashboard:'Standing Orders Dashboard', seasonality:'Customer Seasonality' };
   const el = document.getElementById('pageTitle');
   if (el) el.textContent = titles[currentPage] || '';
-  const pages = { dashboard: renderDashboard, orders: renderOrders, ticket_review: renderTicketReview, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, standing_orders: renderStandingOrders, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, warehouse: renderWarehouse, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
+  const pages = { dashboard: renderDashboard, orders: renderOrders, ticket_review: renderTicketReview, schedule: renderSchedule, routes: renderRoutes, route_builder: renderRouteBuilder, zones: renderZones, recurring: renderRecurring, standing_orders: renderStandingOrders, so_dashboard: renderSODashboard, seasonality: renderSeasonality, customers: renderCustomers, products: renderProducts, trucks: renderTrucks, drivers_mgmt: renderDriversManagement, maintenance: renderMaintenance, warehouse: renderWarehouse, driver: renderDriver, packing: renderPacking, returns: renderReturns, learning: renderLearningDashboard, fleet_tracking: renderFleetTracking, fleet_sync: renderFleetSync };
   const fn = pages[currentPage];
   if (fn) {
     const result = fn();
@@ -17156,5 +17156,554 @@ async function soSendReply(entryId) {
   } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
 }
 window.soSendReply = soSendReply;
+
+// ==================== SO DASHBOARD (easy status board) ====================
+
+var _soDashData = null;
+var _soDashAutoRefresh = null;
+
+async function renderSODashboard() {
+  var el = document.getElementById('mainContent');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:40px;text-align:center"><i class="fas fa-spinner fa-spin fa-2x" style="color:#2563EB"></i><p style="margin-top:12px;color:#6B7280">Loading dashboard...</p></div>';
+
+  try {
+    var resp = await API.get('/standing-orders/dashboard');
+    _soDashData = resp.data;
+    soDashRender();
+
+    // Auto-refresh every 30 seconds
+    if (_soDashAutoRefresh) clearInterval(_soDashAutoRefresh);
+    _soDashAutoRefresh = setInterval(async function() {
+      try {
+        var r = await API.get('/standing-orders/dashboard');
+        _soDashData = r.data;
+        soDashRender();
+      } catch(e) {}
+    }, 30000);
+  } catch (e) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> ' + soEsc(e.message || 'Failed to load') + '</div>';
+  }
+}
+window.renderSODashboard = renderSODashboard;
+
+function soDashRender() {
+  var el = document.getElementById('mainContent');
+  if (!el || !_soDashData) return;
+  var d = _soDashData;
+  var runs = d.runs || [];
+  var sms = d.recent_sms || [];
+  var actions = d.needs_action || [];
+  var seasonal = d.seasonal || {};
+  var stats = seasonal.stats || {};
+
+  var html = '<div style="max-width:1200px;margin:0 auto;padding:0 16px">';
+
+  // ---- Top action-needed banner ----
+  var modifiedCount = actions.filter(function(a) { return a.status === 'modified'; }).length;
+  var waitingCount = actions.filter(function(a) { return a.status === 'sent'; }).length;
+  if (modifiedCount > 0) {
+    html += '<div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:10px;padding:14px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px">';
+    html += '<i class="fas fa-exclamation-circle" style="color:#D97706;font-size:20px"></i>';
+    html += '<div><strong style="color:#92400E">' + modifiedCount + ' customer' + (modifiedCount > 1 ? 's' : '') + ' replied with changes</strong> — need staff review</div>';
+    html += '<button onclick="soDashScrollTo(\'actions\')" class="btn btn-sm" style="margin-left:auto;background:#D97706;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">Review Now</button>';
+    html += '</div>';
+  }
+
+  // ---- Summary stat cards ----
+  var activeRun = runs.find(function(r) { return r.status === 'sent' || r.status === 'draft' || r.status === 'sending'; });
+  var totalEntries = 0, confirmed = 0, pending = 0, declined = 0, modified = 0, noResp = 0, ordersCreated = 0;
+  if (activeRun) {
+    (activeRun.entries || []).forEach(function(e) {
+      totalEntries++;
+      if (e.status === 'confirmed') { confirmed++; if (e.order_id) ordersCreated++; }
+      else if (e.status === 'pending' || e.status === 'sent') pending++;
+      else if (e.status === 'declined') declined++;
+      else if (e.status === 'modified') modified++;
+      else if (e.status === 'no_response') noResp++;
+    });
+  }
+
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">';
+  html += soDashStatCard('Texted', totalEntries, '#2563EB', 'fa-paper-plane');
+  html += soDashStatCard('Confirmed', confirmed, '#059669', 'fa-check-circle');
+  html += soDashStatCard('Waiting', pending, '#D97706', 'fa-clock');
+  html += soDashStatCard('Changed', modified, '#7C3AED', 'fa-comment-dots');
+  html += soDashStatCard('Declined', declined, '#DC2626', 'fa-times-circle');
+  html += soDashStatCard('Orders Made', ordersCreated, '#0891B2', 'fa-clipboard-check');
+  html += '</div>';
+
+  // ---- Active run detail (the main board) ----
+  if (activeRun) {
+    html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;margin-bottom:20px;overflow:hidden">';
+    html += '<div style="padding:14px 20px;border-bottom:1px solid #E5E7EB;display:flex;justify-content:space-between;align-items:center;background:#F8FAFF">';
+    html += '<div>';
+    html += '<h3 style="margin:0;font-size:16px;font-weight:700;color:#111827"><i class="fas fa-truck" style="color:#2563EB;margin-right:6px"></i>Delivery: ' + soEsc(activeRun.run_date) + ' (' + soEsc(activeRun.delivery_day) + ')</h3>';
+    if (activeRun.cutoff_time) html += '<div style="font-size:12px;color:#6B7280;margin-top:2px">Cutoff: ' + soEsc(activeRun.cutoff_time) + '</div>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:8px">';
+    html += '<button onclick="navigateTo(\'standing_orders\',{runId:' + activeRun.id + '})" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px">Full Details <i class="fas fa-arrow-right"></i></button>';
+    html += '</div></div>';
+
+    // Customer status rows
+    html += '<div style="max-height:400px;overflow-y:auto">';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+    html += '<thead><tr style="background:#F9FAFB;position:sticky;top:0">';
+    html += '<th style="padding:10px 14px;text-align:left;font-weight:600;color:#6B7280">Customer</th>';
+    html += '<th style="padding:10px 14px;text-align:left;font-weight:600;color:#6B7280">Type</th>';
+    html += '<th style="padding:10px 14px;text-align:left;font-weight:600;color:#6B7280">Zone</th>';
+    html += '<th style="padding:10px 14px;text-align:left;font-weight:600;color:#6B7280">Status</th>';
+    html += '<th style="padding:10px 14px;text-align:left;font-weight:600;color:#6B7280">Order</th>';
+    html += '<th style="padding:10px 14px;text-align:center;font-weight:600;color:#6B7280">Action</th>';
+    html += '</tr></thead><tbody>';
+
+    (activeRun.entries || []).forEach(function(e) {
+      var stColor = e.status === 'confirmed' ? '#059669' : e.status === 'declined' ? '#DC2626' : e.status === 'modified' ? '#7C3AED' : e.status === 'sent' ? '#D97706' : e.status === 'no_response' ? '#9CA3AF' : '#2563EB';
+      var stIcon = e.status === 'confirmed' ? 'fa-check' : e.status === 'declined' ? 'fa-times' : e.status === 'modified' ? 'fa-comment-dots' : e.status === 'sent' ? 'fa-clock' : e.status === 'no_response' ? 'fa-minus' : 'fa-ellipsis';
+      var rowBg = e.status === 'modified' ? '#FEFCE8' : (e.status === 'sent' ? '#FFF7ED' : '');
+
+      html += '<tr style="border-bottom:1px solid #F3F4F6;' + (rowBg ? 'background:' + rowBg : '') + '">';
+      html += '<td style="padding:10px 14px"><strong>' + soEsc(e.customer_name) + '</strong>';
+      if (e.customer_phone) html += '<div style="font-size:11px;color:#9CA3AF">' + soEsc(e.customer_phone) + '</div>';
+      html += '</td>';
+      html += '<td style="padding:10px 14px"><span style="font-size:11px;padding:2px 6px;border-radius:3px;background:' + (e.entry_type === 'standing' ? '#DBEAFE' : '#F3E8FF') + ';color:' + (e.entry_type === 'standing' ? '#1D4ED8' : '#7C3AED') + ';font-weight:600">' + (e.entry_type === 'standing' ? 'Standing' : 'Broadcast') + '</span></td>';
+      html += '<td style="padding:10px 14px;font-size:12px;color:' + (e.zone_color || '#6B7280') + ';font-weight:600">' + soEsc(e.zone_name || '-') + '</td>';
+      html += '<td style="padding:10px 14px"><span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:5px;font-size:11px;font-weight:600;background:' + stColor + '15;color:' + stColor + '"><i class="fas ' + stIcon + '"></i> ' + soEsc(e.status).replace('_', ' ') + '</span>';
+      if (e.status === 'modified' && e.modified_items) html += '<div style="font-size:11px;color:#7C3AED;margin-top:2px">"' + soEsc(e.modified_items).substring(0, 60) + '"</div>';
+      html += '</td>';
+      html += '<td style="padding:10px 14px">' + (e.order_id ? '<span style="font-size:11px;color:#059669;font-weight:600"><i class="fas fa-check"></i> #' + e.order_id + '</span>' : '<span style="font-size:11px;color:#9CA3AF">-</span>') + '</td>';
+      html += '<td style="padding:10px 14px;text-align:center">';
+      if (e.status === 'modified' || e.status === 'sent') {
+        html += '<button onclick="soShowThread(' + e.id + ')" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer" title="View messages"><i class="fas fa-comment"></i></button> ';
+      }
+      if (e.status === 'modified') {
+        html += '<button onclick="soConfirmEntry(' + e.id + ')" class="btn btn-sm" style="background:#059669;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer" title="Confirm"><i class="fas fa-check"></i></button> ';
+        html += '<button onclick="soDeclineEntry(' + e.id + ')" class="btn btn-sm" style="background:#DC2626;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer" title="Decline"><i class="fas fa-times"></i></button>';
+      }
+      html += '</td></tr>';
+    });
+    html += '</tbody></table></div></div>';
+  } else {
+    html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:40px;text-align:center;margin-bottom:20px">';
+    html += '<i class="fas fa-inbox" style="font-size:40px;color:#D1D5DB"></i>';
+    html += '<p style="margin-top:12px;color:#6B7280;font-size:15px">No active confirmation runs</p>';
+    html += '<button onclick="navigateTo(\'standing_orders\')" class="btn btn-primary" style="margin-top:12px;background:#2563EB;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:14px"><i class="fas fa-plus"></i> Create New Run</button>';
+    html += '</div>';
+  }
+
+  // ---- Two columns: Actions Needed + Recent Messages ----
+  html += '<div id="actions" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">';
+
+  // Left: Needs Attention
+  html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden">';
+  html += '<div style="padding:12px 16px;border-bottom:1px solid #E5E7EB;background:#FEF2F2"><h4 style="margin:0;font-size:14px;font-weight:700;color:#991B1B"><i class="fas fa-bell" style="margin-right:6px"></i>Needs Attention (' + actions.length + ')</h4></div>';
+  html += '<div style="max-height:300px;overflow-y:auto">';
+  if (!actions.length) {
+    html += '<div style="padding:24px;text-align:center;color:#9CA3AF"><i class="fas fa-check-circle" style="font-size:24px;color:#059669"></i><p style="margin-top:8px">All caught up!</p></div>';
+  }
+  actions.forEach(function(a) {
+    var bg = a.status === 'modified' ? '#FEFCE8' : '#FFF7ED';
+    var icon = a.status === 'modified' ? 'fa-comment-dots' : 'fa-clock';
+    var color = a.status === 'modified' ? '#D97706' : '#EA580C';
+    html += '<div style="padding:10px 14px;border-bottom:1px solid #F3F4F6;background:' + bg + ';display:flex;align-items:center;gap:10px">';
+    html += '<i class="fas ' + icon + '" style="color:' + color + ';font-size:14px;flex-shrink:0"></i>';
+    html += '<div style="flex:1;min-width:0"><strong style="font-size:13px;color:#111827">' + soEsc(a.customer_name) + '</strong>';
+    if (a.status === 'modified' && a.modified_items) html += '<div style="font-size:11px;color:#7C3AED;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">"' + soEsc(a.modified_items) + '"</div>';
+    else html += '<div style="font-size:11px;color:#6B7280">Waiting for reply &middot; ' + soEsc(a.run_date) + '</div>';
+    html += '</div>';
+    html += '<button onclick="soShowThread(' + a.id + ')" style="flex-shrink:0;background:#2563EB;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer"><i class="fas fa-comment"></i></button>';
+    html += '</div>';
+  });
+  html += '</div></div>';
+
+  // Right: Recent SMS log
+  html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden">';
+  html += '<div style="padding:12px 16px;border-bottom:1px solid #E5E7EB;background:#EFF6FF"><h4 style="margin:0;font-size:14px;font-weight:700;color:#1E40AF"><i class="fas fa-comments" style="margin-right:6px"></i>Recent Messages (' + sms.length + ')</h4></div>';
+  html += '<div style="max-height:300px;overflow-y:auto">';
+  if (!sms.length) {
+    html += '<div style="padding:24px;text-align:center;color:#9CA3AF"><i class="fas fa-comment-slash" style="font-size:24px"></i><p style="margin-top:8px">No recent messages</p></div>';
+  }
+  sms.slice(0, 30).forEach(function(m) {
+    var isOut = m.direction === 'outbound';
+    var icon = isOut ? 'fa-arrow-right' : 'fa-arrow-left';
+    var color = isOut ? '#2563EB' : '#059669';
+    var statusIcon = m.status === 'failed' ? ' <i class="fas fa-exclamation-triangle" style="color:#DC2626;font-size:10px"></i>' : '';
+    html += '<div style="padding:8px 14px;border-bottom:1px solid #F3F4F6;display:flex;gap:10px;align-items:flex-start">';
+    html += '<i class="fas ' + icon + '" style="color:' + color + ';margin-top:3px;font-size:12px;flex-shrink:0"></i>';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+    html += '<strong style="font-size:12px;color:#111827">' + soEsc(m.customer_name || m.customer_phone || 'Unknown') + '</strong>' + statusIcon;
+    html += '<span style="font-size:10px;color:#9CA3AF;flex-shrink:0">' + soDashTimeAgo(m.created_at) + '</span>';
+    html += '</div>';
+    html += '<div style="font-size:12px;color:#4B5563;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px">' + soEsc((m.message_body || '').substring(0, 100)) + '</div>';
+    html += '</div></div>';
+  });
+  html += '</div></div>';
+  html += '</div>'; // end two-column grid
+
+  // ---- Seasonal Snapshot ----
+  html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;margin-bottom:20px;overflow:hidden">';
+  html += '<div style="padding:12px 16px;border-bottom:1px solid #E5E7EB;background:#FFFBEB;display:flex;justify-content:space-between;align-items:center">';
+  html += '<h4 style="margin:0;font-size:14px;font-weight:700;color:#92400E"><i class="fas fa-sun" style="margin-right:6px"></i>Seasonal Snapshot</h4>';
+  html += '<button onclick="navigateTo(\'seasonality\')" class="btn btn-sm" style="background:#D97706;color:#fff;border:none;padding:5px 12px;border-radius:5px;cursor:pointer;font-size:11px">Manage <i class="fas fa-arrow-right"></i></button>';
+  html += '</div>';
+  html += '<div style="padding:14px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px">';
+  html += soDashMiniStat('In Season', stats.in_season || 0, '#059669');
+  html += soDashMiniStat('Out of Season', stats.out_of_season || 0, '#9CA3AF');
+  html += soDashMiniStat('Arriving Soon', stats.arriving_soon || 0, '#2563EB');
+  html += soDashMiniStat('Departing Soon', stats.departing_soon || 0, '#D97706');
+  html += soDashMiniStat('Seasonal Total', stats.seasonal_count || 0, '#7C3AED');
+  html += soDashMiniStat('Year-Round', (stats.total_customers || 0) - (stats.seasonal_count || 0), '#0891B2');
+  html += '</div>';
+
+  // Seasonal alerts (arriving/departing)
+  var alerts = (seasonal.alerts || []).filter(function(a) { return a.season_status === 'arriving_soon' || a.season_status === 'departing_soon'; });
+  if (alerts.length) {
+    html += '<div style="padding:0 16px 14px">';
+    alerts.forEach(function(a) {
+      var isArr = a.season_status === 'arriving_soon';
+      html += '<div style="padding:8px 12px;margin-top:6px;border-radius:6px;background:' + (isArr ? '#EFF6FF' : '#FEF3C7') + ';display:flex;align-items:center;gap:8px;font-size:13px">';
+      html += '<i class="fas ' + (isArr ? 'fa-arrow-circle-down' : 'fa-arrow-circle-up') + '" style="color:' + (isArr ? '#2563EB' : '#D97706') + '"></i>';
+      html += '<strong>' + soEsc(a.business_name) + '</strong>';
+      html += '<span style="color:#6B7280"> — ' + (isArr ? 'arriving' : 'departing') + ' soon</span>';
+      if (isArr) {
+        html += '<button onclick="soSeasonAction(' + a.id + ',\'arrival\')" style="margin-left:auto;background:#059669;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer">Mark Arrived + Welcome Text</button>';
+      } else {
+        html += '<button onclick="soSeasonAction(' + a.id + ',\'departure\')" style="margin-left:auto;background:#D97706;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer">Mark Departed + Final Order Text</button>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // ---- Past runs ----
+  var pastRuns = runs.filter(function(r) { return r.status === 'completed' || r.status === 'cancelled'; });
+  if (pastRuns.length) {
+    html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;margin-bottom:20px">';
+    html += '<div style="padding:12px 16px;border-bottom:1px solid #E5E7EB"><h4 style="margin:0;font-size:14px;font-weight:700;color:#374151"><i class="fas fa-history" style="margin-right:6px"></i>Recent Completed Runs</h4></div>';
+    pastRuns.forEach(function(r) {
+      html += '<div onclick="navigateTo(\'standing_orders\',{runId:' + r.id + '})" style="padding:10px 16px;border-bottom:1px solid #F3F4F6;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onmouseover="this.style.background=\'#F9FAFB\'" onmouseout="this.style.background=\'\'">';
+      html += '<div><strong style="font-size:13px">' + soEsc(r.run_date) + '</strong> <span style="color:#6B7280;font-size:12px">(' + soEsc(r.delivery_day) + ')</span></div>';
+      html += '<div style="display:flex;gap:12px;font-size:12px">';
+      html += '<span style="color:#059669"><i class="fas fa-check"></i> ' + (r.confirmed_count || 0) + '</span>';
+      html += '<span style="color:#DC2626"><i class="fas fa-times"></i> ' + (r.declined_count || 0) + '</span>';
+      html += '<span style="color:#9CA3AF"><i class="fas fa-minus"></i> ' + ((r.total_entries || 0) - (r.confirmed_count || 0) - (r.declined_count || 0)) + '</span>';
+      html += '</div></div>';
+    });
+    html += '</div>';
+  }
+
+  html += '</div>'; // end max-width wrapper
+  el.innerHTML = html;
+}
+
+function soDashStatCard(label, value, color, icon) {
+  return '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:16px;text-align:center">'
+    + '<i class="fas ' + icon + '" style="font-size:18px;color:' + color + '"></i>'
+    + '<div style="font-size:28px;font-weight:800;color:' + color + ';margin-top:4px">' + (value || 0) + '</div>'
+    + '<div style="font-size:12px;color:#6B7280;font-weight:600">' + label + '</div>'
+    + '</div>';
+}
+
+function soDashMiniStat(label, value, color) {
+  return '<div style="text-align:center;padding:8px;border-radius:8px;background:' + color + '08">'
+    + '<div style="font-size:22px;font-weight:800;color:' + color + '">' + (value || 0) + '</div>'
+    + '<div style="font-size:11px;color:#6B7280;font-weight:600">' + label + '</div>'
+    + '</div>';
+}
+
+function soDashTimeAgo(dateStr) {
+  if (!dateStr) return '';
+  var diff = (Date.now() - new Date(dateStr + 'Z').getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function soDashScrollTo(id) {
+  var el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+window.soDashScrollTo = soDashScrollTo;
+
+async function soSeasonAction(customerId, action) {
+  if (action === 'arrival') {
+    if (!confirm('Mark this customer as arrived and send welcome-back text?')) return;
+    try {
+      var resp = await API.post('/customers/' + customerId + '/season-arrival', { send_welcome: true });
+      shellToast('Marked arrived' + (resp.data.sms_sent ? ' — welcome text sent!' : ''));
+      renderSODashboard();
+    } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+  } else {
+    if (!confirm('Mark this customer as departed and send final order text?')) return;
+    try {
+      var resp = await API.post('/customers/' + customerId + '/season-departure', { send_farewell: true, ask_final_order: true });
+      shellToast('Marked departed' + (resp.data.sms_sent ? ' — final order text sent!' : ''));
+      renderSODashboard();
+    } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+  }
+}
+window.soSeasonAction = soSeasonAction;
+
+// ==================== SEASONALITY MANAGEMENT PAGE ====================
+
+var _seasonalCustomers = [];
+var _seasonFilter = 'all';
+
+async function renderSeasonality() {
+  var el = document.getElementById('mainContent');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:40px;text-align:center"><i class="fas fa-spinner fa-spin fa-2x" style="color:#D97706"></i></div>';
+
+  try {
+    var resp = await API.get('/customers/seasonal');
+    _seasonalCustomers = resp.data.customers || [];
+    seasonRender();
+  } catch (e) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> ' + soEsc(e.message) + '</div>';
+  }
+}
+window.renderSeasonality = renderSeasonality;
+
+function seasonRender() {
+  var el = document.getElementById('mainContent');
+  if (!el) return;
+  var custs = _seasonalCustomers;
+  var html = '<div style="max-width:1100px;margin:0 auto;padding:0 16px">';
+
+  // Header with actions
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">';
+  html += '<div>';
+  html += '<h2 style="margin:0;font-size:20px;font-weight:700;color:#111827"><i class="fas fa-sun" style="color:#D97706;margin-right:6px"></i>Customer Seasonality</h2>';
+  html += '<p style="margin:4px 0 0;font-size:13px;color:#6B7280">Manage seasonal customers — arrivals, departures, and season dates</p>';
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px">';
+  html += '<button onclick="seasonRefreshStatuses()" class="btn btn-sm" style="background:#7C3AED;color:#fff;border:none;padding:8px 14px;border-radius:6px;cursor:pointer;font-size:12px"><i class="fas fa-sync-alt"></i> Auto-Update Statuses</button>';
+  html += '</div></div>';
+
+  // Filter tabs
+  var counts = { all: custs.length, seasonal: 0, in_season: 0, out_of_season: 0, arriving_soon: 0, departing_soon: 0, year_round: 0 };
+  custs.forEach(function(c) {
+    if (c.is_seasonal) { counts.seasonal++; counts[c.season_status] = (counts[c.season_status] || 0) + 1; }
+    else counts.year_round++;
+  });
+  var filters = [
+    { id: 'all', label: 'All', count: counts.all, color: '#374151' },
+    { id: 'in_season', label: 'In Season', count: counts.in_season, color: '#059669' },
+    { id: 'arriving_soon', label: 'Arriving Soon', count: counts.arriving_soon, color: '#2563EB' },
+    { id: 'departing_soon', label: 'Departing Soon', count: counts.departing_soon, color: '#D97706' },
+    { id: 'out_of_season', label: 'Out of Season', count: counts.out_of_season, color: '#9CA3AF' },
+    { id: 'year_round', label: 'Year-Round', count: counts.year_round, color: '#0891B2' }
+  ];
+  html += '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">';
+  filters.forEach(function(f) {
+    var active = _seasonFilter === f.id;
+    html += '<button onclick="seasonSetFilter(\'' + f.id + '\')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid ' + (active ? f.color : '#E5E7EB') + ';background:' + (active ? f.color + '15' : '#fff') + ';color:' + (active ? f.color : '#6B7280') + '">' + f.label + ' <span style="font-weight:400">(' + (f.count || 0) + ')</span></button>';
+  });
+  html += '</div>';
+
+  // Filtered list
+  var filtered = custs;
+  if (_seasonFilter === 'year_round') filtered = custs.filter(function(c) { return !c.is_seasonal; });
+  else if (_seasonFilter === 'in_season') filtered = custs.filter(function(c) { return c.is_seasonal && c.season_status === 'in_season'; });
+  else if (_seasonFilter === 'arriving_soon') filtered = custs.filter(function(c) { return c.is_seasonal && c.season_status === 'arriving_soon'; });
+  else if (_seasonFilter === 'departing_soon') filtered = custs.filter(function(c) { return c.is_seasonal && c.season_status === 'departing_soon'; });
+  else if (_seasonFilter === 'out_of_season') filtered = custs.filter(function(c) { return c.is_seasonal && c.season_status === 'out_of_season'; });
+
+  // Customer cards
+  html += '<div style="display:flex;flex-direction:column;gap:8px" id="seasonList">';
+  if (!filtered.length) {
+    html += '<div style="padding:40px;text-align:center;color:#9CA3AF"><i class="fas fa-user-slash" style="font-size:28px"></i><p style="margin-top:10px">No customers match this filter</p></div>';
+  }
+  filtered.forEach(function(c) {
+    var stColor = c.season_status === 'in_season' ? '#059669' : c.season_status === 'arriving_soon' ? '#2563EB' : c.season_status === 'departing_soon' ? '#D97706' : c.season_status === 'out_of_season' ? '#9CA3AF' : '#6B7280';
+    var stLabel = (c.season_status || 'unknown').replace(/_/g, ' ');
+    var months = ['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    html += '<div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">';
+
+    // Left: Customer info
+    html += '<div style="min-width:200px">';
+    html += '<strong style="font-size:14px;color:#111827">' + soEsc(c.business_name) + '</strong>';
+    if (c.contact_name) html += ' <span style="color:#6B7280;font-size:12px">(' + soEsc(c.contact_name) + ')</span>';
+    html += '<div style="display:flex;gap:8px;align-items:center;margin-top:4px">';
+    if (c.is_seasonal) {
+      html += '<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:4px;font-weight:600;font-size:11px;background:' + stColor + '15;color:' + stColor + '"><i class="fas fa-circle" style="font-size:6px"></i> ' + stLabel + '</span>';
+      if (c.season_start_month && c.season_end_month) {
+        html += '<span style="font-size:11px;color:#6B7280"><i class="fas fa-calendar-alt"></i> ' + months[c.season_start_month] + ' ' + (c.season_start_day || 1) + ' – ' + months[c.season_end_month] + ' ' + (c.season_end_day || 28) + '</span>';
+      }
+    } else {
+      html += '<span style="font-size:11px;color:#0891B2;font-weight:600"><i class="fas fa-infinity"></i> Year-round</span>';
+    }
+    html += '</div>';
+    if (c.season_notes) html += '<div style="font-size:11px;color:#6B7280;margin-top:2px"><i class="fas fa-sticky-note"></i> ' + soEsc(c.season_notes) + '</div>';
+    html += '</div>';
+
+    // Right: Actions
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    html += '<button onclick="seasonEditCustomer(' + c.id + ')" class="btn btn-sm" style="background:#F3F4F6;color:#374151;border:1px solid #D1D5DB;padding:5px 10px;border-radius:5px;font-size:11px;cursor:pointer"><i class="fas fa-pen"></i> Edit</button>';
+    html += '<button onclick="seasonShowLog(' + c.id + ')" class="btn btn-sm" style="background:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;padding:5px 10px;border-radius:5px;font-size:11px;cursor:pointer"><i class="fas fa-history"></i> Log</button>';
+    if (c.is_seasonal && c.season_status !== 'in_season') {
+      html += '<button onclick="soSeasonAction(' + c.id + ',\'arrival\')" class="btn btn-sm" style="background:#059669;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;cursor:pointer"><i class="fas fa-arrow-down"></i> Arrived</button>';
+    }
+    if (c.is_seasonal && c.season_status !== 'out_of_season') {
+      html += '<button onclick="soSeasonAction(' + c.id + ',\'departure\')" class="btn btn-sm" style="background:#D97706;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;cursor:pointer"><i class="fas fa-arrow-up"></i> Departed</button>';
+    }
+    html += '</div>';
+    html += '</div>';
+  });
+  html += '</div></div>';
+  el.innerHTML = html;
+}
+
+function seasonSetFilter(f) {
+  _seasonFilter = f;
+  seasonRender();
+}
+window.seasonSetFilter = seasonSetFilter;
+
+async function seasonRefreshStatuses() {
+  if (!confirm('Auto-update all seasonal customer statuses based on their season dates?')) return;
+  try {
+    var resp = await API.post('/customers/seasonal/refresh-statuses', {});
+    var d = resp.data;
+    shellToast('Updated ' + d.updated + ' of ' + d.total + ' customers');
+    if (d.changes && d.changes.length) {
+      d.changes.forEach(function(ch) {
+        console.log('Season change:', ch.customer, ch.from, '->', ch.to);
+      });
+    }
+    renderSeasonality();
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.seasonRefreshStatuses = seasonRefreshStatuses;
+
+function seasonEditCustomer(customerId) {
+  var c = _seasonalCustomers.find(function(x) { return x.id === customerId; });
+  if (!c) return;
+  var months = ['','January','February','March','April','May','June','July','August','September','October','November','December'];
+
+  var html = '<div id="seasonEditModal" style="position:fixed;inset:0;z-index:1100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4)" onclick="if(event.target===this)this.remove()">';
+  html += '<div style="background:#fff;border-radius:14px;max-width:500px;width:95%;box-shadow:0 20px 60px rgba(0,0,0,.2)">';
+  html += '<div style="padding:16px 24px;border-bottom:1px solid #E5E7EB"><h3 style="margin:0;font-size:16px;font-weight:700"><i class="fas fa-sun" style="color:#D97706"></i> Season Settings — ' + soEsc(c.business_name) + '</h3></div>';
+  html += '<div style="padding:20px 24px">';
+
+  // Is seasonal toggle
+  html += '<label style="display:flex;align-items:center;gap:10px;margin-bottom:16px;cursor:pointer">';
+  html += '<input type="checkbox" id="seIsSeasonal" ' + (c.is_seasonal ? 'checked' : '') + ' style="width:18px;height:18px">';
+  html += '<span style="font-size:14px;font-weight:600">Seasonal Customer</span>';
+  html += '</label>';
+
+  // Season dates
+  html += '<div id="seSeasonDates" style="' + (!c.is_seasonal ? 'opacity:.4;pointer-events:none' : '') + '">';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">';
+
+  // Start
+  html += '<div>';
+  html += '<label style="font-size:12px;font-weight:600;color:#374151">Season Start</label>';
+  html += '<div style="display:flex;gap:6px;margin-top:4px">';
+  html += '<select id="seStartMonth" style="flex:1;padding:8px;border:1px solid #D1D5DB;border-radius:6px;font-size:13px">';
+  for (var i = 1; i <= 12; i++) html += '<option value="' + i + '"' + (c.season_start_month === i ? ' selected' : '') + '>' + months[i] + '</option>';
+  html += '</select>';
+  html += '<input type="number" id="seStartDay" min="1" max="31" value="' + (c.season_start_day || 1) + '" style="width:60px;padding:8px;border:1px solid #D1D5DB;border-radius:6px;font-size:13px">';
+  html += '</div></div>';
+
+  // End
+  html += '<div>';
+  html += '<label style="font-size:12px;font-weight:600;color:#374151">Season End</label>';
+  html += '<div style="display:flex;gap:6px;margin-top:4px">';
+  html += '<select id="seEndMonth" style="flex:1;padding:8px;border:1px solid #D1D5DB;border-radius:6px;font-size:13px">';
+  for (var i = 1; i <= 12; i++) html += '<option value="' + i + '"' + (c.season_end_month === i ? ' selected' : '') + '>' + months[i] + '</option>';
+  html += '</select>';
+  html += '<input type="number" id="seEndDay" min="1" max="31" value="' + (c.season_end_day || 28) + '" style="width:60px;padding:8px;border:1px solid #D1D5DB;border-radius:6px;font-size:13px">';
+  html += '</div></div>';
+  html += '</div>';
+
+  // Status override
+  html += '<label style="font-size:12px;font-weight:600;color:#374151">Current Status</label>';
+  html += '<select id="seStatus" style="width:100%;padding:8px;border:1px solid #D1D5DB;border-radius:6px;font-size:13px;margin-top:4px;margin-bottom:14px">';
+  ['unknown','in_season','out_of_season','arriving_soon','departing_soon'].forEach(function(s) {
+    html += '<option value="' + s + '"' + (c.season_status === s ? ' selected' : '') + '>' + s.replace(/_/g, ' ') + '</option>';
+  });
+  html += '</select>';
+
+  // Notes
+  html += '<label style="font-size:12px;font-weight:600;color:#374151">Season Notes</label>';
+  html += '<textarea id="seNotes" rows="2" style="width:100%;padding:8px;border:1px solid #D1D5DB;border-radius:6px;font-size:13px;margin-top:4px;resize:vertical;box-sizing:border-box">' + soEsc(c.season_notes || '') + '</textarea>';
+
+  html += '</div>'; // end seSeasonDates
+
+  html += '</div>';
+  html += '<div style="padding:14px 24px;border-top:1px solid #E5E7EB;display:flex;justify-content:flex-end;gap:8px">';
+  html += '<button onclick="document.getElementById(\'seasonEditModal\').remove()" class="btn" style="padding:8px 16px;border:1px solid #D1D5DB;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">Cancel</button>';
+  html += '<button onclick="seasonSaveCustomer(' + c.id + ')" class="btn" style="padding:8px 16px;border:none;border-radius:6px;background:#D97706;color:#fff;cursor:pointer;font-size:13px;font-weight:600">Save Changes</button>';
+  html += '</div></div></div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+
+  // Toggle handler
+  document.getElementById('seIsSeasonal').addEventListener('change', function() {
+    var dates = document.getElementById('seSeasonDates');
+    dates.style.opacity = this.checked ? '1' : '.4';
+    dates.style.pointerEvents = this.checked ? 'auto' : 'none';
+  });
+}
+window.seasonEditCustomer = seasonEditCustomer;
+
+async function seasonSaveCustomer(customerId) {
+  var data = {
+    is_seasonal: document.getElementById('seIsSeasonal').checked ? 1 : 0,
+    season_start_month: parseInt(document.getElementById('seStartMonth').value),
+    season_start_day: parseInt(document.getElementById('seStartDay').value) || 1,
+    season_end_month: parseInt(document.getElementById('seEndMonth').value),
+    season_end_day: parseInt(document.getElementById('seEndDay').value) || 28,
+    season_status: document.getElementById('seStatus').value,
+    season_notes: document.getElementById('seNotes').value.trim()
+  };
+  try {
+    await API.put('/customers/' + customerId + '/seasonal', data);
+    shellToast('Season settings saved');
+    var modal = document.getElementById('seasonEditModal');
+    if (modal) modal.remove();
+    renderSeasonality();
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.seasonSaveCustomer = seasonSaveCustomer;
+
+async function seasonShowLog(customerId) {
+  var c = _seasonalCustomers.find(function(x) { return x.id === customerId; });
+  try {
+    var resp = await API.get('/customers/' + customerId + '/season-log');
+    var log = resp.data.log || [];
+
+    var html = '<div id="seasonLogModal" style="position:fixed;inset:0;z-index:1100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4)" onclick="if(event.target===this)this.remove()">';
+    html += '<div style="background:#fff;border-radius:14px;max-width:500px;width:95%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.2)">';
+    html += '<div style="padding:16px 24px;border-bottom:1px solid #E5E7EB;display:flex;justify-content:space-between;align-items:center">';
+    html += '<h3 style="margin:0;font-size:16px;font-weight:700"><i class="fas fa-history" style="color:#2563EB"></i> Season Log — ' + soEsc(c?.business_name || 'Customer') + '</h3>';
+    html += '<button onclick="document.getElementById(\'seasonLogModal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6B7280">&times;</button>';
+    html += '</div>';
+    html += '<div style="flex:1;overflow-y:auto;padding:16px">';
+
+    if (!log.length) {
+      html += '<div style="text-align:center;color:#9CA3AF;padding:30px"><i class="fas fa-inbox" style="font-size:24px"></i><p>No season history yet</p></div>';
+    }
+    log.forEach(function(l) {
+      var iconMap = { arrival: 'fa-arrow-down', departure: 'fa-arrow-up', welcome_text: 'fa-paper-plane', farewell_text: 'fa-hand-wave', final_order_text: 'fa-clipboard-check', season_update: 'fa-sync' };
+      var colorMap = { arrival: '#059669', departure: '#D97706', welcome_text: '#2563EB', farewell_text: '#7C3AED', final_order_text: '#0891B2', season_update: '#6B7280' };
+      html += '<div style="padding:10px 0;border-bottom:1px solid #F3F4F6;display:flex;gap:10px">';
+      html += '<i class="fas ' + (iconMap[l.event_type] || 'fa-circle') + '" style="color:' + (colorMap[l.event_type] || '#6B7280') + ';margin-top:3px"></i>';
+      html += '<div>';
+      html += '<strong style="font-size:13px;color:#111827">' + soEsc(l.event_type).replace(/_/g, ' ') + '</strong>';
+      if (l.season_year) html += ' <span style="font-size:11px;color:#9CA3AF">' + l.season_year + '</span>';
+      if (l.notes) html += '<div style="font-size:12px;color:#4B5563;margin-top:2px">' + soEsc(l.notes) + '</div>';
+      html += '<div style="font-size:10px;color:#9CA3AF;margin-top:2px">' + soEsc(l.created_at || '') + (l.created_by_name ? ' by ' + soEsc(l.created_by_name) : '') + '</div>';
+      html += '</div></div>';
+    });
+    html += '</div></div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.seasonShowLog = seasonShowLog;
 
 // end logistics module

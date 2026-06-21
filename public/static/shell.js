@@ -1947,6 +1947,8 @@ var SHELL_MODULE_PAGES = {
     { id: 'zones', label: 'Zones', icon: 'fa-map-location-dot' },
     { id: 'recurring', label: 'Recurring', icon: 'fa-sync-alt' },
     { id: 'standing_orders', label: 'Standing Orders', icon: 'fa-bell-concierge' },
+    { id: 'so_dashboard', label: 'SO Dashboard', icon: 'fa-tv' },
+    { id: 'seasonality', label: 'Seasonality', icon: 'fa-sun' },
     { id: 'customers', label: 'Customers', icon: 'fa-users' },
     { id: 'products', label: 'Products', icon: 'fa-box-open' },
     { id: 'trucks', label: 'Fleet', icon: 'fa-truck' },
