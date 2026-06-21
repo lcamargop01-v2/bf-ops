@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bf-ops-cron",
+  "main": "worker.js",
+  "compatibility_date": "2026-02-19",
+  "triggers": {
+    // 6:30 PM Eastern Time:
+    // EDT (Mar-Nov): 22:30 UTC  
+    // EST (Nov-Mar): 23:30 UTC
+    // We schedule both to ensure 6:30 PM local time year-round.
+    // The worker is idempotent — if a snapshot already exists for today, it's a no-op.
+    "crons": [
+      "30 22 * * *",
+      "30 23 * * *"
+    ]
+  },
+  "vars": {
+    "BF_OPS_URL": "https://bf-ops.pages.dev"
+  }
+  // CRON_SECRET should be set via: npx wrangler secret put CRON_SECRET --config workers/cron/wrangler.jsonc
+}

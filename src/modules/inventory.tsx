@@ -1619,5 +1619,234 @@ function classifyProduct(name: string, currentCategory: string): string {
   return 'shelf_goods'
 }
 
+// ==================== INVENTORY SNAPSHOTS ====================
+
+// Core snapshot function — captures current inventory state for a given date
+async function takeSnapshot(db: D1Database, snapshotDate: string): Promise<{ inserted: number; skipped: boolean }> {
+  // Check if snapshot already exists for this date
+  const existing = await db.prepare(
+    'SELECT COUNT(*) as cnt FROM inventory_snapshots WHERE snapshot_date = ?'
+  ).bind(snapshotDate).first<any>()
+
+  if (existing?.cnt > 0) return { inserted: 0, skipped: true }
+
+  // Insert snapshot rows for all active products with stock
+  const result = await db.prepare(`
+    INSERT OR IGNORE INTO inventory_snapshots (snapshot_date, product_id, location_id, product_name, category, qty_on_hand, qty_on_hold, qty_reserved, qty_available, unit_cost, total_value)
+    SELECT ?, s.product_id, s.location_id, p.name, p.category,
+           s.qty_on_hand, s.qty_on_hold, s.qty_reserved, s.qty_available,
+           COALESCE(p.cost, 0),
+           s.qty_on_hand * COALESCE(p.cost, 0)
+    FROM inventory_stock s
+    JOIN products p ON p.id = s.product_id
+    WHERE p.active = 1
+  `).bind(snapshotDate).run()
+
+  return { inserted: result.meta?.changes || 0, skipped: false }
+}
+
+// POST /api/inventory/snapshot — Take a snapshot now (cron or manual)
+// Auth: either CRON_SECRET header or normal user auth
+app.post('/api/inventory/snapshot', async (c) => {
+  const db = c.env.DB
+
+  // Check auth — accept cron secret OR normal user token
+  const cronSecret = c.req.header('X-Cron-Secret')
+  const cronSecretEnv = c.env.CRON_SECRET || 'bf-ops-cron-default-2024'
+  let triggeredBy = 'cron'
+
+  if (cronSecret && cronSecret === cronSecretEnv) {
+    triggeredBy = 'cron'
+  } else {
+    const user = getUserFromHeader(c)
+    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+    triggeredBy = user.name || user.email || `user:${user.id}`
+  }
+
+  // Use today's date (snapshot captures "end of day" state)
+  const today = new Date().toISOString().slice(0, 10)
+
+  // Allow override via body for backfilling
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const snapshotDate = body.date || today
+
+  const { inserted, skipped } = await takeSnapshot(db, snapshotDate)
+
+  if (skipped) {
+    return c.json({ success: true, message: `Snapshot for ${snapshotDate} already exists`, date: snapshotDate, skipped: true })
+  }
+
+  return c.json({
+    success: true,
+    message: `Snapshot taken for ${snapshotDate}`,
+    date: snapshotDate,
+    items_captured: inserted,
+    triggered_by: triggeredBy
+  })
+})
+
+// GET /api/inventory/snapshots — List all snapshot dates with summary
+app.get('/api/inventory/snapshots', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const limit = parseInt(c.req.query('limit') || '90')
+  const offset = parseInt(c.req.query('offset') || '0')
+
+  const snapshots = await db.prepare(`
+    SELECT snapshot_date,
+           COUNT(DISTINCT product_id) as product_count,
+           COUNT(DISTINCT location_id) as location_count,
+           SUM(qty_on_hand) as total_qty,
+           SUM(total_value) as total_value,
+           MIN(created_at) as created_at
+    FROM inventory_snapshots
+    GROUP BY snapshot_date
+    ORDER BY snapshot_date DESC
+    LIMIT ? OFFSET ?
+  `).bind(limit, offset).all()
+
+  const totalDays = await db.prepare(
+    'SELECT COUNT(DISTINCT snapshot_date) as cnt FROM inventory_snapshots'
+  ).first<any>()
+
+  return c.json({
+    snapshots: snapshots.results || [],
+    total: totalDays?.cnt || 0
+  })
+})
+
+// GET /api/inventory/snapshots/:date — Get snapshot detail for a specific date
+app.get('/api/inventory/snapshots/:date', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const date = c.req.param('date')
+  const locationId = c.req.query('location_id') || null
+  const category = c.req.query('category') || null
+  const search = c.req.query('search') || null
+
+  let query = `
+    SELECT s.*, l.name as location_name
+    FROM inventory_snapshots s
+    LEFT JOIN locations l ON l.id = s.location_id
+    WHERE s.snapshot_date = ?
+  `
+  const params: any[] = [date]
+
+  if (locationId) { query += ' AND s.location_id = ?'; params.push(parseInt(locationId)) }
+  if (category) { query += ' AND s.category = ?'; params.push(category) }
+  if (search) { query += ' AND s.product_name LIKE ?'; params.push(`%${search}%`) }
+
+  query += ' ORDER BY s.product_name'
+
+  const items = await db.prepare(query).bind(...params).all()
+
+  // Build summary
+  const totalQty = (items.results as any[]).reduce((s, r) => s + (r.qty_on_hand || 0), 0)
+  const totalValue = (items.results as any[]).reduce((s, r) => s + (r.total_value || 0), 0)
+  const byCategory: Record<string, any> = {}
+  for (const r of items.results as any[]) {
+    const cat = r.category || 'uncategorized'
+    if (!byCategory[cat]) byCategory[cat] = { category: cat, qty: 0, value: 0, products: 0 }
+    byCategory[cat].qty += r.qty_on_hand || 0
+    byCategory[cat].value += r.total_value || 0
+    byCategory[cat].products++
+  }
+
+  return c.json({
+    date,
+    summary: { totalItems: items.results.length, totalQty, totalValue },
+    byCategory: Object.values(byCategory),
+    items: items.results
+  })
+})
+
+// GET /api/inventory/snapshots/compare — Compare two snapshot dates
+app.get('/api/inventory/snapshot-compare', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const dateA = c.req.query('from')
+  const dateB = c.req.query('to')
+  if (!dateA || !dateB) return c.json({ error: 'Both from and to dates are required' }, 400)
+
+  const locationId = c.req.query('location_id') || null
+
+  // Get both snapshots aggregated by product
+  let baseQuery = `
+    SELECT product_id, product_name, category,
+           SUM(qty_on_hand) as qty_on_hand,
+           SUM(total_value) as total_value
+    FROM inventory_snapshots
+    WHERE snapshot_date = ?
+  `
+  const paramsA: any[] = [dateA]
+  const paramsB: any[] = [dateB]
+
+  if (locationId) {
+    baseQuery += ' AND location_id = ?'
+    paramsA.push(parseInt(locationId))
+    paramsB.push(parseInt(locationId))
+  }
+  baseQuery += ' GROUP BY product_id'
+
+  const [snapA, snapB] = await Promise.all([
+    db.prepare(baseQuery).bind(...paramsA).all(),
+    db.prepare(baseQuery).bind(...paramsB).all()
+  ])
+
+  const mapA: Record<number, any> = {}
+  for (const r of (snapA.results || []) as any[]) mapA[r.product_id] = r
+  const mapB: Record<number, any> = {}
+  for (const r of (snapB.results || []) as any[]) mapB[r.product_id] = r
+
+  const allIds = new Set([...Object.keys(mapA).map(Number), ...Object.keys(mapB).map(Number)])
+  const changes: any[] = []
+
+  for (const pid of allIds) {
+    const a = mapA[pid]
+    const b = mapB[pid]
+    const qtyA = a?.qty_on_hand || 0
+    const qtyB = b?.qty_on_hand || 0
+    const diff = qtyB - qtyA
+    if (diff !== 0) {
+      changes.push({
+        product_id: pid,
+        product_name: b?.product_name || a?.product_name,
+        category: b?.category || a?.category,
+        qty_from: qtyA,
+        qty_to: qtyB,
+        qty_change: diff,
+        value_from: a?.total_value || 0,
+        value_to: b?.total_value || 0,
+        value_change: (b?.total_value || 0) - (a?.total_value || 0)
+      })
+    }
+  }
+
+  changes.sort((a, b) => Math.abs(b.qty_change) - Math.abs(a.qty_change))
+
+  const totalQtyFrom = (snapA.results as any[]).reduce((s, r) => s + (r.qty_on_hand || 0), 0)
+  const totalQtyTo = (snapB.results as any[]).reduce((s, r) => s + (r.qty_on_hand || 0), 0)
+  const totalValueFrom = (snapA.results as any[]).reduce((s, r) => s + (r.total_value || 0), 0)
+  const totalValueTo = (snapB.results as any[]).reduce((s, r) => s + (r.total_value || 0), 0)
+
+  return c.json({
+    from: dateA,
+    to: dateB,
+    summary: {
+      totalQtyFrom, totalQtyTo, qtyChange: totalQtyTo - totalQtyFrom,
+      totalValueFrom, totalValueTo, valueChange: totalValueTo - totalValueFrom,
+      productsChanged: changes.length
+    },
+    changes
+  })
+})
+
 export default app
-export { app as inventoryApp }
+export { app as inventoryApp, takeSnapshot }

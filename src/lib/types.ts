@@ -8,6 +8,7 @@ export type BFBindings = {
   VERIZON_USERNAME?: string
   VERIZON_PASSWORD?: string
   VERIZON_APP_ID?: string
+  CRON_SECRET?: string
 }
 
 export type BFVariables = {

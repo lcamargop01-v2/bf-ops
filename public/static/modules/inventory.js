@@ -189,6 +189,11 @@ async function invRender() {
     var html = await invRenderCategoriesPage();
     root = document.getElementById('inventory-app'); if (!root) return;
     root.innerHTML = invRenderNav() + html;
+  } else if (invPage === 'snapshots') {
+    root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Loading snapshots...</div>';
+    var html = await invRenderSnapshotsPage();
+    root = document.getElementById('inventory-app'); if (!root) return;
+    root.innerHTML = invRenderNav() + html;
   }
   } catch(err) {
     console.error('[Inventory] render error:', err);
@@ -209,6 +214,7 @@ function invRenderNav() {
     { id: 'losses', icon: 'fa-triangle-exclamation', label: 'Losses' },
 
     { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' },
+    { id: 'snapshots', icon: 'fa-camera', label: 'Snapshots' },
     { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' }
   ];
   // Filter by role permissions
@@ -2486,4 +2492,296 @@ async function invCreateProduct() {
     invCloseModal();
     invRender();
   } catch(e) { invToast('Create failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ==================== SNAPSHOTS PAGE ====================
+
+var invSnapshotList = [];
+var invSnapshotDetail = null;
+var invSnapshotDetailDate = null;
+var invSnapshotCompare = null;
+
+async function invRenderSnapshotsPage() {
+  try {
+    var resp = await invAPI.get('/api/inventory/snapshots?limit=90', { headers: invHeaders() });
+    invSnapshotList = resp.data.snapshots || [];
+  } catch(e) {
+    invSnapshotList = [];
+    console.error('[Inventory] snapshots load error:', e);
+  }
+
+  // If we're viewing a detail
+  if (invSnapshotDetailDate) {
+    return invRenderSnapshotDetail();
+  }
+  // If we're comparing
+  if (invSnapshotCompare) {
+    return invRenderSnapshotCompareView();
+  }
+
+  var _showFin = invCanViewFin();
+  var html = '<div class="inv-section">';
+  html += '<div class="inv-section-header">';
+  html += '<div><h2 style="margin:0;font-size:18px;font-weight:700;color:#111"><i class="fas fa-camera" style="color:#7C3AED"></i> Daily Inventory Snapshots</h2>';
+  html += '<p style="margin:4px 0 0;color:#6B7280;font-size:13px">Automatic snapshot taken every day at 6:30 PM. Click any date to view details.</p></div>';
+  html += '<div style="display:flex;gap:8px;align-items:center">';
+  html += '<button class="inv-btn inv-btn-secondary" onclick="invSnapshotCompareStart()"><i class="fas fa-code-compare"></i> Compare</button>';
+  if (invCanEdit('snapshots')) {
+    html += '<button class="inv-btn" onclick="invTakeSnapshotNow()"><i class="fas fa-camera"></i> Take Snapshot Now</button>';
+  }
+  html += '</div></div>';
+
+  if (invSnapshotList.length === 0) {
+    html += '<div style="padding:40px;text-align:center;color:#9CA3AF">';
+    html += '<i class="fas fa-camera" style="font-size:40px;margin-bottom:12px;display:block"></i>';
+    html += '<p style="font-size:15px;font-weight:600">No snapshots yet</p>';
+    html += '<p style="font-size:13px">Snapshots are taken automatically every day at 6:30 PM, or you can take one manually.</p>';
+    if (invCanEdit('snapshots')) {
+      html += '<button class="inv-btn" style="margin-top:12px" onclick="invTakeSnapshotNow()"><i class="fas fa-camera"></i> Take First Snapshot</button>';
+    }
+    html += '</div>';
+  } else {
+    // Snapshot calendar/list
+    html += '<div class="inv-snapshot-grid">';
+    for (var i = 0; i < invSnapshotList.length; i++) {
+      var snap = invSnapshotList[i];
+      var dt = new Date(snap.snapshot_date + 'T12:00:00');
+      var dayName = dt.toLocaleDateString('en-US', { weekday: 'short' });
+      var monthDay = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      var year = dt.getFullYear();
+      var isToday = snap.snapshot_date === new Date().toISOString().slice(0, 10);
+      var isYesterday = snap.snapshot_date === new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+      // Change from prior day
+      var qtyDiff = '';
+      if (i < invSnapshotList.length - 1) {
+        var prev = invSnapshotList[i + 1];
+        var diff = (snap.total_qty || 0) - (prev.total_qty || 0);
+        if (diff > 0) qtyDiff = '<span style="color:#059669;font-size:11px;font-weight:600">+' + diff.toLocaleString() + '</span>';
+        else if (diff < 0) qtyDiff = '<span style="color:#DC2626;font-size:11px;font-weight:600">' + diff.toLocaleString() + '</span>';
+      }
+
+      html += '<div class="inv-snapshot-card' + (isToday ? ' today' : '') + '" onclick="invViewSnapshotDetail(\'' + snap.snapshot_date + '\')">';
+      html += '<div class="inv-snapshot-date">';
+      html += '<span class="inv-snapshot-day">' + dayName + '</span>';
+      html += '<span class="inv-snapshot-monthday">' + monthDay + (year !== new Date().getFullYear() ? ', ' + year : '') + '</span>';
+      if (isToday) html += '<span class="inv-snapshot-badge today">Today</span>';
+      else if (isYesterday) html += '<span class="inv-snapshot-badge yesterday">Yesterday</span>';
+      html += '</div>';
+      html += '<div class="inv-snapshot-stats">';
+      html += '<div class="inv-snapshot-stat"><span class="inv-snapshot-stat-value">' + (snap.total_qty || 0).toLocaleString() + '</span><span class="inv-snapshot-stat-label">Units ' + qtyDiff + '</span></div>';
+      html += '<div class="inv-snapshot-stat"><span class="inv-snapshot-stat-value">' + (snap.product_count || 0) + '</span><span class="inv-snapshot-stat-label">Products</span></div>';
+      if (_showFin) {
+        html += '<div class="inv-snapshot-stat"><span class="inv-snapshot-stat-value">$' + ((snap.total_value || 0) / 1000).toFixed(1) + 'k</span><span class="inv-snapshot-stat-label">Value</span></div>';
+      }
+      html += '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+async function invViewSnapshotDetail(date) {
+  invSnapshotDetailDate = date;
+  invSnapshotCompare = null;
+  invRender();
+}
+
+async function invRenderSnapshotDetail() {
+  try {
+    var locParam = invSelectedLocation ? '&location_id=' + invSelectedLocation : '';
+    var resp = await invAPI.get('/api/inventory/snapshots/' + invSnapshotDetailDate + '?x=1' + locParam, { headers: invHeaders() });
+    invSnapshotDetail = resp.data;
+  } catch(e) {
+    return '<div style="padding:24px;color:#DC2626">Failed to load snapshot: ' + (e.response?.data?.error || e.message) + '</div>';
+  }
+
+  var d = invSnapshotDetail;
+  var dt = new Date(invSnapshotDetailDate + 'T12:00:00');
+  var dateStr = dt.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  var _showFin = invCanViewFin();
+
+  var html = '<div class="inv-section">';
+  html += '<div class="inv-section-header">';
+  html += '<div>';
+  html += '<button class="inv-btn inv-btn-secondary" onclick="invSnapshotDetailDate=null;invSnapshotDetail=null;invRender()" style="margin-bottom:8px"><i class="fas fa-arrow-left"></i> Back to Snapshots</button>';
+  html += '<h2 style="margin:0;font-size:18px;font-weight:700;color:#111"><i class="fas fa-camera" style="color:#7C3AED"></i> Snapshot: ' + dateStr + '</h2>';
+  html += '</div></div>';
+
+  // Summary cards
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px">';
+  html += '<div class="inv-stat-card"><div class="inv-stat-value">' + (d.summary.totalItems || 0) + '</div><div class="inv-stat-label">Products</div></div>';
+  html += '<div class="inv-stat-card"><div class="inv-stat-value">' + (d.summary.totalQty || 0).toLocaleString() + '</div><div class="inv-stat-label">Total Units</div></div>';
+  if (_showFin) {
+    html += '<div class="inv-stat-card"><div class="inv-stat-value">$' + (d.summary.totalValue || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + '</div><div class="inv-stat-label">Total Value</div></div>';
+  }
+  html += '</div>';
+
+  // By category
+  if (d.byCategory && d.byCategory.length > 0) {
+    html += '<h3 style="font-size:14px;font-weight:700;color:#374151;margin:16px 0 8px"><i class="fas fa-tags"></i> By Category</h3>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:20px">';
+    d.byCategory.sort(function(a,b) { return (b.qty||0)-(a.qty||0); });
+    for (var i = 0; i < d.byCategory.length; i++) {
+      var cat = d.byCategory[i];
+      html += '<div style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:8px;padding:10px">';
+      html += '<div style="font-weight:600;font-size:13px;color:#111;text-transform:capitalize">' + (cat.category || 'Uncategorized') + '</div>';
+      html += '<div style="font-size:12px;color:#6B7280;margin-top:2px">' + cat.products + ' products &middot; ' + (cat.qty || 0).toLocaleString() + ' units';
+      if (_showFin) html += ' &middot; $' + (cat.value || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+      html += '</div></div>';
+    }
+    html += '</div>';
+  }
+
+  // Item table
+  html += '<h3 style="font-size:14px;font-weight:700;color:#374151;margin:16px 0 8px"><i class="fas fa-list"></i> All Items (' + (d.items || []).length + ')</h3>';
+  html += '<div style="overflow-x:auto"><table class="inv-table"><thead><tr>';
+  html += '<th>Product</th><th>Category</th><th>Location</th><th style="text-align:right">On Hand</th><th style="text-align:right">On Hold</th><th style="text-align:right">Available</th>';
+  if (_showFin) html += '<th style="text-align:right">Unit Cost</th><th style="text-align:right">Total Value</th>';
+  html += '</tr></thead><tbody>';
+
+  if (!d.items || d.items.length === 0) {
+    html += '<tr><td colspan="' + (_showFin ? 8 : 6) + '" style="text-align:center;color:#9CA3AF;padding:20px">No items in this snapshot</td></tr>';
+  } else {
+    for (var i = 0; i < d.items.length; i++) {
+      var item = d.items[i];
+      html += '<tr>';
+      html += '<td style="font-weight:600">' + (item.product_name || 'Unknown') + '</td>';
+      html += '<td><span style="text-transform:capitalize;font-size:12px;color:#6B7280">' + (item.category || '-') + '</span></td>';
+      html += '<td>' + (item.location_name || 'Loc #' + item.location_id) + '</td>';
+      html += '<td style="text-align:right;font-weight:600">' + (item.qty_on_hand || 0).toLocaleString() + '</td>';
+      html += '<td style="text-align:right;color:#D97706">' + (item.qty_on_hold || 0) + '</td>';
+      html += '<td style="text-align:right;color:#059669">' + (item.qty_available || 0).toLocaleString() + '</td>';
+      if (_showFin) {
+        html += '<td style="text-align:right">$' + (item.unit_cost || 0).toFixed(2) + '</td>';
+        html += '<td style="text-align:right;font-weight:600">$' + (item.total_value || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>';
+      }
+      html += '</tr>';
+    }
+  }
+  html += '</tbody></table></div>';
+  html += '</div>';
+  return html;
+}
+
+// Compare two snapshots
+function invSnapshotCompareStart() {
+  if (invSnapshotList.length < 2) {
+    invToast('Need at least 2 snapshots to compare', 'error');
+    return;
+  }
+  // Default: compare yesterday to today (or last two available)
+  var dateA = invSnapshotList.length > 1 ? invSnapshotList[1].snapshot_date : invSnapshotList[0].snapshot_date;
+  var dateB = invSnapshotList[0].snapshot_date;
+
+  var html = '<div style="padding:16px">';
+  html += '<h3 style="margin:0 0 12px;font-size:15px;font-weight:700"><i class="fas fa-code-compare" style="color:#7C3AED"></i> Compare Snapshots</h3>';
+  html += '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">';
+  html += '<div><label style="font-size:12px;font-weight:600;color:#6B7280;display:block;margin-bottom:4px">From</label>';
+  html += '<select id="inv-compare-from" style="padding:8px;border:1px solid #D1D5DB;border-radius:6px;font-size:13px">';
+  for (var i = 0; i < invSnapshotList.length; i++) {
+    html += '<option value="' + invSnapshotList[i].snapshot_date + '"' + (invSnapshotList[i].snapshot_date === dateA ? ' selected' : '') + '>' + invSnapshotList[i].snapshot_date + '</option>';
+  }
+  html += '</select></div>';
+  html += '<div style="font-size:20px;color:#9CA3AF;padding-top:18px"><i class="fas fa-arrow-right"></i></div>';
+  html += '<div><label style="font-size:12px;font-weight:600;color:#6B7280;display:block;margin-bottom:4px">To</label>';
+  html += '<select id="inv-compare-to" style="padding:8px;border:1px solid #D1D5DB;border-radius:6px;font-size:13px">';
+  for (var i = 0; i < invSnapshotList.length; i++) {
+    html += '<option value="' + invSnapshotList[i].snapshot_date + '"' + (invSnapshotList[i].snapshot_date === dateB ? ' selected' : '') + '>' + invSnapshotList[i].snapshot_date + '</option>';
+  }
+  html += '</select></div>';
+  html += '<button class="inv-btn" style="margin-top:18px" onclick="invDoCompare()"><i class="fas fa-code-compare"></i> Compare</button>';
+  html += '</div></div>';
+
+  invShowModal('Compare Snapshots', html);
+}
+
+async function invDoCompare() {
+  var dateA = document.getElementById('inv-compare-from')?.value;
+  var dateB = document.getElementById('inv-compare-to')?.value;
+  if (!dateA || !dateB) return;
+  if (dateA === dateB) { invToast('Select different dates', 'error'); return; }
+  invCloseModal();
+  invSnapshotCompare = { from: dateA, to: dateB };
+  invSnapshotDetailDate = null;
+  invRender();
+}
+
+async function invRenderSnapshotCompareView() {
+  var comp = invSnapshotCompare;
+  var locParam = invSelectedLocation ? '&location_id=' + invSelectedLocation : '';
+  var _showFin = invCanViewFin();
+  var data;
+  try {
+    var resp = await invAPI.get('/api/inventory/snapshot-compare?from=' + comp.from + '&to=' + comp.to + locParam, { headers: invHeaders() });
+    data = resp.data;
+  } catch(e) {
+    return '<div style="padding:24px;color:#DC2626">Compare failed: ' + (e.response?.data?.error || e.message) + '</div>';
+  }
+
+  var html = '<div class="inv-section">';
+  html += '<div class="inv-section-header">';
+  html += '<div>';
+  html += '<button class="inv-btn inv-btn-secondary" onclick="invSnapshotCompare=null;invRender()" style="margin-bottom:8px"><i class="fas fa-arrow-left"></i> Back to Snapshots</button>';
+  html += '<h2 style="margin:0;font-size:18px;font-weight:700;color:#111"><i class="fas fa-code-compare" style="color:#7C3AED"></i> Comparison: ' + comp.from + ' → ' + comp.to + '</h2>';
+  html += '</div></div>';
+
+  // Summary
+  var s = data.summary;
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px">';
+  html += '<div class="inv-stat-card"><div class="inv-stat-value">' + (s.totalQtyFrom || 0).toLocaleString() + ' → ' + (s.totalQtyTo || 0).toLocaleString() + '</div><div class="inv-stat-label">Total Units <span style="color:' + (s.qtyChange >= 0 ? '#059669' : '#DC2626') + ';font-weight:700">(' + (s.qtyChange >= 0 ? '+' : '') + s.qtyChange.toLocaleString() + ')</span></div></div>';
+  if (_showFin) {
+    html += '<div class="inv-stat-card"><div class="inv-stat-value" style="font-size:14px">$' + (s.totalValueFrom || 0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0}) + ' → $' + (s.totalValueTo || 0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0}) + '</div><div class="inv-stat-label">Total Value <span style="color:' + (s.valueChange >= 0 ? '#059669' : '#DC2626') + ';font-weight:700">(' + (s.valueChange >= 0 ? '+$' : '-$') + Math.abs(s.valueChange).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2}) + ')</span></div></div>';
+  }
+  html += '<div class="inv-stat-card"><div class="inv-stat-value">' + (s.productsChanged || 0) + '</div><div class="inv-stat-label">Products Changed</div></div>';
+  html += '</div>';
+
+  // Changes table
+  html += '<h3 style="font-size:14px;font-weight:700;color:#374151;margin:16px 0 8px"><i class="fas fa-exchange-alt"></i> Changes (' + data.changes.length + ')</h3>';
+  if (data.changes.length === 0) {
+    html += '<div style="padding:24px;text-align:center;color:#9CA3AF">No changes between these dates</div>';
+  } else {
+    html += '<div style="overflow-x:auto"><table class="inv-table"><thead><tr>';
+    html += '<th>Product</th><th>Category</th><th style="text-align:right">' + comp.from + '</th><th style="text-align:right">' + comp.to + '</th><th style="text-align:right">Change</th>';
+    if (_showFin) html += '<th style="text-align:right">Value Change</th>';
+    html += '</tr></thead><tbody>';
+    for (var i = 0; i < data.changes.length; i++) {
+      var ch = data.changes[i];
+      var color = ch.qty_change > 0 ? '#059669' : '#DC2626';
+      var icon = ch.qty_change > 0 ? 'fa-arrow-up' : 'fa-arrow-down';
+      html += '<tr>';
+      html += '<td style="font-weight:600">' + (ch.product_name || 'Product #' + ch.product_id) + '</td>';
+      html += '<td style="text-transform:capitalize;font-size:12px;color:#6B7280">' + (ch.category || '-') + '</td>';
+      html += '<td style="text-align:right">' + (ch.qty_from || 0).toLocaleString() + '</td>';
+      html += '<td style="text-align:right;font-weight:600">' + (ch.qty_to || 0).toLocaleString() + '</td>';
+      html += '<td style="text-align:right;color:' + color + ';font-weight:700"><i class="fas ' + icon + '" style="font-size:10px"></i> ' + (ch.qty_change > 0 ? '+' : '') + ch.qty_change.toLocaleString() + '</td>';
+      if (_showFin) {
+        var vc = ch.value_change || 0;
+        html += '<td style="text-align:right;color:' + (vc >= 0 ? '#059669' : '#DC2626') + '">' + (vc >= 0 ? '+$' : '-$') + Math.abs(vc).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>';
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+// Take a snapshot manually
+async function invTakeSnapshotNow() {
+  if (!confirm('Take an inventory snapshot now? This captures the current state of all stock levels.')) return;
+  try {
+    var resp = await invAPI.post('/api/inventory/snapshot', {}, { headers: invHeaders() });
+    if (resp.data.skipped) {
+      invToast('Snapshot for today already exists', 'info');
+    } else {
+      invToast('Snapshot taken! ' + (resp.data.items_captured || 0) + ' items captured.');
+    }
+    invRender();
+  } catch(e) {
+    invToast('Snapshot failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
 }

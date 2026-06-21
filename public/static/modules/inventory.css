@@ -1262,3 +1262,91 @@
   pointer-events: none;
   opacity: 0.7;
 }
+
+/* ==================== SNAPSHOTS ==================== */
+.inv-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  padding: 4px 0;
+}
+.inv-snapshot-card {
+  background: #fff;
+  border: 1px solid #E5E7EB;
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.inv-snapshot-card:hover {
+  border-color: #7C3AED;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.12);
+  transform: translateY(-1px);
+}
+.inv-snapshot-card.today {
+  border-color: #7C3AED;
+  background: linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%);
+}
+.inv-snapshot-date {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.inv-snapshot-day {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.inv-snapshot-monthday {
+  font-size: 15px;
+  font-weight: 700;
+  color: #111827;
+}
+.inv-snapshot-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.inv-snapshot-badge.today {
+  background: #7C3AED;
+  color: #fff;
+}
+.inv-snapshot-badge.yesterday {
+  background: #E5E7EB;
+  color: #374151;
+}
+.inv-snapshot-stats {
+  display: flex;
+  gap: 16px;
+}
+.inv-snapshot-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.inv-snapshot-stat-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: #111827;
+}
+.inv-snapshot-stat-label {
+  font-size: 11px;
+  color: #9CA3AF;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+@media (max-width: 600px) {
+  .inv-snapshot-grid {
+    grid-template-columns: 1fr;
+  }
+}
