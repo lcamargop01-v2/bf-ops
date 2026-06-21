@@ -319,7 +319,7 @@ function renderCategories() {
   var html = '<button class="pos-cat-pill ' + (!_s.currentCat ? 'active' : '') + '" data-cat="">All</button>';
   _s.categories.forEach(function(c) {
     if (!c.category) return;
-    html += '<button class="pos-cat-pill ' + (_s.currentCat === c.category ? 'active' : '') + '" data-cat="' + esc(c.category) + '">' + esc(c.category) + ' <small style="opacity:0.6">(' + c.count + ')</small></button>';
+    html += '<button class="pos-cat-pill ' + (_s.currentCat === c.category ? 'active' : '') + '" data-cat="' + escAttr(c.category) + '">' + esc(c.category) + ' <small style="opacity:0.6">(' + c.count + ')</small></button>';
   });
   el.innerHTML = html;
 
@@ -425,12 +425,12 @@ function checkStockWarning(item) {
           // Found stock elsewhere
           var otherLoc = stockData.other_locations[0];
           var msg = '<strong>' + esc(item.name) + '</strong>: Out of stock here, but <strong>' + otherLoc.available + '</strong> available at <strong>' + esc(otherLoc.location_name) + '</strong>.' +
-            ' <button class="pos-stock-action-btn transfer" data-xfer-pid="' + item.product_id + '" data-xfer-name="' + esc(item.name) + '" data-xfer-from="' + otherLoc.location_id + '" data-xfer-fromname="' + esc(otherLoc.location_name) + '" data-xfer-avail="' + otherLoc.available + '"><i class="fas fa-arrows-left-right"></i> Request Transfer</button>';
+            ' <button class="pos-stock-action-btn transfer" data-xfer-pid="' + item.product_id + '" data-xfer-name="' + escAttr(item.name) + '" data-xfer-from="' + otherLoc.location_id + '" data-xfer-fromname="' + escAttr(otherLoc.location_name) + '" data-xfer-avail="' + otherLoc.available + '"><i class="fas fa-arrows-left-right"></i> Request Transfer</button>';
           _s.warnings.push({ product_id: item.product_id, type: 'error', message: msg });
         } else {
           // No stock anywhere
           var msg2 = '<strong>' + esc(item.name) + '</strong>: <span style="color:var(--pos-red)">Out of stock everywhere.</span>' +
-            ' <button class="pos-stock-action-btn purchase" data-purch-pid="' + item.product_id + '" data-purch-name="' + esc(item.name) + '"><i class="fas fa-cart-plus"></i> Request Purchase for Customer</button>';
+            ' <button class="pos-stock-action-btn purchase" data-purch-pid="' + item.product_id + '" data-purch-name="' + escAttr(item.name) + '"><i class="fas fa-cart-plus"></i> Request Purchase for Customer</button>';
           _s.warnings.push({ product_id: item.product_id, type: 'error', message: msg2 });
         }
         renderWarnings();
@@ -865,12 +865,14 @@ function posConfirmPurchaseRequest(productId, productName) {
     '</div>' +
   '</div>';
 
+  _s._pendingPurchName = productName;
   showModal('<i class="fas fa-cart-plus"></i> Request Purchase — ' + esc(productName), body,
     '<button class="pos-btn" onclick="closeModal()" style="margin-right:8px">Cancel</button>' +
-    '<button class="pos-btn pos-btn-pay" onclick="posDoPurchaseRequest(' + productId + ',\'' + esc(productName).replace(/'/g, "\\'") + '\')"><i class="fas fa-paper-plane"></i> Submit Purchase Request</button>');
+    '<button class="pos-btn pos-btn-pay" onclick="posDoPurchaseRequest(' + productId + ')"><i class="fas fa-paper-plane"></i> Submit Purchase Request</button>');
 }
 
-function posDoPurchaseRequest(productId, productName) {
+function posDoPurchaseRequest(productId) {
+  var productName = _s._pendingPurchName || 'Product #' + productId;
   var qty = parseInt(document.getElementById('posPurchQty').value);
   if (!qty || qty < 1) { toast('Enter a valid quantity', 'error'); return; }
   var urgency = document.getElementById('posPurchUrgency').value;
@@ -1681,7 +1683,7 @@ function loadDashboard() {
         '<table class="pos-table"><thead><tr><th>Product</th><th>Location</th><th class="right">Available</th><th class="right">Reorder</th><th></th></tr></thead><tbody>';
       d.lowStock.forEach(function(s) {
         html += '<tr><td>' + esc(s.name) + '</td><td>' + esc(s.location||'') + '</td><td class="right" style="color:var(--pos-red);font-weight:700">' + fmtN(s.qty_available) + '</td><td class="right">' + fmtN(s.reorder_point) + '</td>' +
-          '<td><button class="pos-btn pos-btn-sm" data-req-product="' + s.id + '" data-req-name="' + esc(s.name) + '" data-req-stock="' + (s.qty_available||0) + '" data-req-reorder="' + (s.reorder_point||0) + '" style="font-size:10px"><i class="fas fa-paper-plane"></i></button></td></tr>';
+          '<td><button class="pos-btn pos-btn-sm" data-req-product="' + s.id + '" data-req-name="' + escAttr(s.name) + '" data-req-stock="' + (s.qty_available||0) + '" data-req-reorder="' + (s.reorder_point||0) + '" style="font-size:10px"><i class="fas fa-paper-plane"></i></button></td></tr>';
       });
       html += '</tbody></table></div>';
       window._dashLowStock = d.lowStock;
@@ -2331,7 +2333,7 @@ function showTagSuggestions() {
 
   sg.style.display = 'block';
   sg.innerHTML = available.map(function(t) {
-    return '<div class="pos-cust-tag-sug" data-tag="' + esc(t) + '">' + esc(t) + '</div>';
+    return '<div class="pos-cust-tag-sug" data-tag="' + escAttr(t) + '">' + esc(t) + '</div>';
   }).join('');
 
   sg.querySelectorAll('.pos-cust-tag-sug').forEach(function(el) {
@@ -3765,7 +3767,7 @@ function loadStatements() {
             '<div class="pos-stmt-card-info">' + (c.statement_count || 0) + ' statements' + (c.last_statement_period ? ' &middot; Last: ' + c.last_statement_period : '') + '</div>' +
           '</div>' +
           '<div class="pos-stmt-card-actions">' +
-            '<button class="pos-btn pos-btn-sm" data-gen-stmt="' + c.id + '" data-gen-name="' + esc(c.business_name || c.contact_name) + '"><i class="fas fa-file-circle-plus"></i> Generate</button>' +
+            '<button class="pos-btn pos-btn-sm" data-gen-stmt="' + c.id + '" data-gen-name="' + escAttr(c.business_name || c.contact_name) + '"><i class="fas fa-file-circle-plus"></i> Generate</button>' +
             '<button class="pos-btn pos-btn-sm" data-view-stmts="' + c.id + '"><i class="fas fa-list"></i> History</button>' +
           '</div>' +
         '</div>';
@@ -4312,6 +4314,7 @@ function openCRMLink(custId) {
 
 // ==================== UTILITY ====================
 function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function escAttr(s) { return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function fmtN(v) { return (v || 0).toLocaleString(); }
 function initials(name) { return (name || '?').split(' ').map(function(w) { return w[0]; }).join('').substring(0, 2).toUpperCase(); }
 function fld(label, value) { return '<div class="pos-cust-field"><span class="pos-cust-field-label">' + label + '</span><span class="pos-cust-field-value">' + (value || '-') + '</span></div>'; }
