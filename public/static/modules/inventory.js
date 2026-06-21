@@ -199,6 +199,11 @@ async function invRender() {
     var html = await invRenderSnapshotsPage();
     root = document.getElementById('inventory-app'); if (!root) return;
     root.innerHTML = invRenderNav() + html;
+  } else if (invPage === 'order_assignments') {
+    root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Loading assignments...</div>';
+    var html = await invRenderOrderAssignments();
+    root = document.getElementById('inventory-app'); if (!root) return;
+    root.innerHTML = invRenderNav() + html;
   }
   } catch(err) {
     console.error('[Inventory] render error:', err);
@@ -221,7 +226,8 @@ function invRenderNav() {
 
     { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' },
     { id: 'snapshots', icon: 'fa-camera', label: 'Snapshots' },
-    { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' }
+    { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' },
+    { id: 'order_assignments', icon: 'fa-user-gear', label: 'Order Assignments' }
   ];
   // Filter by role permissions
   var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
@@ -649,15 +655,23 @@ async function invRenderTransfers() {
 }
 
 function invTransferActions(t) {
+  var btns = '';
   if (t.status === 'pending') {
-    return '<button class="inv-btn inv-btn-xs inv-btn-primary" onclick="event.stopPropagation();invShipTransfer(' + t.id + ')"><i class="fas fa-truck"></i> Ship</button> ' +
-      '<button class="inv-btn inv-btn-xs inv-btn-danger" onclick="event.stopPropagation();invCancelTransfer(' + t.id + ')"><i class="fas fa-times"></i></button>';
+    btns += '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowTransferChecklist(' + t.id + ')" title="Checklist"><i class="fas fa-clipboard-check"></i></button> ';
+    btns += '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invPrintTransferPackingList(' + t.id + ')" title="Print"><i class="fas fa-print"></i></button> ';
+    btns += '<button class="inv-btn inv-btn-xs inv-btn-primary" onclick="event.stopPropagation();invShipTransfer(' + t.id + ')"><i class="fas fa-truck"></i> Ship</button> ';
+    btns += '<button class="inv-btn inv-btn-xs inv-btn-danger" onclick="event.stopPropagation();invCancelTransfer(' + t.id + ')"><i class="fas fa-times"></i></button>';
+  } else if (t.status === 'in_transit') {
+    btns += '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowTransferChecklist(' + t.id + ')" title="Checklist"><i class="fas fa-clipboard-check"></i></button> ';
+    btns += '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invPrintTransferPackingList(' + t.id + ')" title="Print"><i class="fas fa-print"></i></button> ';
+    btns += '<button class="inv-btn inv-btn-xs inv-btn-success" onclick="event.stopPropagation();invReceiveTransfer(' + t.id + ')"><i class="fas fa-check"></i> Receive</button> ';
+    btns += '<button class="inv-btn inv-btn-xs inv-btn-danger" onclick="event.stopPropagation();invCancelTransfer(' + t.id + ')"><i class="fas fa-times"></i></button>';
+  } else if (t.status === 'cancelled') {
+    btns = '<span class="inv-status inv-status-danger" style="font-size:11px"><i class="fas fa-ban"></i> Cancelled</span>';
+  } else if (t.status === 'received') {
+    btns += '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invPrintTransferPackingList(' + t.id + ')" title="Print"><i class="fas fa-print"></i></button>';
   }
-  if (t.status === 'in_transit') {
-    return '<button class="inv-btn inv-btn-xs inv-btn-success" onclick="event.stopPropagation();invReceiveTransfer(' + t.id + ')"><i class="fas fa-check"></i> Receive</button> ' +
-      '<button class="inv-btn inv-btn-xs inv-btn-danger" onclick="event.stopPropagation();invCancelTransfer(' + t.id + ')"><i class="fas fa-times"></i></button>';
-  }
-  return '';
+  return btns;
 }
 
 async function invShipTransfer(id) {
@@ -1327,9 +1341,159 @@ async function invShowTransferDetail(id) {
     });
     body += '</tbody></table>';
 
+    // Add packing list / checklist buttons
+    var extraBtns = '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">' +
+      '<button class="inv-btn inv-btn-outline" onclick="invCloseModal();invShowTransferChecklist(' + t.id + ')"><i class="fas fa-clipboard-check"></i> Checklist</button>' +
+      '<button class="inv-btn inv-btn-outline" onclick="invPrintTransferPackingList(' + t.id + ')"><i class="fas fa-print"></i> Print Packing List</button>' +
+      '</div>';
+    body += extraBtns;
+
     invShowModal('<i class="fas fa-truck-ramp-box"></i> Transfer Detail', body, invTransferActions(t));
   } catch(e) { invToast('Failed to load transfer', 'error'); }
 }
+window.invShowTransferDetail = invShowTransferDetail;
+
+// ==================== TRANSFER CHECKLIST ====================
+
+async function invShowTransferChecklist(transferId) {
+  try {
+    var resp = await invAPI.get('/api/inventory/transfers/' + transferId + '/checklist', { headers: invHeaders() });
+    var t = resp.data.transfer;
+    var items = resp.data.items || [];
+    var totalItems = resp.data.totalItems;
+    var checkedItems = resp.data.checkedItems;
+
+    var html = '<div class="inv-transfer-checklist">';
+    html += '<div class="inv-section-header">';
+    html += '<div><h2><i class="fas fa-clipboard-check"></i> Transfer Checklist</h2>';
+    html += '<p class="inv-muted">' + invEsc(t.transfer_number) + ' &mdash; ' + invEsc(t.from_code || '') + ' → ' + invEsc(t.to_code || '') + '</p></div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    html += '<button class="inv-btn inv-btn-outline" onclick="invRender()"><i class="fas fa-arrow-left"></i> Back</button>';
+    html += '<button class="inv-btn inv-btn-outline" onclick="invPrintTransferPackingList(' + transferId + ')"><i class="fas fa-print"></i> Print</button>';
+    html += '</div></div>';
+
+    // Progress bar
+    var pct = totalItems > 0 ? Math.round((checkedItems / totalItems) * 100) : 0;
+    html += '<div class="inv-sr-stats" style="margin-bottom:16px"><div class="inv-sr-stat-card">' +
+      '<div style="font-size:24px;font-weight:700;color:' + (pct === 100 ? '#16A34A' : '#2563EB') + '">' + checkedItems + ' / ' + totalItems + '</div>' +
+      '<div class="inv-muted">Items Checked</div>' +
+      '<div style="background:#E5E7EB;border-radius:4px;height:8px;margin-top:8px;overflow:hidden">' +
+      '<div style="background:' + (pct === 100 ? '#16A34A' : '#2563EB') + ';height:100%;width:' + pct + '%;transition:width .3s"></div></div>' +
+      '</div></div>';
+
+    if (checkedItems < totalItems) {
+      html += '<div style="margin-bottom:12px"><button class="inv-btn inv-btn-primary" onclick="invTransferCheckAll(' + transferId + ')"><i class="fas fa-check-double"></i> Check All</button> ';
+      html += '<button class="inv-btn inv-btn-outline inv-btn-danger" onclick="invTransferChecklistReset(' + transferId + ')"><i class="fas fa-rotate-left"></i> Reset</button></div>';
+    } else if (totalItems > 0) {
+      html += '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:12px;margin-bottom:16px;text-align:center">' +
+        '<i class="fas fa-circle-check" style="color:#16A34A;font-size:24px"></i><br>' +
+        '<strong style="color:#16A34A">All items checked!</strong>' +
+        (t.status === 'pending' ? '<br><button class="inv-btn inv-btn-primary" style="margin-top:8px" onclick="invShipTransfer(' + transferId + ')"><i class="fas fa-truck"></i> Ship Transfer</button>' : '') +
+        '</div>';
+      html += '<button class="inv-btn inv-btn-outline inv-btn-danger" onclick="invTransferChecklistReset(' + transferId + ')"><i class="fas fa-rotate-left"></i> Reset</button> ';
+    }
+
+    // Items list
+    html += '<div class="inv-transfer-checklist-items">';
+    items.forEach(function(item) {
+      var checked = item.checked ? ' inv-tcl-checked' : '';
+      html += '<div class="inv-tcl-item' + checked + '" onclick="invToggleTransferCheckItem(' + item.id + ',' + transferId + ')">' +
+        '<div class="inv-tcl-checkbox"><i class="fas ' + (item.checked ? 'fa-square-check' : 'fa-square') + '"></i></div>' +
+        '<div class="inv-tcl-info">' +
+          '<strong>' + invEsc(item.product_name) + '</strong>' +
+          (item.sku ? '<span class="inv-muted"> (' + invEsc(item.sku) + ')</span>' : '') +
+          '<div class="inv-muted">Qty: <strong>' + item.qty_requested + '</strong> ' + invEsc(item.unit_type || '') + '</div>' +
+        '</div>' +
+        (item.checked_by_name ? '<div class="inv-tcl-who inv-muted"><i class="fas fa-user-check"></i> ' + invEsc(item.checked_by_name) + '</div>' : '') +
+        '</div>';
+    });
+    html += '</div></div>';
+
+    var root = document.getElementById('inventory-app');
+    if (root) root.innerHTML = invRenderNav() + html;
+  } catch(e) { invToast('Failed to load checklist: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.invShowTransferChecklist = invShowTransferChecklist;
+
+async function invToggleTransferCheckItem(itemId, transferId) {
+  try {
+    await invAPI.put('/api/inventory/transfer-checklist/' + itemId + '/toggle', {}, { headers: invHeaders() });
+    invShowTransferChecklist(transferId);
+  } catch(e) { invToast('Toggle failed', 'error'); }
+}
+window.invToggleTransferCheckItem = invToggleTransferCheckItem;
+
+async function invTransferCheckAll(transferId) {
+  try {
+    await invAPI.post('/api/inventory/transfers/' + transferId + '/checklist/check-all', {}, { headers: invHeaders() });
+    invShowTransferChecklist(transferId);
+  } catch(e) { invToast('Check all failed', 'error'); }
+}
+window.invTransferCheckAll = invTransferCheckAll;
+
+async function invTransferChecklistReset(transferId) {
+  if (!confirm('Reset all checks for this transfer?')) return;
+  try {
+    await invAPI.post('/api/inventory/transfers/' + transferId + '/checklist/reset', {}, { headers: invHeaders() });
+    invShowTransferChecklist(transferId);
+  } catch(e) { invToast('Reset failed', 'error'); }
+}
+window.invTransferChecklistReset = invTransferChecklistReset;
+
+function invPrintTransferPackingList(transferId) {
+  invAPI.get('/api/inventory/transfers/' + transferId + '/checklist', { headers: invHeaders() }).then(function(resp) {
+    var t = resp.data.transfer;
+    var items = resp.data.items || [];
+    var w = window.open('', '_blank');
+    if (!w) { invToast('Pop-up blocked', 'error'); return; }
+
+    var html = '<!DOCTYPE html><html><head><title>Transfer Packing List - ' + invEsc(t.transfer_number) + '</title>' +
+      '<style>' +
+      'body { font-family: Arial, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }' +
+      'h1 { font-size: 20px; margin-bottom: 4px; }' +
+      '.meta { color: #666; font-size: 13px; margin-bottom: 16px; }' +
+      '.info-row { display: flex; gap: 24px; margin-bottom: 8px; font-size: 14px; }' +
+      '.info-row strong { min-width: 60px; }' +
+      'table { width: 100%; border-collapse: collapse; margin-top: 16px; }' +
+      'th, td { border: 1px solid #ccc; padding: 8px 10px; text-align: left; font-size: 13px; }' +
+      'th { background: #F3F4F6; font-weight: 600; }' +
+      '.check-col { width: 40px; text-align: center; }' +
+      '.qty-col { width: 60px; text-align: center; }' +
+      '.sig-line { margin-top: 40px; display: flex; gap: 40px; }' +
+      '.sig-line div { flex: 1; border-top: 1px solid #333; padding-top: 4px; font-size: 12px; color: #666; }' +
+      '@media print { body { padding: 10px; } }' +
+      '</style></head><body>' +
+      '<h1><i>📦</i> Transfer Packing List</h1>' +
+      '<div class="meta">Transfer ' + invEsc(t.transfer_number) + ' &bull; Generated ' + new Date().toLocaleDateString() + '</div>' +
+      '<div class="info-row"><strong>From:</strong> ' + invEsc(t.from_name || t.from_code || '') + '</div>' +
+      '<div class="info-row"><strong>To:</strong> ' + invEsc(t.to_name || t.to_code || '') + '</div>' +
+      '<div class="info-row"><strong>Status:</strong> ' + invEsc(t.status) + '</div>' +
+      (t.notes ? '<div class="info-row"><strong>Notes:</strong> ' + invEsc(t.notes) + '</div>' : '') +
+      '<table><thead><tr><th class="check-col">✓</th><th>Product</th><th>SKU</th><th class="qty-col">Qty</th><th>Unit</th><th>Notes</th></tr></thead><tbody>';
+
+    items.forEach(function(item) {
+      html += '<tr>' +
+        '<td class="check-col">☐</td>' +
+        '<td>' + invEsc(item.product_name) + '</td>' +
+        '<td>' + invEsc(item.sku || '') + '</td>' +
+        '<td class="qty-col">' + item.qty_requested + '</td>' +
+        '<td>' + invEsc(item.unit_type || '') + '</td>' +
+        '<td></td></tr>';
+    });
+
+    html += '</tbody></table>' +
+      '<div class="sig-line">' +
+      '<div>Packed by / Date</div>' +
+      '<div>Verified by / Date</div>' +
+      '<div>Received by / Date</div>' +
+      '</div></body></html>';
+
+    w.document.write(html);
+    w.document.close();
+    setTimeout(function() { w.print(); }, 500);
+  }).catch(function(e) { invToast('Failed to load packing list', 'error'); });
+}
+window.invPrintTransferPackingList = invPrintTransferPackingList;
 
 // Report Loss modal
 function invShowReportLoss() {
@@ -3099,3 +3263,126 @@ async function invTakeSnapshotNow() {
     invToast('Snapshot failed: ' + (e.response?.data?.error || e.message), 'error');
   }
 }
+
+// ==================== ORDER ASSIGNMENTS (per category) ====================
+
+var _oaData = null;
+
+async function invRenderOrderAssignments() {
+  try {
+    var resp = await invAPI.get('/api/inventory/category-assignments', { headers: invHeaders() });
+    _oaData = resp.data;
+  } catch(e) {
+    return '<div class="inv-section"><div class="inv-empty"><i class="fas fa-exclamation-triangle" style="color:#DC2626;font-size:32px"></i><h3>Failed to load</h3><p>' + (e.response?.data?.error || e.message) + '</p></div></div>';
+  }
+
+  var assignments = _oaData.assignments || [];
+  var categories = _oaData.categories || [];
+  var users = _oaData.users || [];
+
+  // Group assignments by category
+  var byCategory = {};
+  categories.forEach(function(c) { byCategory[c] = []; });
+  assignments.forEach(function(a) {
+    if (!byCategory[a.category]) byCategory[a.category] = [];
+    byCategory[a.category].push(a);
+  });
+
+  var html = '<div class="inv-section">';
+  html += '<div class="inv-section-header"><h2><i class="fas fa-user-gear"></i> Order Assignments</h2>';
+  html += '<button class="inv-btn inv-btn-primary" onclick="invShowAddAssignment()"><i class="fas fa-plus"></i> Add Assignment</button>';
+  html += '</div>';
+  html += '<p class="inv-muted" style="margin-bottom:16px">Assign who is responsible for ordering each product category. When purchase requests are created, they will auto-assign to the person responsible for that category.</p>';
+
+  if (categories.length === 0) {
+    html += '<div class="inv-empty"><p>No product categories found. Add products first.</p></div>';
+  } else {
+    html += '<div class="inv-oa-grid">';
+    categories.forEach(function(cat) {
+      var catAssigns = byCategory[cat] || [];
+      var catLabel = cat.replace(/_/g, ' ');
+      catLabel = catLabel.charAt(0).toUpperCase() + catLabel.slice(1);
+
+      html += '<div class="inv-oa-card">';
+      html += '<div class="inv-oa-card-header"><strong>' + invEsc(catLabel) + '</strong></div>';
+      if (catAssigns.length === 0) {
+        html += '<div class="inv-oa-unassigned"><i class="fas fa-user-slash"></i> Unassigned</div>';
+      } else {
+        catAssigns.forEach(function(a) {
+          html += '<div class="inv-oa-person">' +
+            '<div><i class="fas fa-user"></i> <strong>' + invEsc(a.user_name || a.user_email || 'User #' + a.user_id) + '</strong>' +
+            (a.is_primary ? ' <span class="inv-status inv-status-success" style="font-size:10px">Primary</span>' : '') +
+            (a.notes ? '<br><span class="inv-muted" style="font-size:12px">' + invEsc(a.notes) + '</span>' : '') +
+            '</div>' +
+            '<button class="inv-btn inv-btn-xs inv-btn-danger" onclick="invRemoveAssignment(' + a.id + ')" title="Remove"><i class="fas fa-times"></i></button>' +
+            '</div>';
+        });
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function invShowAddAssignment() {
+  if (!_oaData) { invToast('Data not loaded', 'error'); return; }
+  var categories = _oaData.categories || [];
+  var users = _oaData.users || [];
+
+  var body = '<div class="inv-form-group"><label>Category</label><select id="invOaCategory" class="inv-select">' +
+    '<option value="">Select category...</option>';
+  categories.forEach(function(c) {
+    var label = c.replace(/_/g, ' ');
+    label = label.charAt(0).toUpperCase() + label.slice(1);
+    body += '<option value="' + invEsc(c) + '">' + invEsc(label) + '</option>';
+  });
+  body += '</select></div>';
+
+  body += '<div class="inv-form-group"><label>Assigned To</label><select id="invOaUser" class="inv-select">' +
+    '<option value="">Select person...</option>';
+  users.forEach(function(u) {
+    body += '<option value="' + u.id + '" data-name="' + invEsc(u.name) + '">' + invEsc(u.name) + ' (' + invEsc(u.role) + ')</option>';
+  });
+  body += '</select></div>';
+
+  body += '<div class="inv-form-group"><label><input type="checkbox" id="invOaPrimary" checked> Primary person for this category</label></div>';
+  body += '<div class="inv-form-group"><label>Notes (optional)</label><input id="invOaNotes" class="inv-input" placeholder="e.g. Handles all hay vendors"></div>';
+
+  var footer = '<button class="inv-btn inv-btn-primary" onclick="invDoAddAssignment()"><i class="fas fa-check"></i> Assign</button>';
+  invShowModal('<i class="fas fa-user-gear"></i> Assign Category', body, footer);
+}
+window.invShowAddAssignment = invShowAddAssignment;
+
+async function invDoAddAssignment() {
+  var category = document.getElementById('invOaCategory').value;
+  var userSel = document.getElementById('invOaUser');
+  var userId = parseInt(userSel.value);
+  var userName = userSel.options[userSel.selectedIndex]?.getAttribute('data-name') || '';
+  var isPrimary = document.getElementById('invOaPrimary').checked ? 1 : 0;
+  var notes = document.getElementById('invOaNotes').value;
+
+  if (!category || !userId) { invToast('Select category and person', 'warning'); return; }
+
+  try {
+    await invAPI.post('/api/inventory/category-assignments', {
+      category: category, user_id: userId, user_name: userName, is_primary: isPrimary, notes: notes
+    }, { headers: invHeaders() });
+    invToast('Assignment saved');
+    invCloseModal();
+    invRender();
+  } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.invDoAddAssignment = invDoAddAssignment;
+
+async function invRemoveAssignment(id) {
+  if (!confirm('Remove this assignment?')) return;
+  try {
+    await invAPI.delete('/api/inventory/category-assignments/' + id, { headers: invHeaders() });
+    invToast('Assignment removed');
+    invRender();
+  } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.invRemoveAssignment = invRemoveAssignment;

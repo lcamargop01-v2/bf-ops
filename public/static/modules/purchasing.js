@@ -185,7 +185,6 @@ function poRenderNav() {
     { id: 'dashboard', icon: 'fa-chart-line', label: 'Dashboard' },
     { id: 'orders', icon: 'fa-file-invoice', label: 'Orders' },
     { id: 'requests', icon: 'fa-hand', label: 'Requests' },
-    { id: 'pos_requests', icon: 'fa-cash-register', label: 'POS Requests' },
     { id: 'arriving', icon: 'fa-truck-moving', label: 'Arriving' },
     { id: 'bills', icon: 'fa-file-invoice-dollar', label: 'Bills' },
     { id: 'suppliers', icon: 'fa-building', label: 'Suppliers' }
@@ -2082,8 +2081,10 @@ async function poLoadRequests() {
   var url = '/api/purchasing/requests?';
   var statusFilter = document.getElementById('poReqStatusFilter');
   var urgencyFilter = document.getElementById('poReqUrgencyFilter');
+  var sourceFilter = document.getElementById('poReqSourceFilter');
   if (statusFilter && statusFilter.value) url += 'status=' + statusFilter.value + '&';
   if (urgencyFilter && urgencyFilter.value) url += 'urgency=' + urgencyFilter.value + '&';
+  if (sourceFilter && sourceFilter.value) url += 'source=' + sourceFilter.value + '&';
   if (poSelectedLocation) url += 'location_id=' + poSelectedLocation + '&';
   var resp = await poAPI.get(url, { headers: poHeaders() });
   poRequests = resp.data.requests || [];
@@ -2099,7 +2100,7 @@ function poRenderRequests() {
   var html = '<div class="po-orders-page">';
 
   // Toolbar
-  html += '<div class="po-toolbar">';
+  html += '<div class="po-toolbar" style="flex-wrap:wrap">';
   html += '<select id="poReqStatusFilter" onchange="poLoadAndRenderRequests()" class="po-select">' +
     '<option value="">All Statuses</option>' +
     ['pending','approved','rejected','converted','cancelled'].map(function(s) {
@@ -2108,6 +2109,10 @@ function poRenderRequests() {
   html += '<select id="poReqUrgencyFilter" onchange="poLoadAndRenderRequests()" class="po-select">' +
     '<option value="">All Urgency</option>' +
     '<option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option>' +
+    '</select>';
+  html += '<select id="poReqSourceFilter" onchange="poLoadAndRenderRequests()" class="po-select">' +
+    '<option value="">All Sources</option>' +
+    '<option value="manual">Manual</option><option value="pos">POS</option><option value="smart_restock">Smart Restock</option><option value="warehouse">Warehouse</option>' +
     '</select>';
   if (poCanEdit('requests')) html += '<button class="po-btn po-btn-primary" onclick="poShowNewRequest()"><i class="fas fa-plus"></i> New Request</button>';
   html += '</div>';
@@ -2120,15 +2125,20 @@ function poRenderRequests() {
   } else {
     // Desktop table
     html += '<div class="po-table-wrap po-desktop-only"><table class="po-table po-table-hover">';
-    html += '<thead><tr><th>Request #</th><th>Urgency</th><th>Type</th><th>Location</th><th>Items</th><th>Requested By</th><th>Status</th><th>Date</th></tr></thead><tbody>';
+    html += '<thead><tr><th>Request #</th><th>Urgency</th><th>Source</th><th>Location</th><th>Items</th><th>Requested By</th><th>Assigned To</th><th>Status</th><th>Date</th></tr></thead><tbody>';
     poRequests.forEach(function(r) {
+      var srcBadge = r.source === 'pos' ? '<span class="po-src-badge po-src-pos"><i class="fas fa-cash-register"></i> POS</span>' :
+        r.source === 'smart_restock' ? '<span class="po-src-badge po-src-sr"><i class="fas fa-wand-magic-sparkles"></i> Restock</span>' :
+        r.source === 'warehouse' ? '<span class="po-src-badge po-src-wh"><i class="fas fa-warehouse"></i> Warehouse</span>' :
+        '<span class="po-src-badge"><i class="fas fa-hand"></i> Manual</span>';
       html += '<tr class="po-clickable" onclick="poNav(\'request_detail\',' + r.id + ')">' +
         '<td><strong>' + poEsc(r.request_number) + '</strong></td>' +
         '<td><span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span></td>' +
-        '<td>' + (r.order_type ? '<span class="po-type-badge po-type-' + r.order_type + '">' + poTypeLabel(r.order_type) + '</span>' : '—') + '</td>' +
+        '<td>' + srcBadge + '</td>' +
         '<td><span class="po-loc-badge">' + poEsc(r.location_code) + '</span></td>' +
         '<td>' + (r.item_count || 0) + '</td>' +
         '<td>' + poEsc(r.requested_by_name || '—') + '</td>' +
+        '<td>' + (r.assigned_to_name ? '<i class="fas fa-user-check" style="color:#16A34A"></i> ' + poEsc(r.assigned_to_name) : '<span class="po-muted">—</span>') + '</td>' +
         '<td><span class="po-req-status-badge po-req-status-' + r.status + '">' + poReqStatusLabel(r.status) + '</span></td>' +
         '<td>' + poFormatDateTime(r.created_at) + '</td>' +
         '</tr>';
@@ -2138,6 +2148,10 @@ function poRenderRequests() {
     // Mobile cards
     html += '<div class="po-mobile-only po-order-cards">';
     poRequests.forEach(function(r) {
+      var srcBadge = r.source === 'pos' ? '<span class="po-src-badge po-src-pos"><i class="fas fa-cash-register"></i> POS</span>' :
+        r.source === 'smart_restock' ? '<span class="po-src-badge po-src-sr"><i class="fas fa-wand-magic-sparkles"></i> Restock</span>' :
+        r.source === 'warehouse' ? '<span class="po-src-badge po-src-wh"><i class="fas fa-warehouse"></i> Warehouse</span>' :
+        '<span class="po-src-badge"><i class="fas fa-hand"></i> Manual</span>';
       html += '<div class="po-order-card" onclick="poNav(\'request_detail\',' + r.id + ')">' +
         '<div class="po-order-card-top">' +
         '<div><strong>' + poEsc(r.request_number) + '</strong><br><span class="po-muted">' + poEsc(r.requested_by_name || 'Unknown') + '</span></div>' +
@@ -2145,9 +2159,10 @@ function poRenderRequests() {
         '</div>' +
         '<div class="po-order-card-meta">' +
         '<span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span>' +
-        (r.order_type ? '<span class="po-type-badge po-type-' + r.order_type + '">' + poTypeLabel(r.order_type) + '</span>' : '') +
+        srcBadge +
         '<span class="po-loc-badge">' + poEsc(r.location_code) + '</span>' +
         '</div>' +
+        (r.assigned_to_name ? '<div style="padding:2px 12px;font-size:12px"><i class="fas fa-user-check" style="color:#16A34A"></i> ' + poEsc(r.assigned_to_name) + '</div>' : '') +
         '<div class="po-order-card-nums">' +
         '<div><span class="po-muted">Items</span><strong>' + (r.item_count || 0) + '</strong></div>' +
         '<div><span class="po-muted">Requested</span><strong>' + poFormatDateTime(r.created_at) + '</strong></div>' +
@@ -2189,8 +2204,13 @@ function poRenderRequestDetail(data) {
   html += '<div class="po-detail-row"><span>Status</span><span class="po-req-status-badge po-req-status-' + r.status + '">' + poReqStatusLabel(r.status) + '</span></div>';
   html += '<div class="po-detail-row"><span>Urgency</span><span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span></div>';
   html += '<div class="po-detail-row"><span>Type</span><span>' + (r.order_type ? poTypeLabel(r.order_type) : '—') + '</span></div>';
+  var srcLabel = r.source === 'pos' ? '<i class="fas fa-cash-register"></i> POS' :
+    r.source === 'smart_restock' ? '<i class="fas fa-wand-magic-sparkles"></i> Smart Restock' :
+    r.source === 'warehouse' ? '<i class="fas fa-warehouse"></i> Warehouse' : '<i class="fas fa-hand"></i> Manual';
+  html += '<div class="po-detail-row"><span>Source</span><span>' + srcLabel + '</span></div>';
   html += '<div class="po-detail-row"><span>Location</span><span><span class="po-loc-badge">' + poEsc(r.location_code) + '</span> ' + poEsc(r.location_name) + '</span></div>';
   html += '<div class="po-detail-row"><span>Requested By</span><span>' + poEsc(r.requested_by_name || '—') + '</span></div>';
+  html += '<div class="po-detail-row"><span>Assigned To</span><span>' + (r.assigned_to_name ? '<i class="fas fa-user-check" style="color:#16A34A"></i> ' + poEsc(r.assigned_to_name) : '<span class="po-muted">Unassigned</span>') + '</span></div>';
   html += '<div class="po-detail-row"><span>Date</span><span>' + poFormatDateTime(r.created_at) + '</span></div>';
   if (r.reason) html += '<div class="po-detail-row"><span>Reason</span><span>' + poEsc(r.reason) + '</span></div>';
   if (r.notes) html += '<div class="po-detail-row"><span>Notes</span><span>' + poEsc(r.notes) + '</span></div>';

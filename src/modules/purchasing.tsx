@@ -1333,12 +1333,15 @@ function generateRequestNumber(): string {
   return `REQ-${ymd}-${rand}`
 }
 
-// List order requests
+// List order requests (includes POS-originated requests since they now go into same table)
 app.get('/api/purchasing/requests', async (c) => {
   const db = c.env.DB
   const status = c.req.query('status')
   const locationId = c.req.query('location_id')
   const urgency = c.req.query('urgency')
+  const source = c.req.query('source')
+  const assignedTo = c.req.query('assigned_to')
+  const category = c.req.query('category')
 
   let q = `SELECT r.*, l.name as location_name, l.code as location_code,
     (SELECT COUNT(*) FROM order_request_items WHERE request_id = r.id) as item_count
@@ -1349,6 +1352,12 @@ app.get('/api/purchasing/requests', async (c) => {
   if (status && status !== 'all') { q += ' AND r.status = ?'; binds.push(status) }
   if (locationId) { q += ' AND r.location_id = ?'; binds.push(parseInt(locationId)) }
   if (urgency) { q += ' AND r.urgency = ?'; binds.push(urgency) }
+  if (source) { q += ' AND r.source = ?'; binds.push(source) }
+  if (assignedTo) { q += ' AND CAST(r.assigned_to AS TEXT) = ?'; binds.push(assignedTo) }
+  if (category) {
+    q += ` AND r.id IN (SELECT ri.request_id FROM order_request_items ri JOIN products p ON ri.product_id = p.id WHERE p.category = ?)`
+    binds.push(category)
+  }
   q += ' ORDER BY CASE r.urgency WHEN \'critical\' THEN 0 WHEN \'high\' THEN 1 WHEN \'normal\' THEN 2 ELSE 3 END, r.created_at DESC'
 
   const result = await db.prepare(q).bind(...binds).all()
@@ -1398,20 +1407,38 @@ app.get('/api/purchasing/requests/:id', async (c) => {
   return c.json({ request, items: items.results || [] })
 })
 
-// Create order request (from warehouse / sales rep / inventory)
+// Create order request (from warehouse / sales rep / inventory / POS / smart restock)
 app.post('/api/purchasing/requests', async (c) => {
   const db = c.env.DB
   const user = getUserFromHeader(c)
   const body = await c.req.json()
-  const { location_id, order_type, urgency, reason, notes, items } = body
+  const { location_id, order_type, urgency, reason, notes, items, source } = body
 
   if (!location_id) return c.json({ error: 'Location required' }, 400)
   if (!items || !Array.isArray(items) || items.length === 0) return c.json({ error: 'At least one item required' }, 400)
 
+  // Auto-assign based on category of first item
+  let assignedTo: number | null = null
+  let assignedToName: string | null = null
+  if (items[0]?.product_id) {
+    try {
+      const prod = await db.prepare('SELECT category FROM products WHERE id = ?').bind(items[0].product_id).first() as any
+      if (prod?.category) {
+        const assignment = await db.prepare(
+          'SELECT user_id, user_name FROM category_order_assignments WHERE category = ? AND is_primary = 1 LIMIT 1'
+        ).bind(prod.category).first() as any
+        if (assignment) {
+          assignedTo = assignment.user_id
+          assignedToName = assignment.user_name
+        }
+      }
+    } catch(e) { /* table may not exist yet */ }
+  }
+
   const request_number = generateRequestNumber()
   const result = await db.prepare(
-    `INSERT INTO order_requests (request_number, status, urgency, order_type, location_id, requested_by, requested_by_name, requested_by_role, reason, notes)
-     VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO order_requests (request_number, status, urgency, order_type, location_id, requested_by, requested_by_name, requested_by_role, reason, notes, source, assigned_to, assigned_to_name)
+     VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     request_number,
     urgency || 'normal',
@@ -1421,7 +1448,10 @@ app.post('/api/purchasing/requests', async (c) => {
     user?.email || 'unknown',
     user?.role || 'staff',
     reason || null,
-    notes || null
+    notes || null,
+    source || 'manual',
+    assignedTo,
+    assignedToName
   ).run()
 
   const requestId = result.meta.last_row_id

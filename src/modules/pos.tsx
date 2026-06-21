@@ -2509,13 +2509,29 @@ app.post('/api/pos/request-purchase', async (c) => {
 
   // 2. Create a purchasing order_request so it shows up in the purchasing module
   const reqNum = `REQ${Date.now().toString(36).toUpperCase()}`
+
+  // Auto-assign based on category
+  let assignedTo: any = null, assignedToName: any = null
+  if (body.items[0]?.product_id) {
+    try {
+      const prod = await db.prepare('SELECT category FROM products WHERE id = ?').bind(body.items[0].product_id).first() as any
+      if (prod?.category) {
+        const assignment = await db.prepare(
+          'SELECT user_id, user_name FROM category_order_assignments WHERE category = ? AND is_primary = 1 LIMIT 1'
+        ).bind(prod.category).first() as any
+        if (assignment) { assignedTo = assignment.user_id; assignedToName = assignment.user_name }
+      }
+    } catch(e) { /* table may not exist yet */ }
+  }
+
   const orResult = await db.prepare(`
-    INSERT INTO order_requests (request_number, status, urgency, location_id, requested_by, requested_by_name, requested_by_role, reason, notes)
-    VALUES (?, 'pending', ?, ?, ?, ?, 'pos_staff', ?, ?)
+    INSERT INTO order_requests (request_number, status, urgency, location_id, requested_by, requested_by_name, requested_by_role, reason, notes, source, assigned_to, assigned_to_name)
+    VALUES (?, 'pending', ?, ?, ?, ?, 'pos_staff', ?, ?, 'pos', ?, ?)
   `).bind(reqNum, body.urgency || 'normal', body.location_id || 0,
     user?.id || null, user?.email || 'POS',
     'Customer order — product not in stock at any location',
-    'POS Request ' + pirNum + (body.customer_name ? ' | Customer: ' + body.customer_name : '')).run()
+    'POS Request ' + pirNum + (body.customer_name ? ' | Customer: ' + body.customer_name : ''),
+    assignedTo, assignedToName).run()
   const orderRequestId = orResult.meta.last_row_id
 
   // Add items to order_request

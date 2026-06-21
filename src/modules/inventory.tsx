@@ -1898,6 +1898,159 @@ app.get('/api/inventory/snapshot-compare', async (c) => {
   })
 })
 
+// ==================== TRANSFER PACKING CHECKLIST ====================
+
+// Auto-generate checklist from transfer items, then return grouped checklist
+app.get('/api/inventory/transfers/:id/checklist', async (c) => {
+  const db = c.env.DB
+  const transferId = parseInt(c.req.param('id'))
+
+  const transfer = await db.prepare(
+    `SELECT t.*, fl.name as from_name, fl.code as from_code, tl.name as to_name, tl.code as to_code
+     FROM inventory_transfers t
+     LEFT JOIN locations fl ON fl.id = t.from_location_id
+     LEFT JOIN locations tl ON tl.id = t.to_location_id
+     WHERE t.id = ?`
+  ).bind(transferId).first() as any
+  if (!transfer) return c.json({ error: 'Transfer not found' }, 404)
+
+  // Check if checklist exists, if not auto-generate
+  const existing = await db.prepare('SELECT COUNT(*) as cnt FROM transfer_checklist WHERE transfer_id = ?').bind(transferId).first() as any
+  if (!existing || existing.cnt === 0) {
+    const items = await db.prepare(
+      `SELECT ti.*, p.name as product_name, p.sku, p.unit_type
+       FROM inventory_transfer_items ti
+       JOIN products p ON p.id = ti.product_id
+       WHERE ti.transfer_id = ?
+       ORDER BY p.name`
+    ).bind(transferId).all()
+
+    for (const item of (items.results || []) as any[]) {
+      await db.prepare(
+        `INSERT INTO transfer_checklist (transfer_id, product_id, product_name, sku, qty_requested, unit_type)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(transferId, item.product_id, item.product_name, item.sku || null, item.qty_requested, item.unit_type || 'each').run()
+    }
+  }
+
+  // Return checklist items
+  const checklist = await db.prepare(
+    `SELECT * FROM transfer_checklist WHERE transfer_id = ? ORDER BY product_name`
+  ).bind(transferId).all()
+
+  const items = (checklist.results || []) as any[]
+  const totalItems = items.length
+  const checkedItems = items.filter((i: any) => i.checked).length
+
+  return c.json({ transfer, items, totalItems, checkedItems })
+})
+
+// Toggle a single checklist item
+app.put('/api/inventory/transfer-checklist/:id/toggle', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const user = getUserFromHeader(c)
+
+  const item = await db.prepare('SELECT * FROM transfer_checklist WHERE id = ?').bind(id).first() as any
+  if (!item) return c.json({ error: 'Item not found' }, 404)
+
+  const newChecked = item.checked ? 0 : 1
+  const userName = user ? (await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any)?.name || user.email : null
+
+  await db.prepare(
+    `UPDATE transfer_checklist SET checked = ?, checked_by = ?, checked_by_name = ?, checked_at = CASE WHEN ? = 1 THEN datetime('now') ELSE NULL END WHERE id = ?`
+  ).bind(newChecked, newChecked ? user?.id : null, newChecked ? userName : null, newChecked, id).run()
+
+  return c.json({ success: true, checked: newChecked })
+})
+
+// Check all items in a transfer checklist
+app.post('/api/inventory/transfers/:id/checklist/check-all', async (c) => {
+  const db = c.env.DB
+  const transferId = parseInt(c.req.param('id'))
+  const user = getUserFromHeader(c)
+  const userName = user ? (await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any)?.name || user.email : null
+
+  await db.prepare(
+    `UPDATE transfer_checklist SET checked = 1, checked_by = ?, checked_by_name = ?, checked_at = datetime('now') WHERE transfer_id = ? AND checked = 0`
+  ).bind(user?.id || null, userName, transferId).run()
+
+  return c.json({ success: true })
+})
+
+// Reset transfer checklist
+app.post('/api/inventory/transfers/:id/checklist/reset', async (c) => {
+  const db = c.env.DB
+  const transferId = parseInt(c.req.param('id'))
+  await db.prepare('DELETE FROM transfer_checklist WHERE transfer_id = ?').bind(transferId).run()
+  return c.json({ success: true })
+})
+
+// ==================== CATEGORY ORDER ASSIGNMENTS ====================
+
+// Get all category assignments
+app.get('/api/inventory/category-assignments', async (c) => {
+  const db = c.env.DB
+
+  // Get assignments
+  let assignments: any
+  try {
+    assignments = await db.prepare(
+      `SELECT ca.*, u.email as user_email FROM category_order_assignments ca LEFT JOIN users u ON u.id = ca.user_id ORDER BY ca.category, ca.is_primary DESC`
+    ).all()
+  } catch(e) { assignments = { results: [] } }
+
+  // Get distinct categories from products
+  let categories: any
+  try {
+    categories = await db.prepare(
+      `SELECT DISTINCT category FROM products WHERE active = 1 AND category IS NOT NULL AND category != '' ORDER BY category`
+    ).all()
+  } catch(e) { categories = { results: [] } }
+
+  // Get users for dropdown
+  let users: any
+  try {
+    users = await db.prepare('SELECT id, name, email, role FROM users WHERE active = 1 ORDER BY name').all()
+  } catch(e) { users = { results: [] } }
+
+  return c.json({
+    assignments: assignments.results || [],
+    categories: (categories.results || []).map((r: any) => r.category),
+    users: users.results || []
+  })
+})
+
+// Set assignment (upsert)
+app.post('/api/inventory/category-assignments', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { category, user_id, user_name, is_primary, notes } = await c.req.json()
+  if (!category || !user_id) return c.json({ error: 'category and user_id required' }, 400)
+
+  // Upsert
+  await db.prepare(
+    `INSERT INTO category_order_assignments (category, user_id, user_name, is_primary, notes, updated_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(category, user_id) DO UPDATE SET is_primary = excluded.is_primary, notes = excluded.notes, user_name = excluded.user_name, updated_at = datetime('now')`
+  ).bind(category, user_id, user_name || null, is_primary ?? 1, notes || null).run()
+
+  return c.json({ success: true })
+})
+
+// Remove assignment
+app.delete('/api/inventory/category-assignments/:id', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const id = parseInt(c.req.param('id'))
+  await db.prepare('DELETE FROM category_order_assignments WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
 // ==================== SMART RESTOCK (DEMAND ANALYSIS) ====================
 
 // Analyze buying habits at each location vs current stock
