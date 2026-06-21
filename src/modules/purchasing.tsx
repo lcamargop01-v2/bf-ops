@@ -238,7 +238,40 @@ app.post('/api/purchasing/orders/:id/items', async (c) => {
   return c.json({ success: true })
 })
 
+// ==================== QUICK UPDATE (inline from dashboard/arriving) ====================
+
+app.patch('/api/purchasing/orders/:id/quick', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  const { status, expected_date } = body
+
+  const po = await db.prepare('SELECT id, status FROM purchase_orders WHERE id = ?').bind(id).first() as any
+  if (!po) return c.json({ error: 'PO not found' }, 404)
+
+  const fields: string[] = []
+  const binds: any[] = []
+  if (status) {
+    const validStatuses = ['draft','ordered','in_transit','delayed','partial','received','cancelled','claim']
+    if (!validStatuses.includes(status)) return c.json({ error: 'Invalid status' }, 400)
+    fields.push('status = ?')
+    binds.push(status)
+    if (status === 'received') { fields.push("received_date = date('now')") }
+  }
+  if (expected_date !== undefined) {
+    fields.push('expected_date = ?')
+    binds.push(expected_date || null)
+  }
+  if (fields.length === 0) return c.json({ error: 'Nothing to update' }, 400)
+
+  fields.push('updated_at = CURRENT_TIMESTAMP')
+  binds.push(id)
+  await db.prepare(`UPDATE purchase_orders SET ${fields.join(', ')} WHERE id = ?`).bind(...binds).run()
+  return c.json({ success: true })
+})
+
 // ==================== RECEIVING (WAREHOUSE) ====================
+// Enhanced: supports good/bad qty split per item
 
 app.post('/api/purchasing/orders/:id/receive', async (c) => {
   const db = c.env.DB
@@ -249,7 +282,6 @@ app.post('/api/purchasing/orders/:id/receive', async (c) => {
 
   if (!items || !Array.isArray(items) || items.length === 0) return c.json({ error: 'Receiving items required' }, 400)
 
-  // Get the PO
   const po = await db.prepare('SELECT * FROM purchase_orders WHERE id = ?').bind(poId).first() as any
   if (!po) return c.json({ error: 'PO not found' }, 404)
 
@@ -261,48 +293,69 @@ app.post('/api/purchasing/orders/:id/receive', async (c) => {
   ).bind(poId, user?.id || null, user?.email || 'warehouse', notes || null, locId).run()
   const receivingId = recvResult.meta.last_row_id
 
-  // Insert receiving line items and update po_items qty_received
+  const badItems: any[] = [] // Track bad items for the response
+
   for (const item of items) {
-    if (!item.po_item_id || !item.qty_received) continue
+    if (!item.po_item_id) continue
+    const qtyGood = parseFloat(item.qty_good ?? item.qty_received ?? 0) || 0
+    const qtyBad = parseFloat(item.qty_bad ?? 0) || 0
+    const totalReceived = qtyGood + qtyBad
+    if (totalReceived <= 0) continue
 
-    await db.prepare(
-      `INSERT INTO po_receiving_items (receiving_id, po_item_id, product_id, qty_received, condition, notes)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(receivingId, item.po_item_id, item.product_id || null, item.qty_received,
-      item.condition || 'good', item.notes || null).run()
+    // Record the GOOD portion
+    if (qtyGood > 0) {
+      await db.prepare(
+        `INSERT INTO po_receiving_items (receiving_id, po_item_id, product_id, qty_received, condition, notes)
+         VALUES (?, ?, ?, ?, 'good', ?)`
+      ).bind(receivingId, item.po_item_id, item.product_id || null, qtyGood, item.notes || null).run()
+    }
 
-    // Update cumulative qty_received on po_items
+    // Record the BAD portion (damaged/rejected)
+    if (qtyBad > 0) {
+      const badCondition = item.bad_condition || 'damaged'
+      await db.prepare(
+        `INSERT INTO po_receiving_items (receiving_id, po_item_id, product_id, qty_received, condition, notes)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(receivingId, item.po_item_id, item.product_id || null, qtyBad, badCondition, item.bad_notes || item.notes || null).run()
+
+      if (item.product_id) {
+        badItems.push({
+          po_item_id: item.po_item_id,
+          product_id: item.product_id,
+          product_name: item.product_name || '',
+          qty: qtyBad,
+          condition: badCondition,
+          notes: item.bad_notes || ''
+        })
+      }
+    }
+
+    // Update cumulative qty_received on po_items (total = good + bad)
     await db.prepare('UPDATE po_items SET qty_received = qty_received + ? WHERE id = ?')
-      .bind(item.qty_received, item.po_item_id).run()
+      .bind(totalReceived, item.po_item_id).run()
 
-    // Update inventory_stock if product_id exists
-    if (item.product_id && item.condition !== 'rejected') {
-      // Check if stock row exists
+    // Only add GOOD qty to inventory_stock (bad items handled separately via loss or batch)
+    if (item.product_id && qtyGood > 0) {
       const existing = await db.prepare('SELECT id, qty_on_hand FROM inventory_stock WHERE product_id = ? AND location_id = ?')
         .bind(item.product_id, locId).first() as any
 
       if (existing) {
-        const newQty = (existing.qty_on_hand || 0) + item.qty_received
+        const newQty = (existing.qty_on_hand || 0) + qtyGood
         await db.prepare('UPDATE inventory_stock SET qty_on_hand = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
           .bind(newQty, existing.id).run()
-
-        // Audit log
         await db.prepare(
           `INSERT INTO inventory_audit (product_id, location_id, action, qty_change, qty_before, qty_after, reason, reference_type, reference_id, user_id, user_name)
-           VALUES (?, ?, 'po_received', ?, ?, ?, 'Purchase Order received', 'purchase_order', ?, ?, ?)`
-        ).bind(item.product_id, locId, item.qty_received, existing.qty_on_hand, newQty, poId, user?.id || null, user?.email || 'warehouse').run()
+           VALUES (?, ?, 'po_received', ?, ?, ?, 'PO received (good)', 'purchase_order', ?, ?, ?)`
+        ).bind(item.product_id, locId, qtyGood, existing.qty_on_hand, newQty, poId, user?.id || null, user?.email || 'warehouse').run()
       } else {
-        // Create new stock row
         await db.prepare(
           `INSERT INTO inventory_stock (product_id, location_id, qty_on_hand, qty_on_hold, qty_reserved, last_counted_at, last_counted_by, updated_at)
            VALUES (?, ?, ?, 0, 0, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)`
-        ).bind(item.product_id, locId, item.qty_received, user?.id || null).run()
-
-        // Audit log
+        ).bind(item.product_id, locId, qtyGood, user?.id || null).run()
         await db.prepare(
           `INSERT INTO inventory_audit (product_id, location_id, action, qty_change, qty_before, qty_after, reason, reference_type, reference_id, user_id, user_name)
-           VALUES (?, ?, 'po_received', ?, 0, ?, 'Purchase Order received (new stock)', 'purchase_order', ?, ?, ?)`
-        ).bind(item.product_id, locId, item.qty_received, item.qty_received, poId, user?.id || null, user?.email || 'warehouse').run()
+           VALUES (?, ?, 'po_received', ?, 0, ?, 'PO received (new stock)', 'purchase_order', ?, ?, ?)`
+        ).bind(item.product_id, locId, qtyGood, qtyGood, poId, user?.id || null, user?.email || 'warehouse').run()
       }
     }
   }
@@ -313,18 +366,134 @@ app.post('/api/purchasing/orders/:id/receive', async (c) => {
   const anyReceived = (poItems.results || []).some((i: any) => i.qty_received > 0)
 
   let newStatus = po.status
-  if (allReceived) {
-    newStatus = 'received'
-  } else if (anyReceived) {
-    newStatus = 'partial'
-  }
+  if (allReceived) newStatus = 'received'
+  else if (anyReceived) newStatus = 'partial'
 
   if (newStatus !== po.status) {
     await db.prepare('UPDATE purchase_orders SET status = ?, received_date = CASE WHEN ? = \'received\' THEN date(\'now\') ELSE received_date END, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .bind(newStatus, newStatus, poId).run()
   }
 
-  return c.json({ receiving_id: receivingId, new_status: newStatus, success: true })
+  return c.json({ receiving_id: receivingId, new_status: newStatus, bad_items: badItems, success: true })
+})
+
+// Report loss from receiving — deduct from stock, record in inventory_losses + audit
+app.post('/api/purchasing/receiving/:receivingId/report-loss', async (c) => {
+  const db = c.env.DB
+  const receivingId = parseInt(c.req.param('receivingId'))
+  const user = getUserFromHeader(c)
+  const body = await c.req.json()
+  const { items } = body // [{product_id, qty, reason, notes}]
+
+  if (!items || !Array.isArray(items) || items.length === 0) return c.json({ error: 'Items required' }, 400)
+
+  const receiving = await db.prepare('SELECT r.*, po.location_id as po_location_id FROM po_receiving r JOIN purchase_orders po ON r.po_id = po.id WHERE r.id = ?')
+    .bind(receivingId).first() as any
+  if (!receiving) return c.json({ error: 'Receiving record not found' }, 404)
+
+  const locId = receiving.location_id || receiving.po_location_id
+  const losses: any[] = []
+
+  for (const item of items) {
+    if (!item.product_id || !item.qty || item.qty <= 0) continue
+
+    // Record loss
+    const lossResult = await db.prepare(
+      `INSERT INTO inventory_losses (product_id, location_id, qty, reason, notes, reported_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    ).bind(item.product_id, locId, item.qty, item.reason || 'damaged',
+      item.notes || 'Reported from PO receiving #' + receivingId, user?.id || null).run()
+
+    // Note: We do NOT deduct from stock because bad items were never added to stock
+    // (good qty goes to stock, bad qty is reported as loss directly from receiving)
+    // Audit trail for documentation
+    await db.prepare(
+      `INSERT INTO inventory_audit (product_id, location_id, action, qty_change, qty_before, qty_after, reason, reference_type, reference_id, user_id, user_name)
+       VALUES (?, ?, 'receiving_loss', ?, NULL, NULL, ?, 'po_receiving', ?, ?, ?)`
+    ).bind(item.product_id, locId, -(item.qty), 'Loss from receiving: ' + (item.reason || 'damaged'),
+      receivingId, user?.id || null, user?.email || 'warehouse').run()
+
+    losses.push({ loss_id: lossResult.meta.last_row_id, product_id: item.product_id, qty: item.qty })
+  }
+
+  return c.json({ losses, success: true })
+})
+
+// Create batch from bad receiving items — mark as sellable at reduced quality/price
+app.post('/api/purchasing/receiving/:receivingId/create-batch', async (c) => {
+  const db = c.env.DB
+  const receivingId = parseInt(c.req.param('receivingId'))
+  const user = getUserFromHeader(c)
+  const body = await c.req.json()
+  const { product_id, qty, condition, notes, reduced_price, image_data, image_caption } = body
+
+  if (!product_id || !qty || qty <= 0) return c.json({ error: 'Product and qty required' }, 400)
+
+  const receiving = await db.prepare('SELECT r.*, po.location_id as po_location_id, po.po_number FROM po_receiving r JOIN purchase_orders po ON r.po_id = po.id WHERE r.id = ?')
+    .bind(receivingId).first() as any
+  if (!receiving) return c.json({ error: 'Receiving record not found' }, 404)
+
+  const locId = receiving.location_id || receiving.po_location_id
+
+  // Generate batch number
+  const d = new Date()
+  const ymd = d.getFullYear().toString().slice(2) + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0')
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
+  const batchNumber = `BATCH-${ymd}-${rand}`
+
+  // Create the batch
+  const batchResult = await db.prepare(
+    `INSERT INTO inventory_batches (product_id, location_id, batch_number, qty, condition, notes, received_date, source, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, date('now'), ?, ?)`
+  ).bind(product_id, locId, batchNumber, qty, condition || 'fair',
+    notes || null, 'PO receiving #' + receivingId + ' (' + (receiving.po_number || '') + ')', user?.id || null).run()
+  const batchId = batchResult.meta.last_row_id
+
+  // Add batch qty to inventory stock (these are still sellable, just not full quality)
+  const existing = await db.prepare('SELECT id, qty_on_hand FROM inventory_stock WHERE product_id = ? AND location_id = ?')
+    .bind(product_id, locId).first() as any
+
+  if (existing) {
+    const newQty = (existing.qty_on_hand || 0) + qty
+    await db.prepare('UPDATE inventory_stock SET qty_on_hand = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .bind(newQty, existing.id).run()
+    await db.prepare(
+      `INSERT INTO inventory_audit (product_id, location_id, action, qty_change, qty_before, qty_after, reason, reference_type, reference_id, batch_id, user_id, user_name)
+       VALUES (?, ?, 'batch_created', ?, ?, ?, ?, 'po_receiving', ?, ?, ?, ?)`
+    ).bind(product_id, locId, qty, existing.qty_on_hand, newQty,
+      'Batch ' + batchNumber + ' created from receiving (' + (condition || 'fair') + ' condition)',
+      receivingId, batchId, user?.id || null, user?.email || 'warehouse').run()
+  } else {
+    await db.prepare(
+      `INSERT INTO inventory_stock (product_id, location_id, qty_on_hand, qty_on_hold, qty_reserved, last_counted_at, last_counted_by, updated_at)
+       VALUES (?, ?, ?, 0, 0, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)`
+    ).bind(product_id, locId, qty, user?.id || null).run()
+    await db.prepare(
+      `INSERT INTO inventory_audit (product_id, location_id, action, qty_change, qty_before, qty_after, reason, reference_type, reference_id, batch_id, user_id, user_name)
+       VALUES (?, ?, 'batch_created', ?, 0, ?, ?, 'po_receiving', ?, ?, ?, ?)`
+    ).bind(product_id, locId, qty, qty,
+      'Batch ' + batchNumber + ' created from receiving (' + (condition || 'fair') + ' condition)',
+      receivingId, batchId, user?.id || null, user?.email || 'warehouse').run()
+  }
+
+  // Upload batch image if provided
+  let imageId = null
+  if (image_data) {
+    const imgResult = await db.prepare(
+      `INSERT INTO po_images (po_id, receiving_id, image_data, caption, uploaded_by, uploaded_by_name)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(receiving.po_id, receivingId, image_data,
+      image_caption || 'Batch ' + batchNumber + ' (' + (condition || 'fair') + ')',
+      user?.id || null, user?.email || 'warehouse').run()
+    imageId = imgResult.meta.last_row_id
+  }
+
+  return c.json({
+    batch_id: batchId,
+    batch_number: batchNumber,
+    image_id: imageId,
+    success: true
+  })
 })
 
 // Get receiving detail
@@ -1297,13 +1466,22 @@ app.post('/api/purchasing/requests/:id/convert', async (c) => {
 
   const poId = poResult.meta.last_row_id
 
-  // Insert PO line items from request items
+  // Insert PO line items from request items — auto-fill cost from product.cost on file
   let totalAmount = 0
   for (const item of (reqItems.results || []) as any[]) {
+    let unitCost = 0
+    if (item.product_id) {
+      const prod = await db.prepare('SELECT cost FROM products WHERE id = ?').bind(item.product_id).first() as any
+      unitCost = prod?.cost || 0
+    }
+    totalAmount += (item.qty_requested || 1) * unitCost
     await db.prepare(
       `INSERT INTO po_items (po_id, product_id, description, qty_ordered, unit, unit_cost, notes)
-       VALUES (?, ?, ?, ?, ?, 0, ?)`
-    ).bind(poId, item.product_id || null, item.description || '', item.qty_requested || 1, item.unit || 'each', item.notes || null).run()
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(poId, item.product_id || null, item.description || '', item.qty_requested || 1, item.unit || 'each', unitCost, item.notes || null).run()
+  }
+  if (totalAmount > 0) {
+    await db.prepare('UPDATE purchase_orders SET total_amount = ? WHERE id = ?').bind(totalAmount, poId).run()
   }
 
   // Mark request as converted

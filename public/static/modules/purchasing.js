@@ -305,7 +305,7 @@ function poRenderDashboard() {
     html += '<div class="po-section">';
     html += '<div class="po-section-header"><h3><i class="fas fa-file-invoice"></i> Active Purchase Orders</h3>';
     html += '<button class="po-btn po-btn-sm po-btn-outline" onclick="poNav(\'orders\')">All Orders <i class="fas fa-arrow-right"></i></button></div>';
-    html += poRenderOrderTable(activePOs);
+    html += poRenderOrderTable(activePOs, true);
     html += '</div>';
   }
 
@@ -398,28 +398,60 @@ function poRenderOrderList() {
   return html;
 }
 
-function poRenderOrderTable(orders) {
+function poRenderOrderTable(orders, inlineEdit) {
   var html = '<div class="po-table-wrap po-desktop-only"><table class="po-table po-table-hover">';
   html += '<thead><tr><th>PO #</th><th>Type</th><th>Supplier</th><th>Location</th><th>Status</th><th>Items</th><th>Received</th><th>Expected</th><th class="text-right">Total</th></tr></thead><tbody>';
+  var statusOpts = ['ordered','in_transit','delayed','partial','received','cancelled','claim'];
   orders.forEach(function(po) {
     var pctRecv = po.total_qty_ordered > 0 ? Math.round((po.total_qty_received / po.total_qty_ordered) * 100) : 0;
-    html += '<tr class="po-clickable" onclick="poNav(\'detail\',' + po.id + ')">' +
-      '<td><strong>' + poEsc(po.po_number) + '</strong></td>' +
-      '<td><span class="po-type-badge po-type-' + po.order_type + '">' + poTypeLabel(po.order_type) + '</span></td>' +
-      '<td>' + poEsc(po.supplier_name || '—') + '</td>' +
-      '<td><span class="po-loc-badge">' + poEsc(po.location_code) + '</span></td>' +
-      '<td><span class="po-status-badge po-status-' + po.status + '">' + poStatusLabel(po.status) + '</span></td>' +
-      '<td>' + po.item_count + '</td>' +
-      '<td>' +
+    html += '<tr class="po-clickable">' +
+      '<td onclick="poNav(\'detail\',' + po.id + ')"><strong>' + poEsc(po.po_number) + '</strong></td>' +
+      '<td onclick="poNav(\'detail\',' + po.id + ')"><span class="po-type-badge po-type-' + po.order_type + '">' + poTypeLabel(po.order_type) + '</span></td>' +
+      '<td onclick="poNav(\'detail\',' + po.id + ')">' + poEsc(po.supplier_name || '—') + '</td>' +
+      '<td onclick="poNav(\'detail\',' + po.id + ')"><span class="po-loc-badge">' + poEsc(po.location_code) + '</span></td>';
+
+    // Inline editable status
+    if (inlineEdit) {
+      html += '<td onclick="event.stopPropagation()"><select class="po-inline-select po-status-' + po.status + '" onchange="poQuickUpdate(' + po.id + ',{status:this.value})" title="Quick change status">';
+      statusOpts.forEach(function(s) {
+        html += '<option value="' + s + '"' + (po.status === s ? ' selected' : '') + '>' + poStatusLabel(s) + '</option>';
+      });
+      html += '</select></td>';
+    } else {
+      html += '<td onclick="poNav(\'detail\',' + po.id + ')"><span class="po-status-badge po-status-' + po.status + '">' + poStatusLabel(po.status) + '</span></td>';
+    }
+
+    html += '<td onclick="poNav(\'detail\',' + po.id + ')">' + po.item_count + '</td>' +
+      '<td onclick="poNav(\'detail\',' + po.id + ')">' +
       '<div class="po-progress-mini">' +
       '<div class="po-progress-bar-mini"><div class="po-progress-fill-mini" style="width:' + pctRecv + '%"></div></div>' +
-      '<span>' + po.total_qty_received + '/' + po.total_qty_ordered + '</span></div></td>' +
-      '<td>' + poFormatDate(po.expected_date) + '</td>' +
-      '<td class="text-right">' + (po.total_amount > 0 ? '$' + po.total_amount.toLocaleString(undefined, {minimumFractionDigits:2}) : '—') + '</td>' +
+      '<span>' + po.total_qty_received + '/' + po.total_qty_ordered + '</span></div></td>';
+
+    // Inline editable ETA
+    if (inlineEdit) {
+      html += '<td onclick="event.stopPropagation()"><input type="date" class="po-inline-date" value="' + (po.expected_date || '') + '" onchange="poQuickUpdate(' + po.id + ',{expected_date:this.value})" title="Quick change ETA"></td>';
+    } else {
+      html += '<td onclick="poNav(\'detail\',' + po.id + ')">' + poFormatDate(po.expected_date) + '</td>';
+    }
+
+    html += '<td class="text-right" onclick="poNav(\'detail\',' + po.id + ')">' + (po.total_amount > 0 ? '$' + po.total_amount.toLocaleString(undefined, {minimumFractionDigits:2}) : '—') + '</td>' +
       '</tr>';
   });
   html += '</tbody></table></div>';
   return html;
+}
+
+// Quick update PO status/ETA from inline controls
+async function poQuickUpdate(poId, fields) {
+  try {
+    await poAPI.patch('/api/purchasing/orders/' + poId + '/quick', fields, { headers: poHeaders() });
+    var label = '';
+    if (fields.status) label += 'Status → ' + poStatusLabel(fields.status);
+    if (fields.expected_date) label += (label ? ', ' : '') + 'ETA → ' + poFormatDate(fields.expected_date);
+    if (fields.expected_date === '') label += (label ? ', ' : '') + 'ETA cleared';
+    poToast(label || 'Updated');
+    poRender();
+  } catch(e) { poToast('Update failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
 async function poLoadAndRenderOrders() {
@@ -865,15 +897,17 @@ function poRenderReceiving(data) {
   html += '<span><i class="fas fa-location-dot"></i> ' + poEsc(po.location_name) + '</span>';
   html += '</div>';
 
-  // Items to receive
+  // Items to receive — good/bad qty split
   html += '<div class="po-receive-items">';
   items.forEach(function(item, idx) {
     var remaining = (item.qty_ordered || 0) - (item.qty_received || 0);
     var done = remaining <= 0;
+    var estCost = item.unit_cost || 0;
     html += '<div class="po-receive-item' + (done ? ' po-receive-item-done' : '') + '">' +
       '<div class="po-receive-item-info">' +
       '<strong>' + poEsc(item.description || item.product_name || 'Item') + '</strong>' +
-      '<span class="po-muted">' + (item.product_name && item.description !== item.product_name ? poEsc(item.product_name) + ' \u00B7 ' : '') + poEsc(item.sku || '') + '</span>' +
+      '<span class="po-muted">' + (item.product_name && item.description !== item.product_name ? poEsc(item.product_name) + ' \u00B7 ' : '') + poEsc(item.sku || '') +
+      (estCost > 0 ? ' \u00B7 Est. $' + estCost.toFixed(2) + '/' + poEsc(item.unit || 'each') : '') + '</span>' +
       '<div class="po-receive-item-meta">' +
       '<span>Ordered: <strong>' + item.qty_ordered + '</strong></span>' +
       '<span>Already Received: <strong>' + item.qty_received + '</strong></span>' +
@@ -881,17 +915,28 @@ function poRenderReceiving(data) {
       '</div></div>' +
       '<div class="po-receive-item-input">' +
       (done ? '<div class="po-receive-done-badge"><i class="fas fa-check-circle"></i> Complete</div>' :
-      '<div class="po-receive-qty-wrap">' +
-      '<label>Qty Received</label>' +
+      '<div class="po-recv-split">' +
+      '<div class="po-recv-good">' +
+      '<label><i class="fas fa-check-circle" style="color:#059669"></i> Good</label>' +
       '<div class="po-stepper">' +
-      '<button class="po-stepper-btn" onclick="poStepRecv(' + idx + ',-1)">\u2212</button>' +
-      '<input type="number" id="poRecvQty_' + idx + '" class="po-recv-field" value="' + remaining + '" data-item-id="' + item.id + '" data-product-id="' + (item.product_id || '') + '" inputmode="numeric">' +
-      '<button class="po-stepper-btn" onclick="poStepRecv(' + idx + ',1)">+</button>' +
-      '</div>' +
-      '<select id="poRecvCond_' + idx + '" class="po-select po-select-sm">' +
-      '<option value="good">Good</option><option value="damaged">Damaged</option><option value="short">Short</option><option value="rejected">Rejected</option>' +
-      '</select>' +
-      '<input type="text" id="poRecvNotes_' + idx + '" class="po-input po-input-sm" placeholder="Notes...">' +
+      '<button class="po-stepper-btn" onclick="poStepRecvField(\'poRecvGood_' + idx + '\',-1)">\u2212</button>' +
+      '<input type="number" id="poRecvGood_' + idx + '" class="po-recv-field po-recv-good-field" value="' + remaining + '"' +
+      ' data-item-id="' + item.id + '" data-product-id="' + (item.product_id || '') + '"' +
+      ' data-product-name="' + poEsc(item.product_name || item.description || '') + '"' +
+      ' inputmode="numeric" oninput="poSyncRecvTotal(' + idx + ',' + remaining + ')">' +
+      '<button class="po-stepper-btn" onclick="poStepRecvField(\'poRecvGood_' + idx + '\',1)">+</button>' +
+      '</div></div>' +
+      '<div class="po-recv-bad">' +
+      '<label><i class="fas fa-exclamation-triangle" style="color:#DC2626"></i> Bad</label>' +
+      '<div class="po-stepper">' +
+      '<button class="po-stepper-btn" onclick="poStepRecvField(\'poRecvBad_' + idx + '\',-1)">\u2212</button>' +
+      '<input type="number" id="poRecvBad_' + idx + '" class="po-recv-field po-recv-bad-field" value="0"' +
+      ' inputmode="numeric" oninput="poSyncRecvTotal(' + idx + ',' + remaining + ')">' +
+      '<button class="po-stepper-btn" onclick="poStepRecvField(\'poRecvBad_' + idx + '\',1)">+</button>' +
+      '</div></div>' +
+      '<div class="po-recv-total-label" id="poRecvTotalLabel_' + idx + '">' +
+      '<span>Total: <strong>' + remaining + '</strong> of ' + remaining + ' remaining</span></div>' +
+      '<input type="text" id="poRecvNotes_' + idx + '" class="po-input po-input-sm" placeholder="Notes..." style="margin-top:4px">' +
       '</div>') +
       '</div></div>';
   });
@@ -916,11 +961,25 @@ function poRenderReceiving(data) {
   return html;
 }
 
-function poStepRecv(idx, delta) {
-  var input = document.getElementById('poRecvQty_' + idx);
+function poStepRecvField(fieldId, delta) {
+  var input = document.getElementById(fieldId);
   if (!input) return;
   var val = parseInt(input.value) || 0;
   input.value = Math.max(0, val + delta);
+  // Trigger oninput to sync totals
+  input.dispatchEvent(new Event('input'));
+}
+
+function poSyncRecvTotal(idx, remaining) {
+  var good = parseInt(document.getElementById('poRecvGood_' + idx)?.value) || 0;
+  var bad = parseInt(document.getElementById('poRecvBad_' + idx)?.value) || 0;
+  var total = good + bad;
+  var label = document.getElementById('poRecvTotalLabel_' + idx);
+  if (label) {
+    var color = total > remaining ? '#DC2626' : total === remaining ? '#059669' : '#D97706';
+    label.innerHTML = '<span style="color:' + color + '">Total: <strong>' + total + '</strong> of ' + remaining + ' remaining' +
+      (total > remaining ? ' <i class="fas fa-exclamation-triangle"></i> Over!' : '') + '</span>';
+  }
 }
 
 function poPreviewRecvPhoto(input) {
@@ -936,17 +995,19 @@ function poPreviewRecvPhoto(input) {
 
 async function poSubmitReceiving(poId) {
   var items = [];
-  var inputs = document.querySelectorAll('.po-recv-field');
-  inputs.forEach(function(input, idx) {
-    var qty = parseInt(input.value) || 0;
-    if (qty <= 0) return;
-    var cond = document.getElementById('poRecvCond_' + idx);
+  var goodInputs = document.querySelectorAll('.po-recv-good-field');
+  goodInputs.forEach(function(input, idx) {
+    var qtyGood = parseInt(input.value) || 0;
+    var qtyBad = parseInt(document.getElementById('poRecvBad_' + idx)?.value) || 0;
+    if (qtyGood <= 0 && qtyBad <= 0) return;
     var notes = document.getElementById('poRecvNotes_' + idx);
     items.push({
       po_item_id: parseInt(input.dataset.itemId),
       product_id: input.dataset.productId ? parseInt(input.dataset.productId) : null,
-      qty_received: qty,
-      condition: cond ? cond.value : 'good',
+      product_name: input.dataset.productName || '',
+      qty_good: qtyGood,
+      qty_bad: qtyBad,
+      bad_condition: qtyBad > 0 ? 'damaged' : 'good',
       notes: notes ? notes.value : ''
     });
   });
@@ -974,17 +1035,141 @@ async function poSubmitReceiving(poId) {
     }
 
     poToast('Items received! Status: ' + poStatusLabel(resp.data.new_status));
-    poNav('detail', poId);
 
-    // Prompt to create a bill from supplier invoice
-    setTimeout(function() {
-      if (confirm('Items received successfully!\n\nDo you have the supplier\'s invoice? Create a bill now to record the actual costs.')) {
-        poShowCreateBill(poId);
-      }
-    }, 500);
+    // If there are bad items, show the bad items handler modal
+    var badItems = resp.data.bad_items || [];
+    if (badItems.length > 0) {
+      poShowBadItemsHandler(resp.data.receiving_id, badItems, poId);
+    } else {
+      poNav('detail', poId);
+      // Prompt to create a bill
+      setTimeout(function() {
+        if (confirm('Items received successfully!\n\nDo you have the supplier\'s invoice? Create a bill now to record the actual costs.')) {
+          poShowCreateBill(poId);
+        }
+      }, 500);
+    }
   } catch(e) {
     poToast('Receiving failed: ' + (e.response?.data?.error || e.message), 'error');
   }
+}
+
+// ==================== BAD ITEMS HANDLER (post-receiving) ====================
+function poShowBadItemsHandler(receivingId, badItems, poId) {
+  var body = '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px;margin-bottom:16px">' +
+    '<div style="font-weight:600;color:#DC2626;margin-bottom:4px"><i class="fas fa-exclamation-triangle"></i> Bad Items Detected</div>' +
+    '<div style="font-size:13px;color:#7F1D1D">The following items were marked as bad during receiving. For each item, you can:</div>' +
+    '<ul style="font-size:13px;color:#7F1D1D;margin:8px 0 0 16px">' +
+    '<li><strong>Report as Loss</strong> — Write off the quantity, record the loss in your books</li>' +
+    '<li><strong>Create a Batch</strong> — Still sellable, but lower quality. Take a photo and set a reduced price note</li>' +
+    '<li><strong>Skip</strong> — Handle later from the PO detail page</li>' +
+    '</ul></div>';
+
+  body += '<div class="po-bad-items-list">';
+  badItems.forEach(function(item, idx) {
+    body += '<div class="po-bad-item-card" id="poBadItem_' + idx + '">' +
+      '<div class="po-bad-item-header">' +
+      '<strong>' + poEsc(item.product_name || 'Product #' + item.product_id) + '</strong>' +
+      '<span class="po-recv-bad-badge">' + item.qty + ' ' + poEsc(item.condition || 'damaged') + '</span>' +
+      '</div>' +
+      '<div class="po-bad-item-actions">' +
+      '<button class="po-btn po-btn-sm po-btn-danger" onclick="poReportLoss(' + receivingId + ',' + idx + ',' + JSON.stringify(item).replace(/"/g, '&quot;') + ')">' +
+      '<i class="fas fa-trash"></i> Report Loss</button>' +
+      '<button class="po-btn po-btn-sm po-btn-warning" onclick="poCreateBatchFromBad(' + receivingId + ',' + idx + ',' + JSON.stringify(item).replace(/"/g, '&quot;') + ')">' +
+      '<i class="fas fa-boxes-stacked"></i> Create Batch</button>' +
+      '<button class="po-btn po-btn-sm po-btn-outline" onclick="document.getElementById(\'poBadItem_' + idx + '\').style.opacity=\'0.4\'">' +
+      '<i class="fas fa-forward"></i> Skip</button>' +
+      '</div></div>';
+  });
+  body += '</div>';
+
+  var footer = '<button class="po-btn po-btn-primary" onclick="poCloseModal();poNav(\'detail\',' + poId + ');setTimeout(function(){if(confirm(\'Do you have the supplier invoice? Create a bill now.\')){poShowCreateBill(' + poId + ')}},500)"><i class="fas fa-check"></i> Done — Go to Order</button>';
+  poShowModal('<i class="fas fa-exclamation-triangle" style="color:#DC2626"></i> Handle Bad Items', body, footer);
+}
+
+async function poReportLoss(receivingId, idx, item) {
+  var reason = prompt('Loss reason for ' + item.qty + 'x ' + (item.product_name || 'item') + '?\n\nOptions: damaged, expired, stolen, shrinkage, spoiled, pest, other', item.condition || 'damaged');
+  if (!reason) return;
+  var notes = prompt('Additional notes (optional):');
+
+  try {
+    await poAPI.post('/api/purchasing/receiving/' + receivingId + '/report-loss', {
+      items: [{ product_id: item.product_id, qty: item.qty, reason: reason, notes: notes || '' }]
+    }, { headers: poHeaders() });
+    poToast(item.qty + 'x ' + (item.product_name || 'item') + ' reported as loss');
+    var card = document.getElementById('poBadItem_' + idx);
+    if (card) {
+      card.innerHTML = '<div style="padding:12px;text-align:center;color:#DC2626"><i class="fas fa-check-circle"></i> Reported as loss (' + item.qty + 'x)</div>';
+      card.style.opacity = '0.5';
+    }
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function poCreateBatchFromBad(receivingId, idx, item) {
+  // Replace the card content with a batch creation form
+  var card = document.getElementById('poBadItem_' + idx);
+  if (!card) return;
+
+  card.innerHTML = '<div class="po-bad-batch-form">' +
+    '<h4 style="margin-bottom:8px"><i class="fas fa-boxes-stacked" style="color:#D97706"></i> Create Batch — ' + poEsc(item.product_name || '') + ' (' + item.qty + ' units)</h4>' +
+    '<div class="po-form-row" style="gap:8px">' +
+    '<div class="po-form-group" style="flex:1"><label>Condition</label><select id="poBatchCond_' + idx + '" class="po-select">' +
+    '<option value="fair"' + (item.condition === 'fair' ? ' selected' : '') + '>Fair</option>' +
+    '<option value="poor">Poor</option>' +
+    '<option value="damaged"' + (item.condition === 'damaged' ? ' selected' : '') + '>Damaged</option>' +
+    '</select></div>' +
+    '<div class="po-form-group" style="flex:1"><label>Qty</label><input id="poBatchQty_' + idx + '" type="number" class="po-input" value="' + item.qty + '" min="1"></div>' +
+    '</div>' +
+    '<div class="po-form-group"><label>Notes (visible on batch)</label><input id="poBatchNotes_' + idx + '" class="po-input" placeholder="e.g. Torn packaging, still sealed inside"></div>' +
+    '<div class="po-form-group">' +
+    '<label class="po-receive-photo-btn" style="font-size:13px"><i class="fas fa-camera"></i> Attach Photo' +
+    '<input type="file" accept="image/*" capture="environment" style="display:none" onchange="poBatchPhotoPreview(this,' + idx + ')"></label>' +
+    '<img id="poBatchPhotoPreview_' + idx + '" style="display:none;max-height:100px;border-radius:6px;margin-top:6px">' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;margin-top:8px">' +
+    '<button class="po-btn po-btn-sm po-btn-warning" onclick="poDoCreateBatch(' + receivingId + ',' + idx + ',' + item.product_id + ')"><i class="fas fa-plus"></i> Create Batch</button>' +
+    '<button class="po-btn po-btn-sm po-btn-outline" onclick="poRender()">Cancel</button>' +
+    '</div></div>';
+}
+
+function poBatchPhotoPreview(input, idx) {
+  if (!input.files || !input.files[0]) return;
+  poCompressImage(input.files[0], 800, 0.7).then(function(dataUrl) {
+    var preview = document.getElementById('poBatchPhotoPreview_' + idx);
+    if (preview) {
+      preview.src = dataUrl;
+      preview.style.display = 'block';
+      preview.dataset.imageData = dataUrl;
+    }
+  });
+}
+
+async function poDoCreateBatch(receivingId, idx, productId) {
+  var condition = document.getElementById('poBatchCond_' + idx)?.value || 'fair';
+  var qty = parseInt(document.getElementById('poBatchQty_' + idx)?.value) || 0;
+  var notes = document.getElementById('poBatchNotes_' + idx)?.value || '';
+  var photoPreview = document.getElementById('poBatchPhotoPreview_' + idx);
+  var imageData = photoPreview?.dataset?.imageData || null;
+
+  if (qty <= 0) { poToast('Qty must be greater than 0', 'warning'); return; }
+
+  try {
+    var resp = await poAPI.post('/api/purchasing/receiving/' + receivingId + '/create-batch', {
+      product_id: productId,
+      qty: qty,
+      condition: condition,
+      notes: notes,
+      image_data: imageData,
+      image_caption: 'Batch photo — ' + condition + ' condition'
+    }, { headers: poHeaders() });
+
+    poToast('Batch ' + resp.data.batch_number + ' created (' + qty + ' units added to stock)');
+    var card = document.getElementById('poBadItem_' + idx);
+    if (card) {
+      card.innerHTML = '<div style="padding:12px;text-align:center;color:#D97706"><i class="fas fa-check-circle"></i> Batch <strong>' + poEsc(resp.data.batch_number) + '</strong> created — ' + qty + ' units added to inventory as "' + condition + '"</div>';
+      card.style.background = '#FFFBEB';
+    }
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
 // ==================== ARRIVING VIEW ====================
@@ -995,7 +1180,7 @@ function poRenderArriving(arriving) {
 
   if (arriving.length === 0) {
     html += '<div class="po-empty"><i class="fas fa-truck-moving" style="font-size:48px;color:#CBD5E1"></i>';
-    html += '<h3>Nothing Arriving</h3><p>No open orders with expected dates in the next 30 days.</p></div>';
+    html += '<h3>Nothing Arriving</h3><p>No open purchase orders found.</p></div>';
     html += '</div>';
     return html;
   }
@@ -1021,19 +1206,25 @@ function poRenderArriving(arriving) {
     }
     html += '</div>';
 
-    html += '<div class="po-table-wrap"><table class="po-table"><thead><tr><th>PO #</th><th>Type</th><th>Item</th><th>Product</th><th>Ordered</th><th>Remaining</th><th>Supplier</th><th>Location</th><th>Status</th></tr></thead><tbody>';
+    var statusOpts = ['ordered','in_transit','delayed','partial','received','cancelled','claim'];
+    html += '<div class="po-table-wrap"><table class="po-table"><thead><tr><th>PO #</th><th>Type</th><th>Item</th><th>Product</th><th>Ordered</th><th>Remaining</th><th>Supplier</th><th>Location</th><th>Status</th><th>ETA</th></tr></thead><tbody>';
     items.forEach(function(item) {
       var remaining = (item.qty_ordered || 0) - (item.qty_received || 0);
-      html += '<tr class="po-clickable" onclick="poNav(\'detail\',' + item.id + ')">' +
-        '<td><strong>' + poEsc(item.po_number) + '</strong></td>' +
-        '<td><span class="po-type-badge po-type-' + item.order_type + '">' + poTypeLabel(item.order_type) + '</span></td>' +
-        '<td>' + poEsc(item.description || '—') + '</td>' +
-        '<td>' + poEsc(item.product_name || '—') + '</td>' +
-        '<td class="text-right">' + item.qty_ordered + ' ' + poEsc(item.unit || '') + '</td>' +
-        '<td class="text-right"><strong class="' + (remaining > 0 ? 'po-warning-text' : 'po-positive') + '">' + remaining + '</strong></td>' +
-        '<td>' + poEsc(item.supplier_name || '—') + '</td>' +
-        '<td><span class="po-loc-badge">' + poEsc(item.location_code) + '</span></td>' +
-        '<td><span class="po-status-badge po-status-' + item.status + '">' + poStatusLabel(item.status) + '</span></td>' +
+      html += '<tr class="po-clickable">' +
+        '<td onclick="poNav(\'detail\',' + item.id + ')"><strong>' + poEsc(item.po_number) + '</strong></td>' +
+        '<td onclick="poNav(\'detail\',' + item.id + ')"><span class="po-type-badge po-type-' + item.order_type + '">' + poTypeLabel(item.order_type) + '</span></td>' +
+        '<td onclick="poNav(\'detail\',' + item.id + ')">' + poEsc(item.description || '—') + '</td>' +
+        '<td onclick="poNav(\'detail\',' + item.id + ')">' + poEsc(item.product_name || '—') + '</td>' +
+        '<td class="text-right" onclick="poNav(\'detail\',' + item.id + ')">' + item.qty_ordered + ' ' + poEsc(item.unit || '') + '</td>' +
+        '<td class="text-right" onclick="poNav(\'detail\',' + item.id + ')"><strong class="' + (remaining > 0 ? 'po-warning-text' : 'po-positive') + '">' + remaining + '</strong></td>' +
+        '<td onclick="poNav(\'detail\',' + item.id + ')">' + poEsc(item.supplier_name || '—') + '</td>' +
+        '<td onclick="poNav(\'detail\',' + item.id + ')"><span class="po-loc-badge">' + poEsc(item.location_code) + '</span></td>' +
+        '<td onclick="event.stopPropagation()"><select class="po-inline-select po-status-' + item.status + '" onchange="poQuickUpdate(' + item.id + ',{status:this.value})">';
+      statusOpts.forEach(function(s) {
+        html += '<option value="' + s + '"' + (item.status === s ? ' selected' : '') + '>' + poStatusLabel(s) + '</option>';
+      });
+      html += '</select></td>' +
+        '<td onclick="event.stopPropagation()"><input type="date" class="po-inline-date" value="' + (item.expected_date || '') + '" onchange="poQuickUpdate(' + item.id + ',{expected_date:this.value})"></td>' +
         '</tr>';
     });
     html += '</tbody></table></div></div>';
