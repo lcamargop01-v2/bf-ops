@@ -489,7 +489,189 @@ function launchModule(moduleId, initialPage) {
   }
 }
 
+// ==================== NOTIFICATION BELL ====================
+
+var _notifPollTimer = null;
+var _notifDropdownOpen = false;
+
+function toggleNotifDropdown(e) {
+  if (e) e.stopPropagation();
+  var dd = document.getElementById('shellNotifDropdown');
+  if (!dd) return;
+  _notifDropdownOpen = !_notifDropdownOpen;
+  if (_notifDropdownOpen) {
+    dd.classList.add('open');
+    loadNotifications();
+    // Close dropdown when clicking outside
+    setTimeout(function() {
+      document.addEventListener('click', _closeNotifDropdown);
+    }, 10);
+  } else {
+    dd.classList.remove('open');
+    document.removeEventListener('click', _closeNotifDropdown);
+  }
+}
+
+function _closeNotifDropdown(e) {
+  var dd = document.getElementById('shellNotifDropdown');
+  var btn = document.querySelector('.shell-notif-btn');
+  if (dd && !dd.contains(e.target) && btn && !btn.contains(e.target)) {
+    dd.classList.remove('open');
+    _notifDropdownOpen = false;
+    document.removeEventListener('click', _closeNotifDropdown);
+  }
+}
+
+async function loadNotifications() {
+  if (!currentUser) return;
+  try {
+    var resp = await API.get('/notifications?user_id=' + currentUser.id);
+    var notifs = resp.data.notifications || [];
+    var count = resp.data.unread_count || 0;
+    _updateNotifBadge(count);
+    _renderNotifList(notifs);
+  } catch(e) {
+    console.error('[Shell] Failed to load notifications', e);
+  }
+}
+
+async function refreshNotifBadge() {
+  if (!currentUser) return;
+  try {
+    var resp = await API.get('/notifications?user_id=' + currentUser.id + '&unread=1');
+    var count = resp.data.unread_count || 0;
+    _updateNotifBadge(count);
+  } catch(e) { /* ignore */ }
+}
+
+function _updateNotifBadge(count) {
+  var badge = document.getElementById('shellNotifBadge');
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count > 99 ? '99+' : count;
+    badge.style.display = 'flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function _renderNotifList(notifs) {
+  var list = document.getElementById('shellNotifList');
+  if (!list) return;
+  if (!notifs.length) {
+    list.innerHTML = '<div class="shell-notif-empty"><i class="fas fa-bell-slash"></i>No notifications</div>';
+    return;
+  }
+  list.innerHTML = notifs.slice(0, 20).map(function(n) {
+    var iconClass = 'info';
+    var iconName = 'fa-info-circle';
+    if (n.notification_type === 'task') { iconClass = 'info'; iconName = 'fa-tasks'; }
+    else if (n.notification_type === 'alert' || n.notification_type === 'pricing_alert') { iconClass = 'warning'; iconName = 'fa-exclamation-triangle'; }
+    else if (n.notification_type === 'order') { iconClass = 'success'; iconName = 'fa-shopping-cart'; }
+    else if (n.notification_type === 'inventory') { iconClass = 'success'; iconName = 'fa-boxes'; }
+    else if (n.notification_type === 'error') { iconClass = 'danger'; iconName = 'fa-times-circle'; }
+    var timeAgo = _notifTimeAgo(n.created_at);
+    return '<div class="shell-notif-item ' + (n.is_read ? '' : 'unread') + '" onclick="notifItemClick(' + n.id + ',' + (n.is_read ? 1 : 0) + ',\'' + (n.ref_type || '') + '\',' + (n.ref_id || 0) + ')">' +
+      '<div class="shell-notif-icon ' + iconClass + '"><i class="fas ' + iconName + '"></i></div>' +
+      '<div class="shell-notif-body">' +
+        '<div class="title">' + _escHtml(n.title || 'Notification') + '</div>' +
+        '<div class="desc">' + _escHtml(n.message || '') + '</div>' +
+        '<div class="time">' + timeAgo + '</div>' +
+      '</div>' +
+      (n.is_read ? '' : '<div class="shell-notif-dot"></div>') +
+    '</div>';
+  }).join('');
+}
+
+function _escHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function _notifTimeAgo(dateStr) {
+  if (!dateStr) return '';
+  var now = Date.now();
+  var then = new Date(dateStr + (dateStr.indexOf('Z') < 0 ? 'Z' : '')).getTime();
+  var diff = Math.floor((now - then) / 1000);
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+  return new Date(then).toLocaleDateString();
+}
+
+async function notifItemClick(id, isRead, refType, refId) {
+  // Mark as read if unread
+  if (!isRead) {
+    try {
+      await API.patch('/notifications/' + id + '/read');
+      refreshNotifBadge();
+    } catch(e) {}
+  }
+  // Navigate to referenced item
+  if (refType === 'task' && refId) {
+    // Close dropdown and go to tasks module with detail view
+    _closeNotifForce();
+    launchModule('tasks');
+  } else if (refType === 'order_request' && refId) {
+    _closeNotifForce();
+    launchModule('ordering');
+  } else if (refType === 'pricing_alert') {
+    _closeNotifForce();
+    launchModule('tasks');
+  }
+  // Reload the dropdown items to reflect read status
+  loadNotifications();
+}
+
+function _closeNotifForce() {
+  var dd = document.getElementById('shellNotifDropdown');
+  if (dd) dd.classList.remove('open');
+  _notifDropdownOpen = false;
+  document.removeEventListener('click', _closeNotifDropdown);
+}
+
+async function markAllNotifsRead() {
+  if (!currentUser) return;
+  try {
+    await API.post('/notifications/read-all', { user_id: currentUser.id });
+    _updateNotifBadge(0);
+    loadNotifications();
+    shellToast('All notifications marked as read');
+  } catch(e) {
+    shellToast('Failed to mark notifications read', 'error');
+  }
+}
+
+function openAllNotifications() {
+  _closeNotifForce();
+  // Navigate to the tasks module which has the full notifications view
+  launchModule('tasks');
+  // Set a flag so the tasks module can auto-open the notifications tab
+  window._shellInitialPage = 'notifications';
+}
+
+function startNotifPolling() {
+  stopNotifPolling();
+  // Initial badge fetch
+  refreshNotifBadge();
+  // Poll every 30 seconds
+  _notifPollTimer = setInterval(function() {
+    refreshNotifBadge();
+  }, 30000);
+}
+
+function stopNotifPolling() {
+  if (_notifPollTimer) {
+    clearInterval(_notifPollTimer);
+    _notifPollTimer = null;
+  }
+}
+
 function cleanupActiveModule() {
+  // Stop notification polling when leaving modules
+  stopNotifPolling();
   // Clean up logistics module global state if it was active
   if (typeof window._logisticsCleanup === 'function') {
     try { window._logisticsCleanup(); } catch(e) {}
