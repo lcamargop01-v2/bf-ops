@@ -289,6 +289,8 @@ async function doLogin(e) {
     window.canEdit = canEdit;
     window.canViewFinancials = canViewFinancials;
     shellToast(`Welcome, ${currentUser.name}!`);
+    // Register service worker for push notifications
+    initPushNotifications();
     // Auto-navigate to user's default landing if configured
     if (currentUser.default_module) {
       launchModule(currentUser.default_module, currentUser.default_page || null);
@@ -438,6 +440,7 @@ function launchModule(moduleId, initialPage) {
               </div>
               <div class="shell-notif-footer">
                 <a onclick="openAllNotifications()">View All Notifications</a>
+                <button class="shell-notif-settings-btn" onclick="openNotificationSettings()" title="Notification Settings"><i class="fas fa-cog"></i> Settings</button>
               </div>
             </div>
           </div>
@@ -667,6 +670,230 @@ function stopNotifPolling() {
     clearInterval(_notifPollTimer);
     _notifPollTimer = null;
   }
+}
+
+// ==================== PUSH NOTIFICATIONS (Service Worker + Web Push) ====================
+
+async function initPushNotifications() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    console.log('[Shell] Push notifications not supported in this browser');
+    return;
+  }
+  try {
+    var reg = await navigator.serviceWorker.register('/sw.js');
+    console.log('[Shell] Service Worker registered:', reg.scope);
+    window._swRegistration = reg;
+  } catch(e) {
+    console.error('[Shell] Service Worker registration failed:', e);
+  }
+}
+
+async function requestPushPermission() {
+  if (!('Notification' in window)) {
+    shellToast('Push notifications not supported in this browser', 'error');
+    return false;
+  }
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') {
+    shellToast('Notifications are blocked. Please enable them in browser settings.', 'error');
+    return false;
+  }
+  var result = await Notification.requestPermission();
+  return result === 'granted';
+}
+
+async function subscribeToPush() {
+  if (!currentUser) return;
+  var granted = await requestPushPermission();
+  if (!granted) return;
+
+  if (!window._swRegistration) {
+    try { window._swRegistration = await navigator.serviceWorker.ready; } catch(e) { return; }
+  }
+
+  try {
+    // Try to get VAPID key from server
+    var vapidResp = await API.get('/push/vapid-key');
+    var vapidKey = vapidResp.data.publicKey;
+    if (!vapidKey) {
+      // No VAPID configured — use browser notification API directly for polling-based approach
+      console.log('[Shell] No VAPID key configured, using polling-only mode');
+      shellToast('Notifications enabled (polling mode)', 'success');
+      _updatePushToggleUI(true);
+      return;
+    }
+
+    var sub = await window._swRegistration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: _urlBase64ToUint8Array(vapidKey)
+    });
+
+    await API.post('/push/subscribe', {
+      user_id: currentUser.id,
+      subscription: sub.toJSON()
+    });
+
+    shellToast('Push notifications enabled!', 'success');
+    _updatePushToggleUI(true);
+  } catch(e) {
+    console.error('[Shell] Push subscribe failed:', e);
+    shellToast('Failed to enable push: ' + e.message, 'error');
+  }
+}
+
+async function unsubscribeFromPush() {
+  if (!currentUser) return;
+  try {
+    if (window._swRegistration) {
+      var sub = await window._swRegistration.pushManager.getSubscription();
+      if (sub) {
+        await API.delete('/push/unsubscribe', { data: { user_id: currentUser.id, endpoint: sub.endpoint } });
+        await sub.unsubscribe();
+      }
+    }
+    shellToast('Push notifications disabled', 'success');
+    _updatePushToggleUI(false);
+  } catch(e) {
+    console.error('[Shell] Push unsubscribe failed:', e);
+  }
+}
+
+function _urlBase64ToUint8Array(base64String) {
+  var padding = '='.repeat((4 - base64String.length % 4) % 4);
+  var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  var raw = atob(base64);
+  var arr = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+function _updatePushToggleUI(enabled) {
+  var btn = document.getElementById('shellPushToggle');
+  if (!btn) return;
+  if (enabled) {
+    btn.innerHTML = '<i class="fas fa-bell"></i> Notifications On';
+    btn.className = 'shell-push-btn active';
+  } else {
+    btn.innerHTML = '<i class="fas fa-bell-slash"></i> Enable Notifications';
+    btn.className = 'shell-push-btn';
+  }
+}
+
+// ==================== NOTIFICATION PREFERENCES ====================
+
+async function openNotificationSettings() {
+  if (!currentUser) return;
+  var resp = await API.get('/notifications/preferences?user_id=' + currentUser.id).catch(function() { return { data: { preferences: {} } }; });
+  var prefs = resp.data.preferences || {};
+
+  var pushStatus = 'Not supported';
+  var pushBtnHtml = '';
+  if ('Notification' in window) {
+    if (Notification.permission === 'granted') {
+      pushStatus = '<span style="color:#16A34A"><i class="fas fa-check-circle"></i> Enabled</span>';
+      pushBtnHtml = '<button class="shell-push-btn active" id="shellPushToggle" onclick="unsubscribeFromPush()"><i class="fas fa-bell"></i> Notifications On</button>';
+    } else if (Notification.permission === 'denied') {
+      pushStatus = '<span style="color:#DC2626"><i class="fas fa-ban"></i> Blocked (change in browser settings)</span>';
+    } else {
+      pushStatus = '<span style="color:#D97706"><i class="fas fa-exclamation-circle"></i> Not yet enabled</span>';
+      pushBtnHtml = '<button class="shell-push-btn" id="shellPushToggle" onclick="subscribeToPush()"><i class="fas fa-bell-slash"></i> Enable Notifications</button>';
+    }
+  }
+
+  var html = '<div style="max-width:560px;margin:0 auto">' +
+    '<h3 style="margin:0 0 16px 0;color:#1E293B"><i class="fas fa-bell"></i> Notification Settings</h3>' +
+
+    // Push notifications section
+    '<div style="background:white;border:1px solid #E2E8F0;border-radius:10px;padding:16px;margin-bottom:16px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+        '<div><strong style="font-size:14px"><i class="fas fa-mobile-alt" style="color:#3B82F6"></i> Browser Push Notifications</strong>' +
+        '<div style="font-size:12px;color:#64748B">Get notified even when the app is in the background</div></div>' +
+        '<div>' + pushBtnHtml + '</div>' +
+      '</div>' +
+      '<div style="font-size:12px;color:#64748B">Status: ' + pushStatus + '</div>' +
+    '</div>' +
+
+    // Email notifications section
+    '<div style="background:white;border:1px solid #E2E8F0;border-radius:10px;padding:16px;margin-bottom:16px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+        '<div><strong style="font-size:14px"><i class="fas fa-envelope" style="color:#8B5CF6"></i> Email Notifications</strong>' +
+        '<div style="font-size:12px;color:#64748B">Receive important alerts via email to ' + escHtml(currentUser.email || '—') + '</div></div>' +
+        '<label class="shell-toggle"><input type="checkbox" id="prefEmailEnabled" ' + (prefs.email_enabled !== 0 ? 'checked' : '') + '><span class="shell-toggle-slider"></span></label>' +
+      '</div>' +
+    '</div>' +
+
+    // Notification types
+    '<div style="background:white;border:1px solid #E2E8F0;border-radius:10px;padding:16px;margin-bottom:16px">' +
+      '<strong style="font-size:14px;display:block;margin-bottom:12px"><i class="fas fa-filter" style="color:#F59E0B"></i> Notification Types</strong>' +
+      '<div style="display:grid;gap:8px">' +
+        _notifPrefRow('prefTasks', 'Tasks & Follow-ups', 'fa-tasks', '#3B82F6', prefs.notify_tasks !== 0) +
+        _notifPrefRow('prefPricing', 'Pricing Alerts', 'fa-dollar-sign', '#16A34A', prefs.notify_pricing !== 0) +
+        _notifPrefRow('prefInventory', 'Inventory (transfers, stock)', 'fa-boxes', '#D97706', prefs.notify_inventory !== 0) +
+        _notifPrefRow('prefPurchasing', 'Purchasing & Orders', 'fa-shopping-cart', '#8B5CF6', prefs.notify_purchasing !== 0) +
+        _notifPrefRow('prefOrders', 'POS & Sales', 'fa-cash-register', '#EC4899', prefs.notify_orders !== 0) +
+      '</div>' +
+    '</div>' +
+
+    '<button class="pos-btn" id="shellSaveNotifPrefs" style="background:#1E293B;color:white;width:100%;padding:12px;border-radius:8px;font-size:14px;font-weight:600"><i class="fas fa-save"></i> Save Preferences</button>' +
+  '</div>';
+
+  // Show in a modal
+  showShellModal('Notification Settings', html);
+
+  // Bind save
+  setTimeout(function() {
+    var saveBtn = document.getElementById('shellSaveNotifPrefs');
+    if (saveBtn) saveBtn.addEventListener('click', function() {
+      saveBtn.disabled = true; saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+      API.put('/notifications/preferences', {
+        user_id: currentUser.id,
+        email_enabled: document.getElementById('prefEmailEnabled').checked ? 1 : 0,
+        push_enabled: (Notification.permission === 'granted') ? 1 : 0,
+        notify_tasks: document.getElementById('prefTasks').checked ? 1 : 0,
+        notify_pricing: document.getElementById('prefPricing').checked ? 1 : 0,
+        notify_inventory: document.getElementById('prefInventory').checked ? 1 : 0,
+        notify_purchasing: document.getElementById('prefPurchasing').checked ? 1 : 0,
+        notify_orders: document.getElementById('prefOrders').checked ? 1 : 0
+      }).then(function() {
+        shellToast('Notification preferences saved!', 'success');
+        saveBtn.disabled = false; saveBtn.innerHTML = '<i class="fas fa-save"></i> Save Preferences';
+      }).catch(function(e) {
+        shellToast('Failed to save: ' + (e.response?.data?.error || e.message), 'error');
+        saveBtn.disabled = false; saveBtn.innerHTML = '<i class="fas fa-save"></i> Save Preferences';
+      });
+    });
+  }, 50);
+}
+
+function _notifPrefRow(id, label, icon, color, checked) {
+  return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0">' +
+    '<div style="display:flex;align-items:center;gap:8px"><i class="fas ' + icon + '" style="color:' + color + ';width:20px;text-align:center"></i> <span style="font-size:13px">' + label + '</span></div>' +
+    '<label class="shell-toggle"><input type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + '><span class="shell-toggle-slider"></span></label>' +
+  '</div>';
+}
+
+function escHtml(s) {
+  var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML;
+}
+
+function showShellModal(title, body) {
+  var overlay = document.getElementById('shellModalOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'shellModalOverlay';
+    overlay.className = 'shell-modal-overlay';
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = '<div class="shell-modal">' +
+    '<div class="shell-modal-header"><h3>' + title + '</h3><button class="shell-modal-close" onclick="closeShellModal()">&times;</button></div>' +
+    '<div class="shell-modal-body">' + body + '</div></div>';
+  overlay.style.display = 'flex';
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) closeShellModal(); });
+}
+
+function closeShellModal() {
+  var overlay = document.getElementById('shellModalOverlay');
+  if (overlay) overlay.style.display = 'none';
 }
 
 function cleanupActiveModule() {
@@ -1830,6 +2057,8 @@ async function avSavePreferences(userId) {
         _canViewFinancials = JSON.parse(savedFin);
         window._canViewFinancials = _canViewFinancials;
       }
+      // Register service worker for push notifications
+      initPushNotifications();
       // Auto-navigate to default landing if configured
       if (currentUser.default_module) {
         launchModule(currentUser.default_module, currentUser.default_page || null);

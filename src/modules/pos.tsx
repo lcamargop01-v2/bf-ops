@@ -2191,12 +2191,39 @@ app.get('/api/pos/customer-crm/:customerId', async (c) => {
 app.get('/api/pos/fees', async (c) => {
   const db = c.env.DB
   const locationId = c.req.query('location_id') || ''
-  let q = 'SELECT * FROM fee_config WHERE active = 1'
+  const activeOnly = c.req.query('active_only') === '1'
+  let q = 'SELECT *, active as is_active FROM fee_config WHERE 1=1'
   const binds: any[] = []
+  if (activeOnly) { q += ' AND active = 1' }
   if (locationId) { q += ' AND (location_id = ? OR location_id IS NULL)'; binds.push(parseInt(locationId)) }
   q += ' ORDER BY fee_type'
   const r = await db.prepare(q).bind(...binds).all()
   return c.json(r.results || [])
+})
+
+// Update fee config
+app.put('/api/pos/fees/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+
+  const sets: string[] = ['updated_at = CURRENT_TIMESTAMP']
+  const binds: any[] = []
+
+  if (body.rate !== undefined) { sets.push('rate = ?'); binds.push(body.rate) }
+  if (body.rate_type !== undefined) { sets.push('rate_type = ?'); binds.push(body.rate_type) }
+  if (body.is_active !== undefined) { sets.push('active = ?'); binds.push(body.is_active ? 1 : 0) }
+  if (body.active !== undefined) { sets.push('active = ?'); binds.push(body.active ? 1 : 0) }
+  if (body.name !== undefined) { sets.push('name = ?'); binds.push(body.name) }
+  if (body.apply_to !== undefined) { sets.push('apply_to = ?'); binds.push(body.apply_to) }
+  if (body.min_order_amount !== undefined) { sets.push('min_order_amount = ?'); binds.push(body.min_order_amount) }
+  if (body.max_fee !== undefined) { sets.push('max_fee = ?'); binds.push(body.max_fee) }
+  if (body.legal_notice !== undefined) { sets.push('legal_notice = ?'); binds.push(body.legal_notice) }
+  if (body.notes !== undefined) { sets.push('notes = ?'); binds.push(body.notes) }
+
+  binds.push(id)
+  await db.prepare(`UPDATE fee_config SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run()
+  return c.json({ success: true })
 })
 
 // Calculate fees for an order
@@ -2205,7 +2232,7 @@ app.post('/api/pos/calculate-fees', async (c) => {
   const body = await c.req.json() as any
   const { subtotal, is_delivery, payment_method, location_id } = body
 
-  const fees = await db.prepare('SELECT * FROM fee_config WHERE active = 1').all()
+  const fees = await db.prepare('SELECT *, active as is_active FROM fee_config WHERE active = 1').all()
   const result: any[] = []
 
   for (const fee of (fees.results || []) as any[]) {

@@ -1306,18 +1306,26 @@ function renderPayDetails() {
     var ccConfig = _s._ccFeeConfig;
     var ccFeeAmt = 0;
     var ccFeeHtml = '';
-    if (method === 'credit_card' && ccConfig && ccConfig.is_active) {
-      ccFeeAmt = totals.total * ((ccConfig.rate || 0) / 100);
-      ccFeeHtml = '<div style="background:#FEF3C7;border-radius:8px;padding:10px;margin-top:10px;font-size:12px;color:#92400E">' +
-        '<i class="fas fa-info-circle"></i> <strong>Credit Card Convenience Fee:</strong> ' + (ccConfig.rate || 0) + '% = $' + ccFeeAmt.toFixed(2) +
-        '<br><span style="font-size:11px;color:#B45309">Total with fee: <strong>$' + (totals.total + ccFeeAmt).toFixed(2) + '</strong></span>' +
-        '<br><span style="font-size:10px;color:#78716C">Per credit card convenience fee rules, this fee is disclosed before payment and applies only to credit card transactions.</span>' +
+    if (method === 'credit_card' && ccConfig && (ccConfig.is_active || ccConfig.active)) {
+      ccFeeAmt = Math.round(totals.total * ((ccConfig.rate || 0) / 100) * 100) / 100;
+      ccFeeHtml = '<div style="background:#FEF3C7;border:1px solid #FDE68A;border-radius:8px;padding:12px;margin-top:12px;font-size:12px;color:#92400E">' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><i class="fas fa-info-circle" style="color:#D97706"></i> <strong>Credit Card Processing Fee</strong></div>' +
+        '<div style="font-size:13px;margin-bottom:6px">A <strong>' + (ccConfig.rate || 0) + '%</strong> processing fee of <strong>$' + ccFeeAmt.toFixed(2) + '</strong> applies to credit card payments.</div>' +
+        '<div style="background:#FFFBEB;border-radius:6px;padding:8px;font-size:12px;font-weight:600;color:#92400E">New Total: <span style="font-size:15px">$' + (totals.total + ccFeeAmt).toFixed(2) + '</span></div>' +
+        '<div style="font-size:10px;color:#78716C;margin-top:8px;line-height:1.4">' +
+          '<i class="fas fa-balance-scale" style="margin-right:3px"></i> ' + esc(ccConfig.legal_notice || 'This fee does not exceed the merchant\'s cost of acceptance. You may avoid this fee by paying with cash, check, or debit card.') +
+        '</div>' +
         '</div>';
+    } else if (method === 'debit_card') {
+      // Legal: No convenience fee on debit cards
+      ccFeeAmt = 0;
     }
     _s.appliedCCFee = ccFeeAmt;
+    var cardIcon = method === 'debit_card' ? 'far fa-credit-card' : 'fas fa-credit-card';
+    var cardLabel = method === 'debit_card' ? 'Debit Card' : 'Credit Card';
     detailEl.innerHTML = '<div style="text-align:center;padding:16px;color:var(--pos-gray-500)">' +
-      '<i class="fas fa-credit-card" style="font-size:24px;margin-bottom:8px;display:block"></i>' +
-      '<div>Process <strong>$' + (totals.total + ccFeeAmt).toFixed(2) + '</strong> on card terminal</div>' +
+      '<i class="' + cardIcon + '" style="font-size:24px;margin-bottom:8px;display:block"></i>' +
+      '<div>Process <strong>$' + (totals.total + ccFeeAmt).toFixed(2) + '</strong> via ' + cardLabel + '</div>' +
       ccFeeHtml +
       '<input type="text" placeholder="Last 4 digits (optional)" id="posCardLast4" maxlength="4" style="margin-top:12px;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;text-align:center;font-size:16px;width:100px">' +
     '</div>';
@@ -1503,8 +1511,8 @@ function calcTotals() {
   // Calculate fees
   var fuelSurcharge = 0;
   var ccFee = 0;
-  var fuelConfig = _s.fees.find(function(f) { return f.fee_type === 'fuel_surcharge' && f.is_active; });
-  var ccConfig = _s.fees.find(function(f) { return f.fee_type === 'cc_convenience' && f.is_active; });
+  var fuelConfig = _s.fees.find(function(f) { return f.fee_type === 'fuel_surcharge' && (f.is_active || f.active); });
+  var ccConfig = _s.fees.find(function(f) { return f.fee_type === 'cc_convenience' && (f.is_active || f.active); });
   if (fuelConfig && (_s.deliveryReq === 'delivery')) {
     fuelSurcharge = (subtotal - promoDisc) * ((fuelConfig.rate || 0) / 100);
   }
@@ -3403,33 +3411,53 @@ function loadFeeAdmin() {
     var html = '<div class="pos-cust-view-header">' +
       '<div class="pos-cust-view-title"><h2><i class="fas fa-sliders"></i> Fee & Surcharge Settings</h2></div></div>';
 
-    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;margin-top:16px">';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px;margin-top:16px">';
 
     fees.forEach(function(fee) {
-      var icon = fee.fee_type === 'fuel_surcharge' ? 'fa-gas-pump' : 'fa-credit-card';
-      var label = fee.fee_type === 'fuel_surcharge' ? 'Fuel Surcharge' : 'CC Convenience Fee';
-      var desc = fee.fee_type === 'fuel_surcharge'
-        ? 'Automatically added to delivery orders'
-        : 'Applied to credit card payments. Must follow legal requirements: disclosed before payment, not applied to debit cards.';
+      var isFuel = fee.fee_type === 'fuel_surcharge';
+      var icon = isFuel ? 'fa-gas-pump' : 'fa-credit-card';
+      var label = isFuel ? 'Fuel Surcharge' : 'Credit Card Processing Fee';
+      var isOn = fee.is_active || fee.active;
+      var desc, legalBlock;
 
-      html += '<div style="background:white;border:1px solid var(--pos-gray-200);border-radius:12px;padding:20px" id="posFeeCard_' + fee.id + '">' +
+      if (isFuel) {
+        desc = 'Automatically applied when delivery is selected at checkout. Calculated on the order subtotal after any promo discounts.';
+        legalBlock = '';
+      } else {
+        desc = 'Applied to credit card payments only. NOT applied to debit card, cash, check, or account payments.';
+        legalBlock = '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px;margin:10px 0;font-size:11px;line-height:1.5;color:#991B1B">' +
+          '<strong><i class="fas fa-balance-scale"></i> Legal Requirements (Visa/MC rules & state law):</strong><br>' +
+          '&bull; Fee must not exceed your actual cost of card acceptance (typically 2-4%)<br>' +
+          '&bull; Must be disclosed to customer BEFORE payment is processed<br>' +
+          '&bull; Must NOT be applied to debit card transactions<br>' +
+          '&bull; Must be listed as a separate line item on receipt<br>' +
+          '&bull; Some states prohibit surcharges — verify your state allows it</div>';
+      }
+
+      html += '<div style="background:white;border:1px solid ' + (isOn ? '#FDE68A' : 'var(--pos-gray-200)') + ';border-radius:12px;padding:20px;position:relative" id="posFeeCard_' + fee.id + '">' +
+        (isOn ? '<div style="position:absolute;top:12px;right:12px"><span class="pos-badge pos-badge-green" style="font-size:10px">ACTIVE</span></div>' :
+          '<div style="position:absolute;top:12px;right:12px"><span class="pos-badge" style="font-size:10px;background:#F1F5F9;color:#94A3B8">OFF</span></div>') +
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">' +
-        '<div style="width:40px;height:40px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:' + (fee.is_active ? '#FEF3C7' : '#F1F5F9') + ';color:' + (fee.is_active ? '#D97706' : '#94A3B8') + ';font-size:18px">' +
-        '<i class="fas ' + icon + '"></i></div>' +
-        '<div><div style="font-weight:700;font-size:15px">' + esc(label) + '</div>' +
-        '<div style="font-size:11px;color:var(--pos-gray-500)">' + esc(desc) + '</div></div>' +
+          '<div style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:' + (isOn ? '#FEF3C7' : '#F1F5F9') + ';color:' + (isOn ? '#D97706' : '#94A3B8') + ';font-size:18px">' +
+          '<i class="fas ' + icon + '"></i></div>' +
+          '<div style="flex:1"><div style="font-weight:700;font-size:15px">' + esc(label) + '</div>' +
+          '<div style="font-size:11px;color:var(--pos-gray-500);margin-top:2px">' + desc + '</div></div>' +
         '</div>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
-        '<div><label style="font-size:11px;font-weight:600;color:var(--pos-gray-500);text-transform:uppercase;display:block;margin-bottom:3px">Rate (%)</label>' +
-        '<input type="number" id="posFeeRate_' + fee.id + '" value="' + (fee.rate || 0) + '" min="0" max="100" step="0.1" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:14px"></div>' +
-        '<div><label style="font-size:11px;font-weight:600;color:var(--pos-gray-500);text-transform:uppercase;display:block;margin-bottom:3px">Status</label>' +
-        '<select id="posFeeActive_' + fee.id + '" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:14px">' +
-        '<option value="1"' + (fee.is_active ? ' selected' : '') + '>Active</option>' +
-        '<option value="0"' + (!fee.is_active ? ' selected' : '') + '>Disabled</option>' +
-        '</select></div>' +
+        legalBlock +
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">' +
+          '<div><label style="font-size:11px;font-weight:600;color:var(--pos-gray-500);text-transform:uppercase;display:block;margin-bottom:3px">Rate</label>' +
+          '<div style="display:flex;align-items:center"><input type="number" id="posFeeRate_' + fee.id + '" value="' + (fee.rate || 0) + '" min="0" max="100" step="0.1" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:6px 0 0 6px;font-size:14px">' +
+          '<span style="padding:8px 10px;background:var(--pos-gray-100);border:1px solid var(--pos-gray-200);border-left:none;border-radius:0 6px 6px 0;font-size:13px;color:var(--pos-gray-500)">%</span></div></div>' +
+          '<div><label style="font-size:11px;font-weight:600;color:var(--pos-gray-500);text-transform:uppercase;display:block;margin-bottom:3px">Max Cap ($0=none)</label>' +
+          '<input type="number" id="posFeeMax_' + fee.id + '" value="' + (fee.max_fee || 0) + '" min="0" step="1" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:14px"></div>' +
+          '<div><label style="font-size:11px;font-weight:600;color:var(--pos-gray-500);text-transform:uppercase;display:block;margin-bottom:3px">Status</label>' +
+          '<select id="posFeeActive_' + fee.id + '" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:14px">' +
+          '<option value="1"' + (isOn ? ' selected' : '') + '>Active</option>' +
+          '<option value="0"' + (!isOn ? ' selected' : '') + '>Disabled</option>' +
+          '</select></div>' +
         '</div>' +
         '<button class="pos-btn pos-btn-sm" data-save-fee="' + fee.id + '" style="background:var(--pos-navy);color:white;width:100%"><i class="fas fa-save"></i> Save Changes</button>' +
-        '</div>';
+      '</div>';
     });
 
     if (fees.length === 0) {
@@ -3443,13 +3471,14 @@ function loadFeeAdmin() {
       btn.addEventListener('click', function() {
         var fid = btn.dataset.saveFee;
         var rate = parseFloat(document.getElementById('posFeeRate_' + fid).value) || 0;
+        var maxFee = parseFloat(document.getElementById('posFeeMax_' + fid).value) || 0;
         var isActive = document.getElementById('posFeeActive_' + fid).value === '1';
         btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-        API.put('/pos/fees/' + fid, { rate: rate, is_active: isActive }).then(function() {
+        API.put('/pos/fees/' + fid, { rate: rate, max_fee: maxFee, is_active: isActive }).then(function() {
           toast('Fee updated');
           btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
-          // Reload fees
-          API.get('/pos/fees').then(function(r2) { _s.fees = r2.data || []; });
+          // Reload fees to update everywhere
+          API.get('/pos/fees').then(function(r2) { _s.fees = r2.data || []; loadFeeAdmin(); });
         }).catch(function(err) {
           toast('Error: ' + errMsg(err), 'error');
           btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes';

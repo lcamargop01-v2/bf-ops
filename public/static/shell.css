@@ -339,3 +339,57 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 @media (max-width: 480px) {
   .shell-notif-dropdown { width: calc(100vw - 24px); right: -100px; }
 }
+
+/* ==================== PUSH NOTIFICATION TOGGLE ==================== */
+.shell-push-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px;
+  border-radius: 8px; font-size: 12px; font-weight: 600; border: 1px solid #E2E8F0;
+  background: #F8FAFC; color: #64748B; cursor: pointer; transition: all 0.2s;
+}
+.shell-push-btn:hover { background: #E2E8F0; }
+.shell-push-btn.active { background: #DCFCE7; color: #16A34A; border-color: #BBF7D0; }
+.shell-push-btn.active:hover { background: #BBF7D0; }
+
+/* ==================== TOGGLE SWITCH ==================== */
+.shell-toggle { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+.shell-toggle input { opacity: 0; width: 0; height: 0; }
+.shell-toggle-slider {
+  position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+  background: #CBD5E1; border-radius: 22px; transition: 0.3s;
+}
+.shell-toggle-slider::before {
+  content: ''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px;
+  background: white; border-radius: 50%; transition: 0.3s; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.shell-toggle input:checked + .shell-toggle-slider { background: #3B82F6; }
+.shell-toggle input:checked + .shell-toggle-slider::before { transform: translateX(18px); }
+
+/* ==================== SHELL MODAL ==================== */
+.shell-modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  z-index: 10000; align-items: center; justify-content: center; padding: 20px;
+}
+.shell-modal {
+  background: #F8FAFC; border-radius: 16px; max-width: 620px; width: 100%;
+  max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px rgba(0,0,0,0.25);
+}
+.shell-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid #E2E8F0; position: sticky; top: 0; background: white;
+  border-radius: 16px 16px 0 0; z-index: 1;
+}
+.shell-modal-header h3 { margin: 0; font-size: 16px; color: #1E293B; }
+.shell-modal-close {
+  width: 32px; height: 32px; border-radius: 8px; border: none; background: #F1F5F9;
+  font-size: 18px; color: #64748B; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.shell-modal-close:hover { background: #E2E8F0; color: #1E293B; }
+.shell-modal-body { padding: 20px; }
+
+/* ==================== NOTIFICATION SETTINGS BUTTON ==================== */
+.shell-notif-settings-btn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px;
+  border-radius: 6px; font-size: 11px; font-weight: 600; border: 1px solid #E2E8F0;
+  background: white; color: #64748B; cursor: pointer; margin-left: 6px;
+}
+.shell-notif-settings-btn:hover { background: #F1F5F9; }
