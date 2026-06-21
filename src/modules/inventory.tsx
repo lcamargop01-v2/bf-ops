@@ -124,11 +124,13 @@ app.get('/api/inventory/stock', async (c) => {
   const sort = c.req.query('sort') // name, category, sku, qty, last_counted
 
   let query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
+    p.primary_vendor_id, sv.name as primary_vendor_name,
     l.name as location_name, l.code as location_code,
     u_count.name as last_counted_by_name
     FROM inventory_stock s
     JOIN products p ON s.product_id = p.id
     JOIN locations l ON s.location_id = l.id
+    LEFT JOIN suppliers sv ON p.primary_vendor_id = sv.id
     LEFT JOIN users u_count ON s.last_counted_by = u_count.id
     WHERE p.active = 1`
   const binds: any[] = []
@@ -1339,16 +1341,17 @@ app.get('/api/inventory/products', async (c) => {
   const limit = parseInt(c.req.query('limit') || '500')
   const offset = parseInt(c.req.query('offset') || '0')
 
-  let query = 'SELECT id, name, sku, category, unit_type, price, cost, weight_per_unit, active, tax_rate, pallet_qty, stock_quantity FROM products'
+  let query = `SELECT p.id, p.name, p.sku, p.category, p.unit_type, p.price, p.cost, p.weight_per_unit, p.active, p.tax_rate, p.pallet_qty, p.stock_quantity, p.primary_vendor_id, sv.name as primary_vendor_name
+    FROM products p LEFT JOIN suppliers sv ON p.primary_vendor_id = sv.id`
   const conditions: string[] = []
   const binds: any[] = []
 
-  if (!includeInactive) { conditions.push('active = 1') }
-  if (search) { conditions.push('(name LIKE ? OR sku LIKE ?)'); binds.push(`%${search}%`, `%${search}%`) }
-  if (category) { conditions.push('category = ?'); binds.push(category) }
+  if (!includeInactive) { conditions.push('p.active = 1') }
+  if (search) { conditions.push('(p.name LIKE ? OR p.sku LIKE ?)'); binds.push(`%${search}%`, `%${search}%`) }
+  if (category) { conditions.push('p.category = ?'); binds.push(category) }
 
   if (conditions.length) query += ' WHERE ' + conditions.join(' AND ')
-  query += ' ORDER BY name ASC LIMIT ? OFFSET ?'
+  query += ' ORDER BY p.name ASC LIMIT ? OFFSET ?'
   binds.push(limit, offset)
 
   const products = await db.prepare(query).bind(...binds).all()
@@ -1439,7 +1442,7 @@ app.post('/api/inventory/products/recategorize-apply', async (c) => {
   const body = await c.req.json()
   // overrides: { [product_id]: category } — user can override specific products
   const overrides: Record<number, string> = body.overrides || {}
-  const validCategories = ['hay', 'shavings', 'grain', 'shelf_goods']
+  const validCategories = ['hay', 'shavings', 'shelf_goods']
 
   // Fetch all products
   const allProducts: any[] = []
@@ -1495,12 +1498,24 @@ app.post('/api/inventory/products/recategorize-apply', async (c) => {
   return c.json({ success: true, updated, skipped, total: allProducts.length })
 })
 
-// Get single product detail
+// Get single product detail (enriched with vendor info)
 app.get('/api/inventory/products/:id', async (c) => {
   const db = c.env.DB
   const id = parseInt(c.req.param('id'))
-  const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first()
+  const product = await db.prepare(
+    `SELECT p.*, s.name as primary_vendor_name, s.code as primary_vendor_code
+     FROM products p LEFT JOIN suppliers s ON p.primary_vendor_id = s.id WHERE p.id = ?`
+  ).bind(id).first() as any
   if (!product) return c.json({ error: 'Product not found' }, 404)
+
+  // Get additional vendors
+  const vendors = await db.prepare(
+    `SELECT pv.*, s.name as vendor_name, s.code as vendor_code
+     FROM product_vendors pv JOIN suppliers s ON pv.supplier_id = s.id
+     WHERE pv.product_id = ? ORDER BY pv.is_primary DESC, s.name ASC`
+  ).bind(id).all()
+  product.vendors = vendors.results || []
+
   return c.json({ product })
 })
 
@@ -1518,7 +1533,7 @@ app.put('/api/inventory/products/:id', async (c) => {
   // Fields that can be updated
   const allowedFields = ['name', 'sku', 'category', 'unit_type', 'price', 'cost', 'weight_per_unit',
     'active', 'tax_rate', 'pallet_qty', 'pallet_weight', 'length_in', 'width_in', 'height_in',
-    'stackable', 'max_stack', 'bag_length_in', 'bag_width_in', 'bag_height_in']
+    'stackable', 'max_stack', 'bag_length_in', 'bag_width_in', 'bag_height_in', 'primary_vendor_id']
 
   const sets: string[] = []
   const vals: any[] = []
@@ -1563,36 +1578,94 @@ app.post('/api/inventory/products', async (c) => {
   if (!body.name) return c.json({ error: 'Product name is required' }, 400)
 
   const result = await db.prepare(
-    `INSERT INTO products (name, sku, category, unit_type, price, cost, weight_per_unit, active, tax_rate, pallet_qty)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO products (name, sku, category, unit_type, price, cost, weight_per_unit, active, tax_rate, pallet_qty, primary_vendor_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    body.name, body.sku || null, body.category || 'other', body.unit_type || 'each',
+    body.name, body.sku || null, body.category || 'shelf_goods', body.unit_type || 'each',
     body.price || 0, body.cost || 0, body.weight_per_unit || 0,
-    body.active !== undefined ? body.active : 1, body.tax_rate || 0, body.pallet_qty || 0
+    body.active !== undefined ? body.active : 1, body.tax_rate || 0, body.pallet_qty || 0,
+    body.primary_vendor_id || null
   ).run()
 
-  const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(result.meta.last_row_id).first()
+  const productId = result.meta.last_row_id as number
+
+  // If primary vendor specified, also add to product_vendors junction
+  if (body.primary_vendor_id) {
+    await db.prepare(
+      `INSERT OR IGNORE INTO product_vendors (product_id, supplier_id, is_primary, cost) VALUES (?, ?, 1, ?)`
+    ).bind(productId, body.primary_vendor_id, body.cost || 0).run()
+  }
+
+  const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(productId).first()
   return c.json({ success: true, product })
+})
+
+// ==================== PRODUCT VENDORS ====================
+
+// List vendors for a product
+app.get('/api/inventory/products/:id/vendors', async (c) => {
+  const db = c.env.DB
+  const productId = parseInt(c.req.param('id'))
+  const vendors = await db.prepare(
+    `SELECT pv.*, s.name as vendor_name, s.code as vendor_code, s.phone, s.email
+     FROM product_vendors pv JOIN suppliers s ON pv.supplier_id = s.id
+     WHERE pv.product_id = ? ORDER BY pv.is_primary DESC, s.name ASC`
+  ).bind(productId).all()
+  return c.json({ vendors: vendors.results || [] })
+})
+
+// Add vendor to product
+app.post('/api/inventory/products/:id/vendors', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const productId = parseInt(c.req.param('id'))
+  const { supplier_id, is_primary, cost, lead_time_days, notes } = await c.req.json()
+
+  if (!supplier_id) return c.json({ error: 'Supplier is required' }, 400)
+
+  await db.prepare(
+    `INSERT INTO product_vendors (product_id, supplier_id, is_primary, cost, lead_time_days, notes)
+     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(product_id, supplier_id) DO UPDATE SET
+     is_primary=excluded.is_primary, cost=excluded.cost, lead_time_days=excluded.lead_time_days,
+     notes=excluded.notes, updated_at=CURRENT_TIMESTAMP`
+  ).bind(productId, supplier_id, is_primary ? 1 : 0, cost || 0, lead_time_days || 0, notes || null).run()
+
+  // If marking as primary, update products.primary_vendor_id and clear other primaries
+  if (is_primary) {
+    await db.prepare('UPDATE products SET primary_vendor_id = ? WHERE id = ?').bind(supplier_id, productId).run()
+    await db.prepare('UPDATE product_vendors SET is_primary = 0 WHERE product_id = ? AND supplier_id != ?').bind(productId, supplier_id).run()
+  }
+
+  return c.json({ success: true })
+})
+
+// Remove vendor from product
+app.delete('/api/inventory/products/:id/vendors/:vendorId', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const productId = parseInt(c.req.param('id'))
+  const vendorId = parseInt(c.req.param('vendorId'))
+
+  const pv = await db.prepare('SELECT * FROM product_vendors WHERE id = ?').bind(vendorId).first() as any
+  if (pv && pv.is_primary) {
+    // Clear primary_vendor_id on product
+    await db.prepare('UPDATE products SET primary_vendor_id = NULL WHERE id = ?').bind(productId).run()
+  }
+  await db.prepare('DELETE FROM product_vendors WHERE id = ?').bind(vendorId).run()
+  return c.json({ success: true })
 })
 
 // ==================== CATEGORY CONSOLIDATION HELPER ====================
 
-// Classify a product into granular categories matching production DB
-// Categories: hay, shavings, grain, feed, supplement, grooming, fly_control, tack,
-// first_aid, farm_supplies, barn_equipment, poultry, treats, dewormer, hoof_care,
-// blankets, riding_apparel, pet_supplies, fencing, tools, cleaning, gift, shelf_goods
+// Classify a product into 3 consolidated categories: hay, shavings, shelf_goods
 function classifyProduct(name: string, currentCategory: string): string {
   const n = (name || '').toLowerCase()
   const cat = (currentCategory || '').toLowerCase()
 
-  // If the product already has a valid granular category, keep it
-  const validCategories = [
-    'hay', 'shavings', 'grain', 'feed', 'supplement', 'grooming', 'fly_control', 'tack',
-    'first_aid', 'farm_supplies', 'barn_equipment', 'poultry', 'treats', 'dewormer',
-    'hoof_care', 'blankets', 'riding_apparel', 'pet_supplies', 'fencing', 'tools',
-    'cleaning', 'gift', 'shelf_goods', 'bedding', 'health', 'insect_control'
-  ]
-  if (validCategories.includes(cat)) return cat
+  // If already one of the 3 valid categories, keep it
+  if (['hay', 'shavings', 'shelf_goods'].includes(cat)) return cat
 
   // === KEYWORD-BASED CLASSIFICATION ===
 

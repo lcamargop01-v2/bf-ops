@@ -3217,7 +3217,7 @@ async function showNewOrderModal() {
               <select class="form-select" id="inlineNewProdUnit"><option value="bag">Bag</option><option value="bale">Bale</option><option value="pail">Pail</option><option value="block">Block</option><option value="each">Each</option></select>
             </div>
             <div class="form-group"><label class="form-label" style="font-size:11px">Category</label>
-              <select class="form-select" id="inlineNewProdCat"><option value="horse">Horse</option><option value="cattle">Cattle</option><option value="poultry">Poultry</option><option value="swine">Swine</option><option value="goat">Goat</option><option value="supplement">Supplement</option><option value="other">Other</option></select>
+              <select class="form-select" id="inlineNewProdCat"><option value="hay">Hay</option><option value="shavings">Shavings</option><option value="shelf_goods">Shelf Goods</option></select>
             </div>
           </div>
           <div class="form-row">
@@ -3683,7 +3683,7 @@ async function scanTicketImage() {
             const { data: newProd } = await API.post('/products', {
               name: item.product_name,
               sku: item.sku || null,
-              category: 'other',
+              category: 'shelf_goods',
               weight_per_unit: 50,
               unit_type: 'bag',
               price: item.price || 0,
@@ -8460,13 +8460,13 @@ async function renderProducts() {
   pc.innerHTML = '<div style="text-align:center;padding:60px"><i class="fas fa-spinner fa-spin fa-2x" style="color:#9ca3af"></i></div>';
   const showArchived = _archiveToggles.products || false;
   const { data } = await API.get('/products' + (showArchived ? '?include_archived=1' : ''));
-  const catIcons = { horse: 'fa-horse-head', cattle: 'fa-cow', poultry: 'fa-egg', swine: 'fa-piggy-bank', goat: 'fa-paw', supplement: 'fa-flask', other: 'fa-box' };
+  const catIcons = { hay: 'fa-seedling', shavings: 'fa-tree', shelf_goods: 'fa-box' };
   pc.innerHTML = `
     <div class="filters-bar no-print">
       <div class="search-bar" style="flex:1;max-width:320px"><i class="fas fa-search"></i><input class="form-input" placeholder="Search products..." id="prodSearch" onkeyup="filterProducts()"></div>
       <select class="form-select" style="width:160px" id="prodCatFilter" onchange="filterProducts()">
-        <option value="">All Categories</option><option value="horse">Horse</option><option value="cattle">Cattle</option>
-        <option value="poultry">Poultry</option><option value="goat">Goat</option><option value="swine">Swine</option><option value="supplement">Supplement</option>
+        <option value="">All Categories</option><option value="hay">Hay</option><option value="shavings">Shavings</option>
+        <option value="shelf_goods">Shelf Goods</option>
       </select>
       ${archiveToggleBtn(showArchived, "toggleArchive('products','renderProducts')")}
       <button class="btn btn-primary" onclick="showNewProductModal()"><i class="fas fa-plus"></i> New Product</button>
@@ -8509,7 +8509,7 @@ async function filterProducts() {
   if (category) params.set('category', category);
   if (showArchived) params.set('include_archived', '1');
   const { data } = await API.get(`/products?${params}`);
-  const catIcons = { horse: 'fa-horse-head', cattle: 'fa-cow', poultry: 'fa-egg', swine: 'fa-piggy-bank', goat: 'fa-paw', supplement: 'fa-flask', other: 'fa-box' };
+  const catIcons = { hay: 'fa-seedling', shavings: 'fa-tree', shelf_goods: 'fa-box' };
   document.getElementById('productsTableBody').innerHTML = data.products.map(p => {
     const stockStatus = p.stock_quantity <= 0 ? 'out' : p.stock_quantity < 20 ? 'low' : 'ok';
     const stockBadge = stockStatus === 'out' ? '<span class="badge badge-cancelled">Out of Stock</span>' : stockStatus === 'low' ? '<span class="badge badge-urgent">Low Stock</span>' : '<span class="badge badge-confirmed">In Stock</span>';
@@ -8534,7 +8534,7 @@ async function showNewProductModal() {
         <div class="form-group"><label class="form-label">SKU</label><input class="form-input" id="newProdSku"></div></div>
       <div class="form-row-3">
         <div class="form-group"><label class="form-label">Category</label>
-          <select class="form-select" id="newProdCat"><option value="horse">Horse</option><option value="cattle">Cattle</option><option value="poultry">Poultry</option><option value="goat">Goat</option><option value="swine">Swine</option><option value="supplement">Supplement</option><option value="other">Other</option></select>
+          <select class="form-select" id="newProdCat"><option value="hay">Hay</option><option value="shavings">Shavings</option><option value="shelf_goods">Shelf Goods</option></select>
         </div>
         <div class="form-group"><label class="form-label">Weight/Unit (lbs)</label><input class="form-input" type="number" id="newProdWeight" value="50"></div>
         <div class="form-group"><label class="form-label">Unit Type</label><input class="form-input" id="newProdUnit" value="bag"></div>
@@ -14886,7 +14886,7 @@ async function trCreateOrder(id) {
         try {
           const { data: newProd } = await API.post('/products', {
             name: itm.product_name, sku: itm.sku || null,
-            category: 'other', weight_per_unit: 50, unit_type: 'bag', price: itm.price || 0,
+            category: 'shelf_goods', weight_per_unit: 50, unit_type: 'bag', price: itm.price || 0,
           });
           const prod = newProd.product || { id: newProd.id };
           if (window._prodList) window._prodList.push(prod);
@@ -16499,7 +16499,7 @@ async function sqConfirmItem(id) {
         try {
           const { data: newProd } = await API.post('/products', {
             name: itm.product_name, sku: itm.sku || null,
-            category: 'other', weight_per_unit: 50, unit_type: 'bag', price: itm.price || 0,
+            category: 'shelf_goods', weight_per_unit: 50, unit_type: 'bag', price: itm.price || 0,
           });
           const prod = newProd.product || { id: newProd.id };
           if (window._prodList) window._prodList.push(prod);

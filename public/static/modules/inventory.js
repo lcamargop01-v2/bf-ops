@@ -18,8 +18,9 @@ var invCountCategory = ''; // Quick Count category filter
 var invCountSort = 'name'; // Quick Count sort: name, category, sku, qty, last_counted
 var invRecatData = null; // Recategorize preview data
 var invRecatOverrides = {}; // User overrides { product_id: category }
-var invRecatFilter = ''; // Filter: '', 'changed', 'hay', 'shavings', 'grain', 'shelf_goods'
+var invRecatFilter = ''; // Filter: '', 'changed', 'hay', 'shavings', 'shelf_goods'
 var invRecatSearch = '';
+var invSuppliersList = []; // Cached suppliers for vendor picker
 
 // Permission helper for edit access (view-only enforcement)
 function invCanEdit(feature) {
@@ -55,8 +56,8 @@ window._inventoryInit = function() {
     if (_ca('inventory', window._shellInitialPage)) invPage = window._shellInitialPage;
     window._shellInitialPage = null;
   }
-  Promise.all([invLoadLocations(), invLoadCategories()]).then(function() {
-    console.log('[Inventory] locations loaded:', invLocations.length, ', categories:', invCategoryList.length, '— rendering');
+  Promise.all([invLoadLocations(), invLoadCategories(), invLoadSuppliers()]).then(function() {
+    console.log('[Inventory] locations loaded:', invLocations.length, ', categories:', invCategoryList.length, ', suppliers:', invSuppliersList.length, '— rendering');
     invRender();
   }).catch(function(e) {
     console.error('[Inventory] init failed:', e);
@@ -85,8 +86,15 @@ async function invLoadCategories() {
     var resp = await invAPI.get('/api/inventory/products/categories', { headers: invHeaders() });
     invCategoryList = resp.data.categories || [];
   } catch(e) {
-    invCategoryList = ['hay','shavings','grain','shelf_goods'];
+    invCategoryList = ['hay','shavings','shelf_goods'];
   }
+}
+
+async function invLoadSuppliers() {
+  try {
+    var resp = await invAPI.get('/api/purchasing/suppliers', { headers: invHeaders() });
+    invSuppliersList = (resp.data.suppliers || []).filter(function(s) { return s.active; });
+  } catch(e) { invSuppliersList = []; }
 }
 
 async function invLoadDashboard() {
@@ -383,7 +391,7 @@ function invRenderStockList() {
   var _sf = invCanViewFin();
   var _se = invCanEdit('stock');
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
-  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th><th class="text-right">Incoming</th>' + (_sf ? '<th class="text-right">Sell</th><th class="text-right">Cost</th><th class="text-right">Value</th>' : '') + (_se ? '<th></th>' : '') + '</tr></thead><tbody>';
+  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Vendor</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th><th class="text-right">Incoming</th>' + (_sf ? '<th class="text-right">Sell</th><th class="text-right">Cost</th><th class="text-right">Value</th>' : '') + (_se ? '<th></th>' : '') + '</tr></thead><tbody>';
 
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
@@ -393,7 +401,8 @@ function invRenderStockList() {
     html += '<tr class="' + (lowStock ? 'inv-row-warning' : '') + '">' +
       '<td class="inv-clickable" onclick="invShowProductDetail(' + s.product_id + ')"><strong>' + escH(s.product_name) + '</strong></td>' +
       '<td class="inv-muted">' + escH(s.sku || '—') + '</td>' +
-      '<td><span class="inv-cat-badge inv-cat-' + (s.category || 'other') + '">' + escH(s.category || 'other') + '</span></td>' +
+      '<td><span class="inv-cat-badge inv-cat-' + (s.category || 'shelf_goods') + '">' + escH((s.category || 'shelf_goods').replace(/_/g, ' ')) + '</span></td>' +
+      '<td class="inv-muted" style="font-size:13px">' + escH(s.primary_vendor_name || '—') + '</td>' +
       '<td><span class="inv-loc-badge">' + escH(s.location_code) + '</span></td>' +
       '<td class="text-right"><span class="inv-num-click" onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'all\',\'' + pNameEsc + '\')"><strong>' + (s.qty_on_hand || 0).toLocaleString() + '</strong></span></td>' +
       '<td class="text-right">' + (s.qty_on_hold || 0 ? '<span class="inv-hold-badge inv-num-click" onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'on_hold\',\'' + pNameEsc + '\')">' + s.qty_on_hold + '</span>' : '—') + '</td>' +
@@ -417,7 +426,7 @@ function invRenderStockList() {
     var pNameEsc = escH(s.product_name).replace(/'/g, "\\'");
     html += '<div class="inv-stock-card' + (lowStock ? ' inv-card-warning' : '') + '" onclick="invShowProductDetail(' + s.product_id + ')">' +
       '<div class="inv-stock-card-top">' +
-      '<div><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + '</span></div>' +
+      '<div><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + (s.primary_vendor_name ? ' \u00b7 ' + escH(s.primary_vendor_name) : '') + '</span></div>' +
       '<span class="inv-loc-badge">' + escH(s.location_code) + '</span>' +
       '</div>' +
       '<div class="inv-stock-card-nums">' +
@@ -924,7 +933,7 @@ async function invRenderCategoriesPage() {
   var filtered = products;
   if (invRecatFilter === 'changed') {
     filtered = products.filter(function(p) { return p.changed || invRecatOverrides[p.id]; });
-  } else if (['hay', 'shavings', 'grain', 'shelf_goods'].indexOf(invRecatFilter) >= 0) {
+  } else if (['hay', 'shavings', 'shelf_goods'].indexOf(invRecatFilter) >= 0) {
     filtered = products.filter(function(p) {
       var eff = invRecatOverrides[p.id] || p.suggested_category;
       return eff === invRecatFilter;
@@ -943,14 +952,13 @@ async function invRenderCategoriesPage() {
 
   // Header
   html += '<div class="inv-section-header"><h2><i class="fas fa-wand-magic-sparkles"></i> Category Consolidation</h2></div>';
-  html += '<p class="inv-muted" style="margin-bottom:16px">AI-powered classification of <strong>' + summary.total + '</strong> products into 4 categories. Review the suggestions below, override any you disagree with, then apply.</p>';
+  html += '<p class="inv-muted" style="margin-bottom:16px">AI-powered classification of <strong>' + summary.total + '</strong> products into 3 categories. Review the suggestions below, override any you disagree with, then apply.</p>';
 
   // Summary cards
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:20px">';
   var cats = [
     { key: 'hay', icon: 'fa-wheat-awn', color: '#059669', label: 'Hay' },
     { key: 'shavings', icon: 'fa-tree', color: '#D97706', label: 'Shavings' },
-    { key: 'grain', icon: 'fa-seedling', color: '#2563EB', label: 'Grain' },
     { key: 'shelf_goods', icon: 'fa-store', color: '#7C3AED', label: 'Shelf Goods' }
   ];
   cats.forEach(function(cat) {
@@ -982,7 +990,6 @@ async function invRenderCategoriesPage() {
     { val: 'changed', label: 'Changed Only (' + summary.changed + ')' },
     { val: 'hay', label: 'Hay (' + (byS.hay || 0) + ')' },
     { val: 'shavings', label: 'Shavings (' + (byS.shavings || 0) + ')' },
-    { val: 'grain', label: 'Grain (' + (byS.grain || 0) + ')' },
     { val: 'shelf_goods', label: 'Shelf Goods (' + (byS.shelf_goods || 0) + ')' }
   ];
   html += '<select class="inv-select" onchange="invRecatFilter=this.value;invRenderCatPage()">';
@@ -1018,7 +1025,6 @@ async function invRenderCategoriesPage() {
       '<option value=""' + (!hasOverride ? ' selected' : '') + '>AI: ' + invCatLabel(p.suggested_category) + '</option>' +
       '<option value="hay"' + (invRecatOverrides[p.id] === 'hay' ? ' selected' : '') + '>Hay</option>' +
       '<option value="shavings"' + (invRecatOverrides[p.id] === 'shavings' ? ' selected' : '') + '>Shavings</option>' +
-      '<option value="grain"' + (invRecatOverrides[p.id] === 'grain' ? ' selected' : '') + '>Grain</option>' +
       '<option value="shelf_goods"' + (invRecatOverrides[p.id] === 'shelf_goods' ? ' selected' : '') + '>Shelf Goods</option>' +
       '</select></td></tr>';
   });
@@ -2221,8 +2227,13 @@ async function invShowProductDetail(productId) {
       var margin = product.price && product.cost ? (((product.price - product.cost) / product.price) * 100).toFixed(1) : '—';
       body += '<div class="inv-product-info-card">';
       body += '<div class="inv-product-info-row"><span class="inv-muted">SKU</span><strong>' + escH(product.sku || '—') + '</strong></div>';
-      body += '<div class="inv-product-info-row"><span class="inv-muted">Category</span><span class="inv-cat-badge inv-cat-' + (product.category || 'other') + '">' + escH(product.category || 'other') + '</span></div>';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">Category</span><span class="inv-cat-badge inv-cat-' + (product.category || 'shelf_goods') + '">' + escH((product.category || 'shelf_goods').replace(/_/g, ' ')) + '</span></div>';
       body += '<div class="inv-product-info-row"><span class="inv-muted">Unit</span><span>' + escH(product.unit_type || 'each') + '</span></div>';
+      body += '<div class="inv-product-info-row"><span class="inv-muted">Primary Vendor</span><strong>' + escH(product.primary_vendor_name || '\u2014 None') + '</strong></div>';
+      if (product.vendors && product.vendors.length > 0) {
+        var vendorNames = product.vendors.map(function(v) { return escH(v.vendor_name) + (v.is_primary ? ' \u2605' : ''); }).join(', ');
+        body += '<div class="inv-product-info-row"><span class="inv-muted">All Vendors</span><span style="font-size:12px">' + vendorNames + '</span></div>';
+      }
       if (invCanViewFin()) {
         body += '<div class="inv-product-info-row"><span class="inv-muted">Sell Price</span><strong style="color:#059669">$' + (product.price || 0).toFixed(2) + '</strong></div>';
         body += '<div class="inv-product-info-row"><span class="inv-muted">Cost</span><strong style="color:#DC2626">$' + (product.cost || 0).toFixed(2) + '</strong></div>';
@@ -2443,14 +2454,15 @@ async function invRenderProductsPage() {
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
   var _pf = invCanViewFin();
   var _pe = invCanEdit('products');
-  html += '<thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Unit</th>' + (_pf ? '<th class="text-right">Sell Price</th><th class="text-right">Cost</th><th class="text-right">Margin</th>' : '') + '<th>Status</th>' + (_pe ? '<th></th>' : '') + '</tr></thead><tbody>';
+  html += '<thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Vendor</th><th>Unit</th>' + (_pf ? '<th class="text-right">Sell Price</th><th class="text-right">Cost</th><th class="text-right">Margin</th>' : '') + '<th>Status</th>' + (_pe ? '<th></th>' : '') + '</tr></thead><tbody>';
 
   invProductsPageData.forEach(function(p) {
     var margin = p.price && p.cost ? (((p.price - p.cost) / p.price) * 100).toFixed(1) + '%' : '—';
     html += '<tr class="' + (!p.active ? 'inv-row-inactive' : '') + '">' +
       '<td class="inv-clickable" onclick="invShowProductDetail(' + p.id + ')"><strong>' + escH(p.name) + '</strong></td>' +
       '<td class="inv-muted">' + escH(p.sku || '—') + '</td>' +
-      '<td><span class="inv-cat-badge inv-cat-' + (p.category || 'other') + '">' + escH(p.category || 'other') + '</span></td>' +
+      '<td><span class="inv-cat-badge inv-cat-' + (p.category || 'shelf_goods') + '">' + escH((p.category || 'shelf_goods').replace(/_/g, ' ')) + '</span></td>' +
+      '<td class="inv-muted" style="font-size:13px">' + escH(p.primary_vendor_name || '—') + '</td>' +
       '<td>' + escH(p.unit_type || 'each') + '</td>' +
       (_pf ? '<td class="text-right">$' + (p.price || 0).toFixed(2) + '</td>' +
       '<td class="text-right inv-muted">$' + (p.cost || 0).toFixed(2) + '</td>' +
@@ -2557,6 +2569,38 @@ async function invShowEditProduct(productId) {
     body += '<div class="inv-form-group"><label>Weight per Unit (lbs)</label><input type="number" step="0.1" class="inv-input" id="invEditWeight" value="' + (p.weight_per_unit || 0) + '"></div>';
     body += '<div class="inv-form-group"><label>Pallet Qty</label><input type="number" class="inv-input" id="invEditPalletQty" value="' + (p.pallet_qty || 0) + '"></div>';
     body += '</div>';
+
+    // Primary Vendor picker
+    var vendorOpts = '<option value="">— No Primary Vendor —</option>';
+    invSuppliersList.forEach(function(s) {
+      vendorOpts += '<option value="' + s.id + '"' + (p.primary_vendor_id == s.id ? ' selected' : '') + '>' + escH(s.name) + (s.code ? ' (' + escH(s.code) + ')' : '') + '</option>';
+    });
+    body += '<div class="inv-form-row">';
+    body += '<div class="inv-form-group" style="flex:2"><label><i class="fas fa-truck-field" style="color:#6366F1"></i> Primary Vendor</label><select class="inv-select" id="invEditPrimaryVendor">' + vendorOpts + '</select></div>';
+    body += '</div>';
+
+    // Additional vendors list
+    var existingVendors = p.vendors || [];
+    body += '<div style="margin-top:8px">';
+    body += '<label style="font-weight:600;font-size:13px;color:#64748B;margin-bottom:6px;display:block"><i class="fas fa-users"></i> Additional Vendors</label>';
+    if (existingVendors.length > 0) {
+      body += '<div id="invEditVendorsList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px">';
+      existingVendors.forEach(function(v) {
+        body += '<div class="inv-vendor-row" style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#F8FAFC;border-radius:8px;font-size:13px">' +
+          '<span style="flex:1"><strong>' + escH(v.vendor_name) + '</strong>' + (v.is_primary ? ' <span style="background:#DBEAFE;color:#1E40AF;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">PRIMARY</span>' : '') +
+          (v.cost ? ' · $' + Number(v.cost).toFixed(2) : '') +
+          (v.lead_time_days ? ' · ' + v.lead_time_days + ' days' : '') + '</span>' +
+          '<button class="inv-btn inv-btn-xs" style="color:#DC2626;background:none;padding:2px 6px" onclick="invRemoveProductVendor(' + productId + ',' + v.id + ')" title="Remove"><i class="fas fa-times"></i></button>' +
+          '</div>';
+      });
+      body += '</div>';
+    } else {
+      body += '<div id="invEditVendorsList" style="margin-bottom:8px"><span class="inv-muted" style="font-size:12px">No additional vendors assigned</span></div>';
+    }
+    body += '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invShowAddVendorRow(' + productId + ')"><i class="fas fa-plus"></i> Add Vendor</button>';
+    body += '<div id="invAddVendorRow" style="display:none;margin-top:8px"></div>';
+    body += '</div>';
+
     body += '</div>';
 
     var footer = '<button class="inv-btn inv-btn-outline" onclick="invCloseModal()">Cancel</button>' +
@@ -2589,6 +2633,7 @@ async function invShowEditProduct(productId) {
 }
 
 async function invSaveProduct(productId) {
+  var vendorVal = document.getElementById('invEditPrimaryVendor') ? document.getElementById('invEditPrimaryVendor').value : '';
   var data = {
     name: document.getElementById('invEditName').value.trim(),
     sku: document.getElementById('invEditSku').value.trim() || null,
@@ -2599,7 +2644,8 @@ async function invSaveProduct(productId) {
     cost: parseFloat(document.getElementById('invEditCost').value) || 0,
     tax_rate: parseFloat(document.getElementById('invEditTaxRate').value) || 0,
     weight_per_unit: parseFloat(document.getElementById('invEditWeight').value) || 0,
-    pallet_qty: parseInt(document.getElementById('invEditPalletQty').value) || 0
+    pallet_qty: parseInt(document.getElementById('invEditPalletQty').value) || 0,
+    primary_vendor_id: vendorVal ? parseInt(vendorVal) : null
   };
 
   if (!data.name) { invToast('Product name is required', 'error'); return; }
@@ -2612,13 +2658,57 @@ async function invSaveProduct(productId) {
   } catch(e) { invToast('Save failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
+// ==================== VENDOR MANAGEMENT ====================
+
+function invShowAddVendorRow(productId) {
+  var row = document.getElementById('invAddVendorRow');
+  if (!row) return;
+  var opts = '<option value="">Select vendor...</option>';
+  invSuppliersList.forEach(function(s) {
+    opts += '<option value="' + s.id + '">' + escH(s.name) + (s.code ? ' (' + escH(s.code) + ')' : '') + '</option>';
+  });
+  row.style.display = 'block';
+  row.innerHTML = '<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap">' +
+    '<div class="inv-form-group" style="flex:2;margin:0"><label style="font-size:12px">Vendor</label><select class="inv-select" id="invAddVendorSelect">' + opts + '</select></div>' +
+    '<div class="inv-form-group" style="flex:1;margin:0"><label style="font-size:12px">Cost ($)</label><input type="number" step="0.01" class="inv-input" id="invAddVendorCost" placeholder="0.00"></div>' +
+    '<div class="inv-form-group" style="flex:1;margin:0"><label style="font-size:12px">Lead Time (days)</label><input type="number" class="inv-input" id="invAddVendorLead" placeholder="0"></div>' +
+    '<button class="inv-btn inv-btn-xs inv-btn-primary" onclick="invDoAddVendor(' + productId + ')"><i class="fas fa-check"></i></button>' +
+    '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="document.getElementById(\'invAddVendorRow\').style.display=\'none\'"><i class="fas fa-times"></i></button>' +
+    '</div>';
+}
+
+async function invDoAddVendor(productId) {
+  var supplierId = document.getElementById('invAddVendorSelect').value;
+  if (!supplierId) { invToast('Select a vendor', 'warning'); return; }
+  var cost = parseFloat(document.getElementById('invAddVendorCost').value) || 0;
+  var leadTime = parseInt(document.getElementById('invAddVendorLead').value) || 0;
+  try {
+    await invAPI.post('/api/inventory/products/' + productId + '/vendors', {
+      supplier_id: parseInt(supplierId), is_primary: false, cost: cost, lead_time_days: leadTime
+    }, { headers: invHeaders() });
+    invToast('Vendor added');
+    invCloseModal();
+    invShowEditProduct(productId); // Refresh the edit modal
+  } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function invRemoveProductVendor(productId, vendorRowId) {
+  if (!confirm('Remove this vendor from the product?')) return;
+  try {
+    await invAPI.delete('/api/inventory/products/' + productId + '/vendors/' + vendorRowId, { headers: invHeaders() });
+    invToast('Vendor removed');
+    invCloseModal();
+    invShowEditProduct(productId);
+  } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
 // ==================== NEW PRODUCT MODAL ====================
 
 function invShowNewProduct() {
   var catOpts = '';
   (invCategoryList || []).forEach(function(c) {
     var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
-    catOpts += '<option value="' + c + '"' + (c === 'other' ? ' selected' : '') + '>' + label + '</option>';
+    catOpts += '<option value="' + c + '"' + (c === 'shelf_goods' ? ' selected' : '') + '>' + label + '</option>';
   });
 
   var unitOpts = '';
@@ -2648,6 +2738,14 @@ function invShowNewProduct() {
   body += '<div class="inv-form-group"><label>Weight per Unit (lbs)</label><input type="number" step="0.1" class="inv-input" id="invNewWeight" value="0"></div>';
   body += '<div class="inv-form-group"><label>Pallet Qty</label><input type="number" class="inv-input" id="invNewPalletQty" value="0"></div>';
   body += '</div>';
+  // Primary Vendor
+  var newVendorOpts = '<option value="">— No Primary Vendor —</option>';
+  invSuppliersList.forEach(function(s) {
+    newVendorOpts += '<option value="' + s.id + '">' + escH(s.name) + (s.code ? ' (' + escH(s.code) + ')' : '') + '</option>';
+  });
+  body += '<div class="inv-form-row">';
+  body += '<div class="inv-form-group"><label><i class="fas fa-truck-field" style="color:#6366F1"></i> Primary Vendor</label><select class="inv-select" id="invNewPrimaryVendor">' + newVendorOpts + '</select></div>';
+  body += '</div>';
   body += '</div>';
 
   var footer = '<button class="inv-btn inv-btn-outline" onclick="invCloseModal()">Cancel</button>' +
@@ -2657,6 +2755,7 @@ function invShowNewProduct() {
 }
 
 async function invCreateProduct() {
+  var newVendorVal = document.getElementById('invNewPrimaryVendor') ? document.getElementById('invNewPrimaryVendor').value : '';
   var data = {
     name: document.getElementById('invNewName').value.trim(),
     sku: document.getElementById('invNewSku').value.trim() || null,
@@ -2666,7 +2765,8 @@ async function invCreateProduct() {
     cost: parseFloat(document.getElementById('invNewCost').value) || 0,
     tax_rate: parseFloat(document.getElementById('invNewTaxRate').value) || 0,
     weight_per_unit: parseFloat(document.getElementById('invNewWeight').value) || 0,
-    pallet_qty: parseInt(document.getElementById('invNewPalletQty').value) || 0
+    pallet_qty: parseInt(document.getElementById('invNewPalletQty').value) || 0,
+    primary_vendor_id: newVendorVal ? parseInt(newVendorVal) : null
   };
 
   if (!data.name) { invToast('Product name is required', 'error'); return; }
