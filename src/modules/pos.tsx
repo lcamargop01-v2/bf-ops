@@ -2494,7 +2494,7 @@ app.post('/api/pos/request-purchase', async (c) => {
   // Add items to order_request
   for (const item of body.items) {
     await db.prepare(`
-      INSERT INTO order_request_items (request_id, product_id, product_name, qty_requested, unit)
+      INSERT INTO order_request_items (request_id, product_id, description, qty_requested, unit)
       VALUES (?,?,?,?,?)
     `).bind(orderRequestId, item.product_id, item.product_name || '', item.qty || 1, item.unit || 'each').run()
   }
