@@ -16,6 +16,60 @@ function getUserFromHeader(c: any): any {
   } catch { return null }
 }
 
+// ==================== AUTO-TASK & NOTIFICATION HELPERS ====================
+
+// Generate a task number like TK-XXXX
+function genSOTaskNumber() {
+  return 'SO-' + Date.now().toString(36).toUpperCase()
+}
+
+// Create a task + notification for the team. user_id=null = broadcast to all.
+async function createAutoTask(db: D1Database, opts: {
+  title: string, description?: string, task_type?: string, priority?: string,
+  due_date?: string, ref_type?: string, ref_id?: number, ref_number?: string,
+  customer_id?: number, customer_name?: string, created_by_name?: string
+}) {
+  const taskNum = genSOTaskNumber()
+  try {
+    const r = await db.prepare(`
+      INSERT INTO tasks (task_number, title, description, task_type, priority, status,
+        assigned_to, assigned_to_name, created_by_name, due_date,
+        ref_type, ref_id, ref_number, customer_id, customer_name, tags)
+      VALUES (?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      taskNum, opts.title, opts.description || null,
+      opts.task_type || 'follow_up', opts.priority || 'normal',
+      opts.created_by_name || 'System', opts.due_date || null,
+      opts.ref_type || null, opts.ref_id || null, opts.ref_number || null,
+      opts.customer_id || null, opts.customer_name || null,
+      'standing-orders,auto'
+    ).run()
+    return r.meta.last_row_id
+  } catch (e) {
+    console.error('Auto-task creation failed:', e)
+    return null
+  }
+}
+
+// Create notification for all team members (user_id = NULL = broadcast)
+async function createAutoNotification(db: D1Database, opts: {
+  title: string, message?: string, notification_type?: string,
+  ref_type?: string, ref_id?: number
+}) {
+  try {
+    await db.prepare(`
+      INSERT INTO notifications (user_id, title, message, notification_type, ref_type, ref_id)
+      VALUES (NULL, ?, ?, ?, ?, ?)
+    `).bind(
+      opts.title, opts.message || '',
+      opts.notification_type || 'info',
+      opts.ref_type || null, opts.ref_id || null
+    ).run()
+  } catch (e) {
+    console.error('Auto-notification failed:', e)
+  }
+}
+
 // ==================== CONFIRMATION RUNS ====================
 
 // List all confirmation runs
@@ -208,6 +262,13 @@ app.post('/api/standing-orders/runs/generate', async (c) => {
     UPDATE confirmation_runs SET total_entries = ?, broadcast_count = ?,
       pending_count = ?, updated_at = datetime('now') WHERE id = ?
   `).bind(totalEntries, broadcastCount, totalEntries, runId).run()
+
+  // Notify team about new run
+  await createAutoNotification(db, {
+    title: `New confirmation run created: ${runDate} (${deliveryDay})`,
+    message: `${totalEntries} customers queued: ${totalEntries - broadcastCount} standing + ${broadcastCount} broadcast. Review and send texts.`,
+    notification_type: 'info', ref_type: 'confirmation_run', ref_id: runId as number
+  })
 
   return c.json({
     run_id: runId, run_date: runDate, delivery_day: deliveryDay,
@@ -508,6 +569,36 @@ app.post('/api/sms/inbound', async (c) => {
   // Recount run
   try { await recountRun(db, entry.run_id) } catch {}
 
+  // ---- AUTO-TASKS & NOTIFICATIONS ----
+  if (newStatus === 'modified') {
+    // Customer wants changes — task for team to review
+    await createAutoTask(db, {
+      title: `Review modified order: ${customer.business_name}`,
+      description: `Customer replied with changes: "${messageBody}"\n\nOriginal standing order items need to be reviewed and confirmed or adjusted.`,
+      task_type: 'customer', priority: 'high',
+      ref_type: 'confirmation_entry', ref_id: entry.id,
+      customer_id: customer.id, customer_name: customer.business_name,
+      created_by_name: 'SMS Auto'
+    })
+    await createAutoNotification(db, {
+      title: `${customer.business_name} wants order changes`,
+      message: `Customer replied: "${messageBody.substring(0, 100)}" — needs staff review`,
+      notification_type: 'alert', ref_type: 'confirmation_entry', ref_id: entry.id
+    })
+  } else if (newStatus === 'confirmed') {
+    await createAutoNotification(db, {
+      title: `${customer.business_name} confirmed their order`,
+      message: `Order auto-created from standing order confirmation`,
+      notification_type: 'success', ref_type: 'confirmation_entry', ref_id: entry.id
+    })
+  } else if (newStatus === 'declined') {
+    await createAutoNotification(db, {
+      title: `${customer.business_name} declined delivery`,
+      message: `Customer skipped this delivery. Inventory holds released.`,
+      notification_type: 'info', ref_type: 'confirmation_entry', ref_id: entry.id
+    })
+  }
+
   return c.json({
     status: newStatus,
     customer_id: customer.id,
@@ -740,7 +831,26 @@ app.post('/api/standing-orders/runs/:id/expire', async (c) => {
     .bind(runId).run()
   await recountRun(db, parseInt(runId))
 
-  return c.json({ expired: expired.results?.length || 0 })
+  // Notify team about no-responses
+  const noRespCount = expired.results?.length || 0
+  if (noRespCount > 0) {
+    const names = (expired.results as any[]).map(e => e.customer_name).slice(0, 5).join(', ')
+    await createAutoNotification(db, {
+      title: `${noRespCount} customer${noRespCount > 1 ? 's' : ''} didn't respond`,
+      message: `Run for ${run.run_date} closed. No response from: ${names}${noRespCount > 5 ? '...' : ''}`,
+      notification_type: 'warning', ref_type: 'confirmation_run', ref_id: parseInt(runId)
+    })
+    // Create follow-up task for no-responders
+    await createAutoTask(db, {
+      title: `Follow up: ${noRespCount} no-response for ${run.run_date}`,
+      description: `These customers didn't respond to the delivery confirmation:\n${(expired.results as any[]).map(e => '- ' + e.customer_name).join('\n')}\n\nConsider calling them or noting for next run.`,
+      task_type: 'follow_up', priority: 'normal',
+      ref_type: 'confirmation_run', ref_id: parseInt(runId),
+      created_by_name: 'System'
+    })
+  }
+
+  return c.json({ expired: noRespCount })
 })
 
 // ==================== AI MESSAGE GENERATION ====================
@@ -1357,6 +1467,24 @@ app.post('/api/customers/:id/season-arrival', async (c) => {
     user?.id || null, user?.name || user?.email || 'System'
   ).run()
 
+  // Notify team
+  const custNameArr = await db.prepare('SELECT business_name FROM customers WHERE id = ?').bind(customerId).first() as any
+  const custN = custNameArr?.business_name || 'Customer'
+  await createAutoNotification(db, {
+    title: `${custN} is back for the season!`,
+    message: `Seasonal customer marked as arrived. ${sendWelcome ? 'Welcome text sent.' : 'No welcome text sent.'} Add them to delivery runs.`,
+    notification_type: 'success', ref_type: 'customer', ref_id: parseInt(customerId)
+  })
+  // Create a task to set up their deliveries
+  await createAutoTask(db, {
+    title: `Set up deliveries for returning customer: ${custN}`,
+    description: `${custN} is back for the season.\n\nChecklist:\n- Verify recurring schedule is active\n- Confirm delivery address and zone\n- Include in next confirmation run\n- Check if they need any products stocked`,
+    task_type: 'customer', priority: 'normal',
+    due_date: new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0],
+    customer_id: parseInt(customerId), customer_name: custN,
+    created_by_name: user?.name || user?.email || 'System'
+  })
+
   // Send welcome-back text if requested
   let smsSent = false
   if (sendWelcome) {
@@ -1472,6 +1600,15 @@ app.post('/api/customers/:id/season-departure', async (c) => {
     body.notes || 'Customer departed for off-season',
     user?.id || null, user?.name || user?.email || 'System'
   ).run()
+
+  // Notify team
+  const custNameDep = await db.prepare('SELECT business_name FROM customers WHERE id = ?').bind(customerId).first() as any
+  const custD = custNameDep?.business_name || 'Customer'
+  await createAutoNotification(db, {
+    title: `${custD} leaving for off-season`,
+    message: `Marked as departed. ${sendFarewell || askFinalOrder ? 'Farewell text sent.' : ''} They will be excluded from future confirmation runs.`,
+    notification_type: 'info', ref_type: 'customer', ref_id: parseInt(customerId)
+  })
 
   // Send farewell / final order text
   let smsSent = false
@@ -1637,12 +1774,205 @@ app.post('/api/customers/seasonal/refresh-statuses', async (c) => {
         INSERT INTO customer_season_log (customer_id, event_type, season_year, notes, created_by, created_by_name)
         VALUES (?, 'season_update', ?, ?, ?, ?)
       `).bind(c.id, now.getFullYear(), `Auto-updated: ${c.season_status} → ${newStatus}`, user?.id || null, 'System').run()
+
+      // Create tasks for transitions that need team action
+      if (newStatus === 'arriving_soon') {
+        await createAutoTask(db, {
+          title: `${c.business_name} arriving soon — send welcome text`,
+          description: `Seasonal customer ${c.business_name} is arriving within 30 days.\n\nAction needed:\n- Send welcome-back text\n- Add to delivery confirmation runs\n- Check if recurring schedule is still active`,
+          task_type: 'customer', priority: 'high',
+          due_date: new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0],
+          customer_id: c.id, customer_name: c.business_name,
+          created_by_name: 'Season Auto'
+        })
+        await createAutoNotification(db, {
+          title: `${c.business_name} arriving soon!`,
+          message: 'Seasonal customer returning within 30 days — time to send welcome text and set up deliveries',
+          notification_type: 'alert', ref_type: 'customer', ref_id: c.id
+        })
+      } else if (newStatus === 'departing_soon') {
+        await createAutoTask(db, {
+          title: `${c.business_name} departing soon — send farewell text`,
+          description: `Seasonal customer ${c.business_name} is leaving within 30 days.\n\nAction needed:\n- Send farewell/final order text\n- Ask about last delivery date\n- Remove from future confirmation runs`,
+          task_type: 'customer', priority: 'high',
+          due_date: new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0],
+          customer_id: c.id, customer_name: c.business_name,
+          created_by_name: 'Season Auto'
+        })
+        await createAutoNotification(db, {
+          title: `${c.business_name} departing soon`,
+          message: 'Seasonal customer leaving within 30 days — send farewell text and ask about final order',
+          notification_type: 'warning', ref_type: 'customer', ref_id: c.id
+        })
+      }
+
       changes.push({ customer: c.business_name, from: c.season_status, to: newStatus })
       updated++
     }
   }
 
   return c.json({ updated, total: customers.results?.length || 0, changes })
+})
+
+// ==================== DAILY DIGEST (create morning tasks/notifications) ====================
+
+// Call this daily (manually or via cron) to auto-create tasks for the team
+app.post('/api/standing-orders/daily-digest', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  const today = new Date().toISOString().split('T')[0]
+  const tasksCreated: string[] = []
+  const notifsCreated: string[] = []
+
+  // 1. Check for pending/modified entries that need action
+  try {
+    const pendingMods = await db.prepare(`
+      SELECT ce.id, ce.customer_name, ce.status, ce.modified_items, cr.run_date, cr.cutoff_time
+      FROM confirmation_entries ce
+      JOIN confirmation_runs cr ON ce.run_id = cr.id
+      WHERE ce.status = 'modified' AND cr.status IN ('sent','sending')
+    `).all()
+    const mods = pendingMods.results as any[] || []
+    if (mods.length > 0) {
+      const names = mods.map(m => m.customer_name).join(', ')
+      await createAutoTask(db, {
+        title: `${mods.length} modified order${mods.length > 1 ? 's' : ''} need review`,
+        description: `Customers who replied with changes:\n${mods.map(m => `- ${m.customer_name}: "${(m.modified_items || '').substring(0, 80)}"`).join('\n')}\n\nReview in Standing Orders > SO Dashboard`,
+        task_type: 'customer', priority: 'high', due_date: today,
+        created_by_name: 'Daily Digest'
+      })
+      tasksCreated.push(`Modified orders: ${mods.length}`)
+    }
+  } catch {}
+
+  // 2. Check for active runs with pending/sent entries (need follow-up)
+  try {
+    const activeRuns = await db.prepare(`
+      SELECT cr.*, 
+        SUM(CASE WHEN ce.status = 'sent' THEN 1 ELSE 0 END) as waiting_count,
+        SUM(CASE WHEN ce.status = 'confirmed' THEN 1 ELSE 0 END) as confirmed_count
+      FROM confirmation_runs cr
+      JOIN confirmation_entries ce ON ce.run_id = cr.id
+      WHERE cr.status = 'sent' AND cr.run_date >= ?
+      GROUP BY cr.id
+    `).bind(today).all()
+    for (const run of (activeRuns.results as any[] || [])) {
+      if (run.waiting_count > 0) {
+        await createAutoNotification(db, {
+          title: `${run.waiting_count} customers still waiting — ${run.run_date} delivery`,
+          message: `${run.confirmed_count} confirmed, ${run.waiting_count} haven't responded yet. Consider sending reminders.`,
+          notification_type: 'warning', ref_type: 'confirmation_run', ref_id: run.id
+        })
+        notifsCreated.push(`Waiting: ${run.waiting_count} for ${run.run_date}`)
+      }
+    }
+  } catch {}
+
+  // 3. Seasonal: arriving soon customers that don't have an open task yet
+  try {
+    const arriving = await db.prepare(`
+      SELECT c.id, c.business_name, c.season_start_month, c.season_start_day
+      FROM customers c
+      WHERE c.active = 1 AND c.is_seasonal = 1 AND c.season_status = 'arriving_soon'
+        AND c.id NOT IN (
+          SELECT DISTINCT t.customer_id FROM tasks t
+          WHERE t.customer_id IS NOT NULL AND t.status IN ('pending','in_progress')
+            AND t.title LIKE '%arriving%' AND t.tags LIKE '%standing-orders%'
+        )
+    `).all()
+    for (const cust of (arriving.results as any[] || [])) {
+      await createAutoTask(db, {
+        title: `${cust.business_name} arriving soon — welcome text needed`,
+        description: `Seasonal customer is arriving soon. Send welcome-back text and set up their delivery schedule.`,
+        task_type: 'customer', priority: 'high',
+        due_date: new Date(Date.now() + 5 * 86400000).toISOString().split('T')[0],
+        customer_id: cust.id, customer_name: cust.business_name,
+        created_by_name: 'Daily Digest'
+      })
+      tasksCreated.push(`Arriving: ${cust.business_name}`)
+    }
+  } catch {}
+
+  // 4. Seasonal: departing soon customers that don't have an open task yet
+  try {
+    const departing = await db.prepare(`
+      SELECT c.id, c.business_name, c.season_end_month, c.season_end_day
+      FROM customers c
+      WHERE c.active = 1 AND c.is_seasonal = 1 AND c.season_status = 'departing_soon'
+        AND c.id NOT IN (
+          SELECT DISTINCT t.customer_id FROM tasks t
+          WHERE t.customer_id IS NOT NULL AND t.status IN ('pending','in_progress')
+            AND t.title LIKE '%departing%' AND t.tags LIKE '%standing-orders%'
+        )
+    `).all()
+    for (const cust of (departing.results as any[] || [])) {
+      await createAutoTask(db, {
+        title: `${cust.business_name} departing soon — farewell + final order`,
+        description: `Seasonal customer is leaving within 30 days. Send farewell text, ask about final delivery, and remove from future runs.`,
+        task_type: 'customer', priority: 'high',
+        due_date: new Date(Date.now() + 5 * 86400000).toISOString().split('T')[0],
+        customer_id: cust.id, customer_name: cust.business_name,
+        created_by_name: 'Daily Digest'
+      })
+      tasksCreated.push(`Departing: ${cust.business_name}`)
+    }
+  } catch {}
+
+  // 5. Run the seasonal status refresh automatically
+  try {
+    // Same logic as /api/customers/seasonal/refresh-statuses but inline
+    const now = new Date()
+    const currentMonth = now.getMonth() + 1
+    const currentDay = now.getDate()
+
+    function daysUntilDigest(targetMonth: number, targetDay: number): number {
+      const thisYear = now.getFullYear()
+      let target = new Date(thisYear, targetMonth - 1, targetDay)
+      if (target < now) target = new Date(thisYear + 1, targetMonth - 1, targetDay)
+      return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+    }
+    function isInSeasonDigest(sM: number, sD: number, eM: number, eD: number): boolean {
+      const sv = sM * 100 + sD, ev = eM * 100 + eD, cv = currentMonth * 100 + currentDay
+      return sv <= ev ? (cv >= sv && cv <= ev) : (cv >= sv || cv <= ev)
+    }
+
+    const seasonals = await db.prepare(`
+      SELECT id, business_name, season_start_month, season_start_day, season_end_month, season_end_day, season_status
+      FROM customers WHERE active = 1 AND is_seasonal = 1 AND season_start_month IS NOT NULL AND season_end_month IS NOT NULL
+    `).all()
+
+    let statusUpdates = 0
+    for (const cst of (seasonals.results as any[])) {
+      const inS = isInSeasonDigest(cst.season_start_month, cst.season_start_day || 1, cst.season_end_month, cst.season_end_day || 28)
+      const dEnd = daysUntilDigest(cst.season_end_month, cst.season_end_day || 28)
+      const dStart = daysUntilDigest(cst.season_start_month, cst.season_start_day || 1)
+      let ns = cst.season_status
+      if (inS) { ns = dEnd <= 30 && dEnd > 0 ? 'departing_soon' : 'in_season' }
+      else { ns = dStart <= 30 && dStart > 0 ? 'arriving_soon' : 'out_of_season' }
+      if (ns !== cst.season_status) {
+        await db.prepare("UPDATE customers SET season_status = ?, last_season_update = datetime('now') WHERE id = ?").bind(ns, cst.id).run()
+        await db.prepare("INSERT INTO customer_season_log (customer_id, event_type, season_year, notes, created_by_name) VALUES (?, 'season_update', ?, ?, 'Daily Digest')")
+          .bind(cst.id, now.getFullYear(), `Auto: ${cst.season_status} → ${ns}`).run()
+        statusUpdates++
+      }
+    }
+    if (statusUpdates > 0) notifsCreated.push(`Season statuses updated: ${statusUpdates}`)
+  } catch {}
+
+  // Summary notification
+  if (tasksCreated.length > 0) {
+    await createAutoNotification(db, {
+      title: `Daily digest: ${tasksCreated.length} new tasks created`,
+      message: tasksCreated.join('\n'),
+      notification_type: 'info'
+    })
+  }
+
+  return c.json({
+    tasks_created: tasksCreated,
+    notifications_created: notifsCreated,
+    date: today
+  })
 })
 
 // Get SMS templates

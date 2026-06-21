@@ -17199,6 +17199,13 @@ function soDashRender() {
 
   var html = '<div style="max-width:1200px;margin:0 auto;padding:0 16px">';
 
+  // ---- Quick actions bar ----
+  html += '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px">';
+  html += '<button onclick="soDashRunDigest()" class="btn btn-sm" style="background:#7C3AED;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600" title="Scans everything and creates tasks for the team"><i class="fas fa-magic"></i> Run Daily Digest</button>';
+  html += '<button onclick="navigateTo(\'standing_orders\')" class="btn btn-sm" style="background:#2563EB;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600"><i class="fas fa-bell-concierge"></i> Standing Orders</button>';
+  html += '<button onclick="navigateTo(\'seasonality\')" class="btn btn-sm" style="background:#D97706;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600"><i class="fas fa-sun"></i> Seasonality</button>';
+  html += '</div>';
+
   // ---- Top action-needed banner ----
   var modifiedCount = actions.filter(function(a) { return a.status === 'modified'; }).length;
   var waitingCount = actions.filter(function(a) { return a.status === 'sent'; }).length;
@@ -17428,20 +17435,39 @@ function soDashScrollTo(id) {
 }
 window.soDashScrollTo = soDashScrollTo;
 
+async function soDashRunDigest() {
+  if (!confirm('Run daily digest? This will scan all standing orders, seasonal customers, and create tasks/notifications for the team.')) return;
+  try {
+    var resp = await API.post('/standing-orders/daily-digest', {});
+    var d = resp.data;
+    var msg = 'Daily digest complete!';
+    if (d.tasks_created && d.tasks_created.length) msg += '\n\nTasks created:\n' + d.tasks_created.join('\n');
+    else msg += '\n\nNo new tasks needed.';
+    if (d.notifications_created && d.notifications_created.length) msg += '\n\n' + d.notifications_created.join('\n');
+    alert(msg);
+    renderSODashboard();
+    // Refresh notification bell
+    if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soDashRunDigest = soDashRunDigest;
+
 async function soSeasonAction(customerId, action) {
   if (action === 'arrival') {
     if (!confirm('Mark this customer as arrived and send welcome-back text?')) return;
     try {
       var resp = await API.post('/customers/' + customerId + '/season-arrival', { send_welcome: true });
-      shellToast('Marked arrived' + (resp.data.sms_sent ? ' — welcome text sent!' : ''));
-      renderSODashboard();
+      shellToast('Marked arrived' + (resp.data.sms_sent ? ' — welcome text sent!' : '') + '. Task created for team.');
+      if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+      if (currentPage === 'so_dashboard') renderSODashboard(); else if (currentPage === 'seasonality') renderSeasonality();
     } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
   } else {
     if (!confirm('Mark this customer as departed and send final order text?')) return;
     try {
       var resp = await API.post('/customers/' + customerId + '/season-departure', { send_farewell: true, ask_final_order: true });
-      shellToast('Marked departed' + (resp.data.sms_sent ? ' — final order text sent!' : ''));
-      renderSODashboard();
+      shellToast('Marked departed' + (resp.data.sms_sent ? ' — final order text sent!' : '') + '. Team notified.');
+      if (typeof fetchShellNotifs === 'function') fetchShellNotifs();
+      if (currentPage === 'so_dashboard') renderSODashboard(); else if (currentPage === 'seasonality') renderSeasonality();
     } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
   }
 }
