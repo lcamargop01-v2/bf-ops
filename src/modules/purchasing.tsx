@@ -672,6 +672,46 @@ app.put('/api/purchasing/bills/:id', async (c) => {
         ).bind(bi.product_id, oldCost, bi.unit_cost, id, bill?.po_id, bill?.supplier_id || null,
           user?.id || null, user?.email || 'system',
           'Cost updated from bill ' + (bill?.bill_number || id)).run()
+
+        // === AUTO-GENERATE PRICING ALERTS ===
+        if (bi.unit_cost > oldCost && oldCost > 0) {
+          const changePct = ((bi.unit_cost - oldCost) / oldCost) * 100
+          // Get product price info
+          const prod = await db.prepare('SELECT name, sku, price FROM products WHERE id = ?').bind(bi.product_id).first() as any
+          const currentPrice = prod?.price || 0
+          const margin = currentPrice > 0 ? ((currentPrice - bi.unit_cost) / currentPrice) * 100 : 0
+          const suggestedPrice = bi.unit_cost > 0 ? Math.ceil((bi.unit_cost / 0.70) * 100) / 100 : currentPrice // 30% margin target
+
+          // Cost increase alert
+          await db.prepare(
+            `INSERT INTO pricing_alerts (alert_type, product_id, product_name, sku, old_cost, new_cost, cost_change_pct, current_price, suggested_price, margin_pct)
+             VALUES ('cost_increase', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(bi.product_id, prod?.name || '', prod?.sku || '', oldCost, bi.unit_cost, Math.round(changePct * 100) / 100, currentPrice, suggestedPrice, Math.round(margin * 100) / 100).run()
+
+          // Retail label update alert (price_change type for retail staff)
+          await db.prepare(
+            `INSERT INTO pricing_alerts (alert_type, product_id, product_name, sku, old_cost, new_cost, cost_change_pct, current_price, suggested_price, margin_pct)
+             VALUES ('price_change', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(bi.product_id, prod?.name || '', prod?.sku || '', oldCost, bi.unit_cost, Math.round(changePct * 100) / 100, currentPrice, suggestedPrice, Math.round(margin * 100) / 100).run()
+
+          // Check margin alerts for discounted customers
+          const discountedCusts = await db.prepare(
+            `SELECT pr.customer_id, c.business_name, pr.discount_pct, pr.price
+             FROM pos_price_rules pr JOIN customers c ON c.id = pr.customer_id
+             WHERE pr.product_id = ? AND pr.active = 1 AND (pr.discount_pct > 0 OR pr.price < ?)`
+          ).bind(bi.product_id, currentPrice).all()
+
+          for (const dc of (discountedCusts.results || []) as any[]) {
+            const custPrice = dc.price || (currentPrice * (1 - (dc.discount_pct || 0) / 100))
+            const custMargin = custPrice > 0 ? ((custPrice - bi.unit_cost) / custPrice) * 100 : 0
+            if (custMargin < 15) { // Margin too low
+              await db.prepare(
+                `INSERT INTO pricing_alerts (alert_type, product_id, product_name, sku, old_cost, new_cost, cost_change_pct, current_price, margin_pct, customer_id, customer_name, discount_pct)
+                 VALUES ('margin_low', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              ).bind(bi.product_id, prod?.name || '', prod?.sku || '', oldCost, bi.unit_cost, Math.round(changePct * 100) / 100, custPrice, Math.round(custMargin * 100) / 100, dc.customer_id, dc.business_name || '', dc.discount_pct || 0).run()
+            }
+          }
+        }
       }
     }
   }
@@ -1503,6 +1543,216 @@ app.post('/api/purchasing/requests/:id/cancel', async (c) => {
 
   await db.prepare('UPDATE order_requests SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .bind('cancelled', id).run()
+  return c.json({ success: true })
+})
+
+// ==================== POS INVENTORY REQUEST → PURCHASING BRIDGE ====================
+
+// Get POS inventory requests visible to purchasing (pending/approved that haven't been converted)
+app.get('/api/purchasing/pos-requests', async (c) => {
+  const db = c.env.DB
+  const status = c.req.query('status') || ''
+  const locationId = c.req.query('location_id') || ''
+
+  let q = `SELECT r.*, l.name as location_name, l.code as location_code,
+    (SELECT COUNT(*) FROM pos_inventory_request_items WHERE request_id = r.id) as item_count,
+    (SELECT SUM(qty_requested) FROM pos_inventory_request_items WHERE request_id = r.id) as total_qty
+    FROM pos_inventory_requests r
+    LEFT JOIN locations l ON l.id = r.location_id
+    WHERE 1=1`
+  const binds: any[] = []
+  if (status) { q += ' AND r.status = ?'; binds.push(status) }
+  else { q += " AND r.status IN ('pending','approved')" }
+  if (locationId) { q += ' AND r.location_id = ?'; binds.push(parseInt(locationId)) }
+  q += ` ORDER BY CASE r.urgency WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, r.created_at DESC`
+
+  const result = await db.prepare(q).bind(...binds).all()
+  return c.json({ requests: result.results || [] })
+})
+
+// Get single POS request detail (for purchasing to review)
+app.get('/api/purchasing/pos-requests/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const req = await db.prepare(`
+    SELECT r.*, l.name as location_name, l.code as location_code
+    FROM pos_inventory_requests r LEFT JOIN locations l ON l.id = r.location_id WHERE r.id = ?
+  `).bind(id).first()
+  if (!req) return c.json({ error: 'Request not found' }, 404)
+
+  const items = await db.prepare(`
+    SELECT ri.*, p.name as product_name, p.sku, p.category
+    FROM pos_inventory_request_items ri
+    LEFT JOIN products p ON ri.product_id = p.id
+    WHERE ri.request_id = ? ORDER BY ri.id
+  `).bind(id).all()
+
+  return c.json({ request: req, items: items.results || [] })
+})
+
+// Fulfill POS request via transfer (from Aldi warehouse)
+app.post('/api/purchasing/pos-requests/:id/transfer', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const user = getUserFromHeader(c)
+  const body = await c.req.json()
+  const { source_location_id, notes } = body
+
+  const req = await db.prepare('SELECT * FROM pos_inventory_requests WHERE id = ?').bind(id).first() as any
+  if (!req) return c.json({ error: 'Request not found' }, 404)
+
+  // Create inventory transfer
+  const d = new Date()
+  const tNum = `TRF${d.getFullYear().toString().slice(2)}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${Math.random().toString(36).substring(2,7).toUpperCase()}`
+
+  const items = await db.prepare('SELECT * FROM pos_inventory_request_items WHERE request_id = ?').bind(id).all()
+
+  const trResult = await db.prepare(
+    `INSERT INTO inventory_transfers (transfer_number, from_location_id, to_location_id, status, transfer_type, notes, created_by, created_by_name)
+     VALUES (?, ?, ?, 'pending', 'pos_request', ?, ?, ?)`
+  ).bind(tNum, source_location_id, req.location_id, notes || 'From POS request ' + req.request_number, user?.id || null, user?.email || 'system').run()
+
+  const transferId = trResult.meta.last_row_id
+
+  for (const item of (items.results || []) as any[]) {
+    await db.prepare(
+      `INSERT INTO inventory_transfer_items (transfer_id, product_id, product_name, qty_requested, unit)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(transferId, item.product_id, item.product_name, item.qty_requested, item.unit || 'each').run()
+  }
+
+  // Update POS request
+  await db.prepare(
+    `UPDATE pos_inventory_requests SET fulfillment_type = 'transfer', transfer_id = ?, status = 'approved', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).bind(transferId, id).run()
+
+  return c.json({ success: true, transfer_id: transferId, transfer_number: tNum })
+})
+
+// Fulfill POS request via purchase order (from supplier)
+app.post('/api/purchasing/pos-requests/:id/purchase', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const user = getUserFromHeader(c)
+  const body = await c.req.json()
+  const { supplier_id, expected_date } = body
+
+  const req = await db.prepare('SELECT * FROM pos_inventory_requests WHERE id = ?').bind(id).first() as any
+  if (!req) return c.json({ error: 'Request not found' }, 404)
+
+  const items = await db.prepare('SELECT * FROM pos_inventory_request_items WHERE request_id = ?').bind(id).all()
+
+  // First create an order_request in the purchasing system
+  const reqNum = `REQ${Date.now().toString(36).toUpperCase()}`
+  const orResult = await db.prepare(
+    `INSERT INTO order_requests (request_number, status, urgency, location_id, requested_by, requested_by_name, requested_by_role, reason, notes)
+     VALUES (?, 'pending', ?, ?, ?, ?, 'pos_staff', ?, ?)`
+  ).bind(reqNum, req.urgency || 'normal', req.location_id,
+    req.requested_by || user?.id, req.requested_by_name || user?.email || 'POS',
+    'POS Inventory Request: ' + req.request_number,
+    (req.notes || '') + (req.customer_name ? ' | Client: ' + req.customer_name : '')).run()
+
+  const orderRequestId = orResult.meta.last_row_id
+
+  for (const item of (items.results || []) as any[]) {
+    await db.prepare(
+      `INSERT INTO order_request_items (request_id, product_id, description, qty_requested, unit, current_stock, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(orderRequestId, item.product_id, item.product_name || '', item.qty_requested, item.unit || 'each', item.current_stock || null, item.notes || null).run()
+  }
+
+  // Update POS request
+  await db.prepare(
+    `UPDATE pos_inventory_requests SET fulfillment_type = 'purchase', purchasing_request_id = ?, status = 'approved', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).bind(orderRequestId, id).run()
+
+  return c.json({ success: true, purchasing_request_id: orderRequestId, request_number: reqNum })
+})
+
+// ==================== PRICING ALERTS (auto-generated on bill approval) ====================
+
+app.get('/api/purchasing/pricing-alerts', async (c) => {
+  const db = c.env.DB
+  const status = c.req.query('status') || ''
+  const type = c.req.query('type') || ''
+  let q = `SELECT pa.*, p.name as product_name_live, p.sku as sku_live, p.price as current_price_live, p.cost as current_cost_live
+           FROM pricing_alerts pa LEFT JOIN products p ON pa.product_id = p.id WHERE 1=1`
+  const binds: any[] = []
+  if (status) { q += ' AND pa.status = ?'; binds.push(status) }
+  else { q += " AND pa.status IN ('pending','acknowledged')" }
+  if (type) { q += ' AND pa.alert_type = ?'; binds.push(type) }
+  q += ' ORDER BY pa.created_at DESC LIMIT 100'
+  const r = await db.prepare(q).bind(...binds).all()
+  return c.json({ alerts: r.results || [] })
+})
+
+app.patch('/api/purchasing/pricing-alerts/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const user = getUserFromHeader(c)
+  const body = await c.req.json()
+
+  const fields: string[] = []
+  const vals: any[] = []
+  if (body.status) { fields.push('status = ?'); vals.push(body.status) }
+  if (body.resolution_notes !== undefined) { fields.push('resolution_notes = ?'); vals.push(body.resolution_notes) }
+  if (body.status === 'resolved' || body.status === 'dismissed') {
+    fields.push('resolved_by = ?'); vals.push(user?.id || null)
+    fields.push('resolved_by_name = ?'); vals.push(user?.email || 'system')
+    fields.push('resolved_at = CURRENT_TIMESTAMP')
+  }
+  if (body.suggested_price !== undefined) { fields.push('suggested_price = ?'); vals.push(body.suggested_price) }
+  fields.push('updated_at = CURRENT_TIMESTAMP')
+  vals.push(id)
+
+  await db.prepare(`UPDATE pricing_alerts SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run()
+
+  // If resolved with a new price, update the product
+  if (body.status === 'resolved' && body.new_price !== undefined) {
+    const alert = await db.prepare('SELECT product_id FROM pricing_alerts WHERE id = ?').bind(id).first() as any
+    if (alert?.product_id) {
+      await db.prepare('UPDATE products SET price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .bind(body.new_price, alert.product_id).run()
+    }
+  }
+
+  return c.json({ success: true })
+})
+
+// Get pricing alert settings
+app.get('/api/purchasing/pricing-alert-settings', async (c) => {
+  const db = c.env.DB
+  const r = await db.prepare('SELECT * FROM pricing_alert_settings WHERE active = 1 ORDER BY alert_type').all()
+  return c.json({ settings: r.results || [] })
+})
+
+app.put('/api/purchasing/pricing-alert-settings/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  await db.prepare(
+    `UPDATE pricing_alert_settings SET threshold_pct = ?, min_margin_pct = ?, notify_user_ids = ?, notify_roles = ?, active = ? WHERE id = ?`
+  ).bind(body.threshold_pct || 0, body.min_margin_pct || 15, body.notify_user_ids || null, body.notify_roles || 'admin,manager', body.active ?? 1, id).run()
+  return c.json({ success: true })
+})
+
+// ==================== FEE CONFIGURATION ====================
+
+app.get('/api/purchasing/fees', async (c) => {
+  const db = c.env.DB
+  const r = await db.prepare('SELECT * FROM fee_config ORDER BY fee_type').all()
+  return c.json({ fees: r.results || [] })
+})
+
+app.put('/api/purchasing/fees/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  await db.prepare(
+    `UPDATE fee_config SET name=?, rate=?, rate_type=?, apply_to=?, min_order_amount=?, max_fee=?, active=?, legal_notice=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+  ).bind(body.name, body.rate || 0, body.rate_type || 'percentage', body.apply_to || 'delivery',
+    body.min_order_amount || 0, body.max_fee || 0, body.active ?? 1,
+    body.legal_notice || null, body.notes || null, id).run()
   return c.json({ success: true })
 })
 

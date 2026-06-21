@@ -1440,7 +1440,7 @@ app.post('/api/inventory/products/recategorize-apply', async (c) => {
   if (anyStock) {
     await auditLog(db, {
       product_id: 0, location_id: anyStock.location_id, action: 'category_consolidation', qty_change: 0,
-      reason: `Bulk category consolidation: ${updated} products updated, ${skipped} unchanged. Categories: hay, shavings, grain, shelf_goods`,
+      reason: `Bulk category consolidation: ${updated} products updated, ${skipped} unchanged.`,
       notes: `Overrides applied: ${Object.keys(overrides).length}`,
       user_id: user.id, user_name: userInfo?.name || user.email
     })
@@ -1531,91 +1531,109 @@ app.post('/api/inventory/products', async (c) => {
 
 // ==================== CATEGORY CONSOLIDATION HELPER ====================
 
-// Classify a product into one of 4 categories: hay, shavings, grain, shelf_goods
-// Uses tiered matching: (1) exclusion rules for accessories/tools, (2) direct category match,
-// (3) keyword substring match with negative-match filters, (4) default to shelf_goods
+// Classify a product into granular categories matching production DB
+// Categories: hay, shavings, grain, feed, supplement, grooming, fly_control, tack,
+// first_aid, farm_supplies, barn_equipment, poultry, treats, dewormer, hoof_care,
+// blankets, riding_apparel, pet_supplies, fencing, tools, cleaning, gift, shelf_goods
 function classifyProduct(name: string, currentCategory: string): string {
   const n = (name || '').toLowerCase()
   const cat = (currentCategory || '').toLowerCase()
 
-  // === EXCLUSION RULES (checked FIRST to catch accessories/tools) ===
-  // Hay accessories: nets, bags (not "bag of hay"), feeders, racks
-  const hayAccessory = /\b(hay\s*net|haynet|haylage\s*net|hay\s*bag|hay\s*ring|hay\s*rack|hay\s*hook)\b/.test(n)
-    || (n.includes('hay') && /\b(net|feeder|ring|hook|rack|tote|carrier)\b/.test(n))
-    || (n.includes('haylage') && n.includes('net'))
-  if (hayAccessory && !n.includes('bag of hay')) return 'shelf_goods'
+  // If the product already has a valid granular category, keep it
+  const validCategories = [
+    'hay', 'shavings', 'grain', 'feed', 'supplement', 'grooming', 'fly_control', 'tack',
+    'first_aid', 'farm_supplies', 'barn_equipment', 'poultry', 'treats', 'dewormer',
+    'hoof_care', 'blankets', 'riding_apparel', 'pet_supplies', 'fencing', 'tools',
+    'cleaning', 'gift', 'shelf_goods', 'bedding', 'health', 'insect_control'
+  ]
+  if (validCategories.includes(cat)) return cat
 
-  // Shavings accessories: forks, scoops
-  if (/\bshaving\s*fork\b/.test(n) || (n.includes('shaving') && /\b(fork|scoop|rake)\b/.test(n))) return 'shelf_goods'
-
-  // Feed accessories: scoops, buckets, pans, tubs, bins, holders, feeders (barn equipment)
-  const feedAccessory = /\b(feed\s*scoop|feed\s*bucket|feed\s*pan|feed\s*tub|feed\s*bin)\b/.test(n)
-    || (n.includes('feed') && /\b(scoop|bucket|pan|tub|bin)\b/.test(n))
-    || /\b(corner\s*feeder|hook\s*over\s*feeder|hang\s*feeder|greedy\s*feeder|slow\s*feed\s*net|net\s*slow\s*feed)\b/.test(n)
-    || /\b(salt\s*block\s*holder|salt\s*block\s*pan|salt\s*lick\s*holder|mineral\s*salt\s*block\s*pan)\b/.test(n)
-    || (n.includes('block') && /\b(holder|pan)\b/.test(n))
-    || (n.includes('feeder') && /\b(leash|rubber|hang)\b/.test(n))
-  if (feedAccessory) return 'shelf_goods'
-
-  // Cavalor supplements/treats (NOT feed) — check before the 'cavalor' brand keyword
-  const cavalorNonFeed = /\b(derma|electroliq|electrolyte\s*balance|gastro\s*aid|hepato|oilmega|resist|vitaflora|vitamino|nutri\s*plus|arti\s*matrix|bronchix|crunchies|fruities|sweeties)\b/.test(n)
-  if (n.includes('cavalor') && cavalorNonFeed) return 'shelf_goods'
-
-  // VETRX is a poultry health remedy, not feed
-  if (n.includes('vetrx')) return 'shelf_goods'
-
-  // === TIER 1: Direct category match ===
+  // === KEYWORD-BASED CLASSIFICATION ===
 
   // --- HAY ---
-  if (cat === 'hay') return 'hay'
-  const hayKeywords = [
-    'hay', ' teff', 'teff ', 'alfalfa cube', 'alfalfa pellet', 'timothy', 'orchard grass',
-    'bermuda', 'alfa supreme', 'standlee', '3 string', '2 string', '3-string', '2-string',
-    '2nd cut', '1st cut', '3rd cut', 'grass hay', 'coastal', 'bale of',
-    'alfalfa/timothy', 'orchard/alfalfa', 'compressed hay', 'hay bale',
-    'straw bale', 'wheat straw', 'forage', 'timothy pellet'
-  ]
-  for (const kw of hayKeywords) {
-    if (n.includes(kw)) return 'hay'
+  const hayKeywords = ['hay', ' teff', 'teff ', 'alfalfa cube', 'alfalfa pellet', 'timothy', 'orchard grass',
+    'bermuda', 'standlee', '3 string', '2 string', '2nd cut', '1st cut', '3rd cut', 'grass hay',
+    'coastal', 'bale of', 'compressed hay', 'hay bale', 'straw bale', 'wheat straw', 'forage']
+  const hayAccessory = /\b(hay\s*net|haynet|hay\s*bag|hay\s*ring|hay\s*rack|hay\s*hook)\b/.test(n)
+    || (n.includes('hay') && /\b(net|feeder|ring|hook|rack|tote|carrier)\b/.test(n))
+  if (!hayAccessory) {
+    for (const kw of hayKeywords) { if (n.includes(kw)) return 'hay' }
   }
+  if (hayAccessory) return 'barn_equipment'
 
   // --- SHAVINGS / BEDDING ---
-  if (cat === 'shavings') return 'shavings'
-  const shavingsKeywords = [
-    'shaving', 'bedding', 'shavings', 'pine flake', 'wood pellet bed',
-    'stall dry', 'stall-dry', 'stalldry', 'sweet pdz', 'pdz',
-    'pelleted bedding', 'flake bedding', 'animal bedding'
-  ]
-  for (const kw of shavingsKeywords) {
-    if (n.includes(kw)) return 'shavings'
-  }
+  const shavingsKeywords = ['shaving', 'bedding', 'shavings', 'pine flake', 'wood pellet bed',
+    'stall dry', 'stall-dry', 'stalldry', 'sweet pdz', 'pdz', 'pelleted bedding']
+  if (/\bshaving\s*fork\b/.test(n)) return 'tools'
+  for (const kw of shavingsKeywords) { if (n.includes(kw)) return 'shavings' }
+
+  // --- SUPPLEMENT ---
+  if (/\b(supplement|electrolyte|probiotic|vitamin|mineral mix|joint|glucosamine|msm|omega|biotin|amino|digest|gut health)\b/.test(n)) return 'supplement'
+  if (n.includes('cavalor') && /\b(derma|electroliq|gastro|hepato|oilmega|resist|vitaflora|vitamino|nutri|arti|bronchix)\b/.test(n)) return 'supplement'
+
+  // --- DEWORMER ---
+  if (/\b(dewormer|deworm|ivermectin|fenbendazole|panacur|safeguard|anthelmintic|pyrantel|strongid|quest|moxidectin)\b/.test(n)) return 'dewormer'
+
+  // --- FLY CONTROL / INSECT ---
+  if (/\b(fly\s*(spray|mask|sheet|trap|repel|control)|insect|bug\s*spray|mosquito|permethrin|pyrethrin)\b/.test(n)) return 'fly_control'
+
+  // --- GROOMING ---
+  if (/\b(shampoo|conditioner|brush|comb|mane|tail.*spray|coat.*polish|grooming|curry|shedding|clipper|blade)\b/.test(n)) return 'grooming'
+
+  // --- HOOF CARE ---
+  if (/\b(hoof|farrier|hoof.*pick|hoof.*dressing|hoof.*oil|thrush|shoe.*pull|rasp)\b/.test(n)) return 'hoof_care'
+
+  // --- FIRST AID / HEALTH ---
+  if (/\b(wound|bandage|wrap|liniment|poultice|antiseptic|iodine|betadine|vetericyn|first\s*aid|bute|phenylbutazone|dmso|vetrx|vet.*spray)\b/.test(n)) return 'first_aid'
+
+  // --- TACK ---
+  if (/\b(halter|lead\s*rope|bridle|saddle|girth|bit\s|martingale|breast\s*collar|reins|cinch|pad|noseband|browband)\b/.test(n)) return 'tack'
+
+  // --- BLANKETS ---
+  if (/\b(blanket|sheet|turnout|stable\s*sheet|fly\s*sheet|cooler|neck\s*cover)\b/.test(n)) return 'blankets'
+
+  // --- TREATS ---
+  if (/\b(treat|cookie|snack|crunchies|fruities|sweeties|apple.*wafer|carrot.*nugget)\b/.test(n)) return 'treats'
+
+  // --- BARN EQUIPMENT ---
+  if (/\b(bucket|feeder|water.*trough|muck.*tub|muck.*bucket|stall\s*guard|hay\s*feeder|salt.*holder|waterer|tank.*heater|heated.*bucket)\b/.test(n)) return 'barn_equipment'
+  const feedAccessory = (n.includes('feed') && /\b(scoop|bucket|pan|tub|bin)\b/.test(n))
+    || /\b(corner\s*feeder|hook\s*over\s*feeder|hang\s*feeder|greedy\s*feeder|slow\s*feed\s*net)\b/.test(n)
+  if (feedAccessory) return 'barn_equipment'
+
+  // --- FENCING ---
+  if (/\b(fence|fencing|electric.*tape|t-post|insulator|gate|poly.*rope|charger.*fence)\b/.test(n)) return 'fencing'
+
+  // --- RIDING APPAREL ---
+  if (/\b(boot|helmet|glove|breeches|riding.*pant|spur|crop|whip|chap)\b/.test(n)) return 'riding_apparel'
+
+  // --- PET SUPPLIES ---
+  if (/\b(dog\s*(food|treat|toy|collar|leash|bed)|cat\s*(food|treat|toy|litter))\b/.test(n)) return 'pet_supplies'
+
+  // --- CLEANING ---
+  if (/\b(cleaner|disinfect|sanitize|lime|barn.*fresh|odor|deodor)\b/.test(n)) return 'cleaning'
+
+  // --- POULTRY ---
+  if (/\b(chicken|poultry|layer|chick\s*starter|gamebird|game\s*bird|rooster|hen|egg.*carton|coop)\b/.test(n)) return 'poultry'
 
   // --- GRAIN / FEED ---
-  if (cat === 'feed' || cat === 'poultry') return 'grain'
-  const grainKeywords = [
-    'feed', 'grain', ' oat', 'oats ', 'beet pulp', ' mash', 'mash ',
-    'cavalor', 'buckeye', 'nutrena', 'purina', 'tribute', 'calf-manna', 'calf manna',
-    'blue bonnet', 'equilene', 'intensify', 'action mix', 'cadence',
-    'fibremax', 'fibremash', 'fibre max', 'fibre mash',
-    'enrich plus', 'enrich 32', 'impact ', 'safechoice',
-    'strategy ', 'strategy gx', 'senior feed', 'mare & foal',
-    'sweet feed', 'pelleted feed', 'complete feed',
-    'layer pellet', 'layer crumble', 'scratch grain', 'chick starter',
-    'chicken feed', 'poultry feed', 'gamebird', 'game bird',
-    'dog food', 'cat food', 'rabbit pellet', 'goat feed',
-    'equine senior', 'equine junior', 'horse feed',
-    'rice bran', 'corn oil', 'flax seed', 'ration balancer',
-    'mineral block', 'salt block', 'salt lick', 'mineral tub',
-    'hay stretcher', 'alfalfa meal',
-    'cob ', ' cob', 'textured', 'pellet feed',
-    'omolene', 'ultium', 'empower', 'topline',
-    'kalm ultra', 'kalm n ez', 'progressiv', 'essential k'
-  ]
-  for (const kw of grainKeywords) {
-    if (n.includes(kw)) return 'grain'
-  }
+  const grainKeywords = ['feed', 'grain', ' oat', 'oats ', 'beet pulp', ' mash', 'mash ',
+    'cavalor', 'buckeye', 'nutrena', 'purina', 'tribute', 'calf-manna', 'sweet feed',
+    'pelleted feed', 'complete feed', 'equine senior', 'horse feed', 'ration balancer',
+    'mineral block', 'salt block', 'salt lick', 'omolene', 'ultium', 'safechoice',
+    'strategy ', 'enrich', 'impact ']
+  for (const kw of grainKeywords) { if (n.includes(kw)) return 'feed' }
 
-  // --- SHELF GOODS (everything else) ---
+  // --- FARM SUPPLIES ---
+  if (/\b(wheelbarrow|shovel|fork|rake|cart|trailer|tractor|barn|storage|tarp)\b/.test(n)) return 'farm_supplies'
+
+  // --- TOOLS ---
+  if (/\b(tool|knife|plier|wire.*cutter|bolt.*cutter|wrench|screwdriver)\b/.test(n)) return 'tools'
+
+  // --- GIFT ---
+  if (/\b(gift\s*card|gift\s*certificate|gift\s*basket)\b/.test(n)) return 'gift'
+
+  // --- DEFAULT ---
   return 'shelf_goods'
 }
 

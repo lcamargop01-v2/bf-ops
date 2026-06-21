@@ -13,7 +13,7 @@ var MODULES = [
   { id: 'crm', name: 'CRM', icon: 'fa-handshake', desc: 'Contacts, organizations, sales pipeline', color: '#6366F1' },
   { id: 'reports', name: 'Reports', icon: 'fa-chart-pie', desc: 'Comprehensive reporting, exports, analytics', color: '#8B5CF6' },
   { id: 'pos', name: 'Point of Sale', icon: 'fa-cash-register', desc: 'Register, payments, receipts', color: '#7C3AED' },
-  { id: 'tasks', name: 'Tasks', icon: 'fa-list-check', desc: 'Team tasks, checklists, operations', color: '#DC2626', soon: true },
+  { id: 'tasks', name: 'Tasks', icon: 'fa-list-check', desc: 'Team tasks, notifications, operations tracking', color: '#DC2626' },
 ];
 
 // ==================== AUTH ====================
@@ -325,6 +325,8 @@ function launchModule(moduleId, initialPage) {
     loadReportsModule();
   } else if (moduleId === 'pos') {
     loadPOSModule();
+  } else if (moduleId === 'tasks') {
+    loadTasksModule();
   } else {
     document.getElementById('moduleFrame').innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px">
@@ -633,6 +635,32 @@ function loadPOSModule() {
     document.body.appendChild(script);
   } else {
     if (typeof window._posInit === 'function') window._posInit();
+  }
+}
+
+// ==================== TASKS MODULE LOADER ====================
+
+function loadTasksModule() {
+  const frame = document.getElementById('moduleFrame');
+  if (!document.querySelector('link[data-module="tasks-css"]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/static/modules/tasks.css?v=' + Date.now();
+    link.dataset.module = 'tasks-css';
+    document.head.appendChild(link);
+  }
+  frame.innerHTML = '<div id="tasks-app"></div>';
+  if (!loadedModuleScripts.tasks) {
+    const script = document.createElement('script');
+    script.src = '/static/modules/tasks.js?v=' + Date.now();
+    script.dataset.module = 'tasks';
+    script.onload = () => {
+      loadedModuleScripts.tasks = true;
+      if (typeof window._tasksInit === 'function') window._tasksInit();
+    };
+    document.body.appendChild(script);
+  } else {
+    if (typeof window._tasksInit === 'function') window._tasksInit();
   }
 }
 

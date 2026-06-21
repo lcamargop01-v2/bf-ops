@@ -1740,9 +1740,10 @@ app.post('/api/pos/inventory-request', async (c) => {
   const num = 'PIR-' + Date.now().toString(36).toUpperCase()
 
   const r = await db.prepare(`
-    INSERT INTO pos_inventory_requests (request_number, location_id, urgency, requested_by, requested_by_name, reason, notes)
-    VALUES (?,?,?,?,?,?,?)
-  `).bind(num, body.location_id, body.urgency || 'normal', body.requested_by || null, body.requested_by_name || '', body.reason || '', body.notes || '').run()
+    INSERT INTO pos_inventory_requests (request_number, location_id, urgency, requested_by, requested_by_name, reason, notes, customer_id, customer_name, notify_customer)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
+  `).bind(num, body.location_id, body.urgency || 'normal', body.requested_by || null, body.requested_by_name || '', body.reason || '', body.notes || '',
+    body.customer_id || null, body.customer_name || null, body.notify_customer ? 1 : 0).run()
 
   const reqId = r.meta.last_row_id
 
@@ -2173,6 +2174,170 @@ app.get('/api/pos/customer-crm/:customerId', async (c) => {
     activities: recentActivities.results || [],
     opportunities: opportunities.results || []
   })
+})
+
+// ==================== FEE CONFIG (fuel surcharge, CC convenience) ====================
+
+app.get('/api/pos/fees', async (c) => {
+  const db = c.env.DB
+  const locationId = c.req.query('location_id') || ''
+  let q = 'SELECT * FROM fee_config WHERE active = 1'
+  const binds: any[] = []
+  if (locationId) { q += ' AND (location_id = ? OR location_id IS NULL)'; binds.push(parseInt(locationId)) }
+  q += ' ORDER BY fee_type'
+  const r = await db.prepare(q).bind(...binds).all()
+  return c.json(r.results || [])
+})
+
+// Calculate fees for an order
+app.post('/api/pos/calculate-fees', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+  const { subtotal, is_delivery, payment_method, location_id } = body
+
+  const fees = await db.prepare('SELECT * FROM fee_config WHERE active = 1').all()
+  const result: any[] = []
+
+  for (const fee of (fees.results || []) as any[]) {
+    if (fee.location_id && fee.location_id !== location_id) continue
+
+    let applies = false
+    if (fee.apply_to === 'delivery' && is_delivery) applies = true
+    if (fee.apply_to === 'cc_payment' && (payment_method === 'credit' || payment_method === 'credit_card')) applies = true
+    if (fee.apply_to === 'all') applies = true
+
+    if (!applies) continue
+    if (fee.min_order_amount && subtotal < fee.min_order_amount) continue
+
+    let amount = 0
+    if (fee.rate_type === 'percentage') {
+      amount = Math.round((subtotal * (fee.rate / 100)) * 100) / 100
+    } else {
+      amount = fee.rate || 0
+    }
+    if (fee.max_fee > 0 && amount > fee.max_fee) amount = fee.max_fee
+
+    result.push({
+      fee_id: fee.id,
+      fee_type: fee.fee_type,
+      name: fee.name,
+      rate: fee.rate,
+      rate_type: fee.rate_type,
+      amount: amount,
+      legal_notice: fee.legal_notice || null
+    })
+  }
+
+  return c.json({ fees: result, total_fees: result.reduce((s: number, f: any) => s + f.amount, 0) })
+})
+
+// ==================== SALES TAX REPORT ====================
+
+app.get('/api/pos/tax-report', async (c) => {
+  const db = c.env.DB
+  const month = c.req.query('month') || '' // YYYY-MM format
+  const locationId = c.req.query('location_id') || ''
+
+  if (!month) return c.json({ error: 'Month required (YYYY-MM)' }, 400)
+
+  const startDate = month + '-01'
+  const nextMonth = new Date(parseInt(month.split('-')[0]), parseInt(month.split('-')[1]), 1)
+  const endDate = nextMonth.toISOString().slice(0, 10)
+
+  let locFilter = ''
+  const binds: any[] = [startDate, endDate]
+  if (locationId) { locFilter = ' AND s.location_id = ?'; binds.push(parseInt(locationId)) }
+
+  // Total sales and tax by category
+  const byCat = await db.prepare(`
+    SELECT si.category, COUNT(DISTINCT s.id) as sale_count,
+           SUM(si.line_total) as gross_sales,
+           SUM(si.tax_amount) as tax_collected,
+           SUM(si.discount_amount) as total_discounts,
+           AVG(si.tax_rate) as avg_tax_rate
+    FROM pos_sale_items si
+    JOIN pos_sales s ON s.id = si.sale_id
+    WHERE s.status = 'completed'
+      AND DATE(s.created_at) >= ? AND DATE(s.created_at) < ?
+      ${locFilter}
+    GROUP BY si.category ORDER BY gross_sales DESC
+  `).bind(...binds).all()
+
+  // Tax exempt sales
+  const exempt = await db.prepare(`
+    SELECT COUNT(DISTINCT s.id) as exempt_sales,
+           SUM(si.line_total) as exempt_amount
+    FROM pos_sale_items si
+    JOIN pos_sales s ON s.id = si.sale_id
+    JOIN customers c ON c.id = s.customer_id
+    WHERE s.status = 'completed' AND c.tax_exempt = 1
+      AND DATE(s.created_at) >= ? AND DATE(s.created_at) < ?
+      ${locFilter}
+  `).bind(...binds).first() as any
+
+  // Daily breakdown
+  const daily = await db.prepare(`
+    SELECT DATE(s.created_at) as sale_date,
+           SUM(s.subtotal) as subtotal,
+           SUM(s.tax) as tax,
+           SUM(s.total) as total,
+           COUNT(*) as sale_count
+    FROM pos_sales s
+    WHERE s.status = 'completed'
+      AND DATE(s.created_at) >= ? AND DATE(s.created_at) < ?
+      ${locFilter}
+    GROUP BY DATE(s.created_at) ORDER BY sale_date
+  `).bind(...binds).all()
+
+  // Summary totals
+  const totals = await db.prepare(`
+    SELECT SUM(s.subtotal) as total_subtotal,
+           SUM(s.tax) as total_tax,
+           SUM(s.total) as total_sales,
+           SUM(s.discount) as total_discounts,
+           COUNT(*) as total_transactions
+    FROM pos_sales s
+    WHERE s.status = 'completed'
+      AND DATE(s.created_at) >= ? AND DATE(s.created_at) < ?
+      ${locFilter}
+  `).bind(...binds).first() as any
+
+  return c.json({
+    month,
+    by_category: byCat.results || [],
+    exempt: exempt || { exempt_sales: 0, exempt_amount: 0 },
+    daily: daily.results || [],
+    totals: totals || { total_subtotal: 0, total_tax: 0, total_sales: 0, total_discounts: 0, total_transactions: 0 }
+  })
+})
+
+// ==================== ADDRESS CRUD (enhanced) ====================
+
+// Add new address inline (used from order creation or POS)
+app.post('/api/pos/customers/:id/addresses', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+
+  if (!body.street) return c.json({ error: 'Street address required' }, 400)
+
+  // Check if this is the first address → make primary
+  const existing = await db.prepare('SELECT COUNT(*) as cnt FROM addresses WHERE customer_id = ?').bind(customerId).first() as any
+  const isPrimary = (existing?.cnt || 0) === 0 ? 1 : (body.is_primary ? 1 : 0)
+
+  // If setting as primary, unset other primaries
+  if (isPrimary) {
+    await db.prepare('UPDATE addresses SET is_primary = 0 WHERE customer_id = ?').bind(customerId).run()
+  }
+
+  const r = await db.prepare(`
+    INSERT INTO addresses (customer_id, label, street, city, state, zip, lat, lng, is_primary, notes, delivery_instructions)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(customerId, body.label || 'Delivery', body.street, body.city || '', body.state || 'FL',
+    body.zip || '', body.lat || null, body.lng || null, isPrimary,
+    body.notes || null, body.delivery_instructions || null).run()
+
+  return c.json({ id: r.meta.last_row_id, success: true }, 201)
 })
 
 export { app as posApp }
