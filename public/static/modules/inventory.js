@@ -2109,28 +2109,38 @@ async function invShowProductDetail(productId) {
             var diffClass = diff > 0 ? 'color:#DC2626' : diff < 0 ? 'color:#059669' : '';
             var diffSign = diff > 0 ? '+' : '';
             var refLabel = '';
-            if (ch.po_number) refLabel += '<span class="inv-muted">PO ' + escH(ch.po_number) + '</span>';
-            if (ch.bill_number || ch.bill_id) refLabel += (refLabel ? ' → ' : '') + '<span style="color:#2563EB">Bill #' + (ch.bill_number || ch.bill_id) + '</span>';
-            if (ch.supplier_name) refLabel += (refLabel ? '<br>' : '') + '<span class="inv-muted" style="font-size:11px">' + escH(ch.supplier_name) + '</span>';
+            if (ch.source === 'freight') {
+              // Freight-specific reference
+              if (ch.po_number) refLabel += '<span class="inv-muted">PO ' + escH(ch.po_number) + '</span>';
+              var carrier = ch.freight_carrier || ch.freight_vendor_name || '';
+              if (carrier) refLabel += (refLabel ? ' → ' : '') + '<span style="color:#0369A1"><i class="fas fa-truck-loading"></i> ' + escH(carrier) + '</span>';
+              if (ch.freight_invoice) refLabel += (refLabel ? '<br>' : '') + '<span class="inv-muted" style="font-size:11px">Inv: ' + escH(ch.freight_invoice) + '</span>';
+            } else {
+              // Bill or other reference
+              if (ch.po_number) refLabel += '<span class="inv-muted">PO ' + escH(ch.po_number) + '</span>';
+              if (ch.bill_number || ch.bill_id) refLabel += (refLabel ? ' → ' : '') + '<span style="color:#2563EB">Bill #' + (ch.bill_number || ch.bill_id) + '</span>';
+              if (ch.supplier_name) refLabel += (refLabel ? '<br>' : '') + '<span class="inv-muted" style="font-size:11px">' + escH(ch.supplier_name) + '</span>';
+            }
             if (!refLabel) refLabel = '<span class="inv-muted">—</span>';
+            var sourceColor = ch.source === 'bill' ? 'supplement' : ch.source === 'freight' ? 'hay' : ch.source === 'manual' ? 'grain' : 'other';
             body += '<tr>' +
               '<td style="white-space:nowrap">' + invFormatDate(ch.created_at) + '</td>' +
               '<td class="text-right">$' + (ch.old_cost || 0).toFixed(2) + '</td>' +
               '<td class="text-right"><strong>$' + (ch.new_cost || 0).toFixed(2) + '</strong></td>' +
               '<td class="text-right" style="' + diffClass + '">' + diffSign + '$' + Math.abs(diff).toFixed(2) + (diffPct !== '—' ? ' <span style="font-size:11px">(' + diffSign + diffPct + '%)</span>' : '') + '</td>' +
-              '<td><span class="inv-cat-badge inv-cat-' + (ch.source === 'bill' ? 'supplement' : ch.source === 'manual' ? 'grain' : 'other') + '">' + escH(ch.source || 'bill') + '</span></td>' +
+              '<td><span class="inv-cat-badge inv-cat-' + sourceColor + '">' + escH(ch.source || 'bill') + '</span></td>' +
               '<td>' + refLabel + '</td>' +
               '</tr>';
           });
           body += '</tbody></table>';
         } else {
           body += '<h4 style="margin-top:16px"><i class="fas fa-chart-line" style="color:#6366F1"></i> Cost History</h4>';
-          body += '<p class="inv-muted" style="font-size:13px">No cost changes recorded yet. Costs update automatically when supplier bills are approved.</p>';
+          body += '<p class="inv-muted" style="font-size:13px">No cost changes recorded yet. Costs update automatically when supplier bills and freight charges are approved.</p>';
         }
       } catch(e) {
         // Cost history endpoint might not be available — silently skip
         body += '<h4 style="margin-top:16px"><i class="fas fa-chart-line" style="color:#6366F1"></i> Cost History</h4>';
-        body += '<p class="inv-muted" style="font-size:13px">No cost changes recorded yet. Costs update automatically when supplier bills are approved.</p>';
+        body += '<p class="inv-muted" style="font-size:13px">No cost changes recorded yet. Costs update automatically when supplier bills and freight charges are approved.</p>';
       }
     }
 

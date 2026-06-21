@@ -1225,3 +1225,24 @@
 .po-view-only .po-nav-btn {
   display: inline-flex !important;
 }
+
+/* ==================== FREIGHT ==================== */
+.po-freight-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: #F0F9FF;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.po-btn-danger {
+  background: #DC2626;
+  color: #fff;
+  border-color: #DC2626;
+}
+.po-btn-danger:hover {
+  background: #B91C1C;
+  border-color: #B91C1C;
+}

@@ -227,7 +227,8 @@ function poRenderDashboard() {
     { icon: 'fa-triangle-exclamation', label: 'Delayed', value: totals.delayed || 0, color: totals.delayed > 0 ? '#DC2626' : '#6B7280' },
     { icon: 'fa-hand', label: 'Pending Requests', value: poRequestSummary.pending_requests ? poRequestSummary.pending_requests.length : 0, color: (poRequestSummary.pending_requests && poRequestSummary.pending_requests.length > 0) ? '#E11D48' : '#6B7280', click: "poNav('requests')" },
     { icon: 'fa-file-invoice-dollar', label: 'Pending Bills', value: d.pending_bills ? d.pending_bills.count : 0, color: '#7C3AED', click: "poNav('bills')" },
-    { icon: 'fa-dollar-sign', label: 'Bills Total', value: '$' + ((d.pending_bills ? d.pending_bills.total : 0) || 0).toLocaleString(undefined, {minimumFractionDigits:2}), color: '#7C3AED' }
+    { icon: 'fa-dollar-sign', label: 'Bills Total', value: '$' + ((d.pending_bills ? d.pending_bills.total : 0) || 0).toLocaleString(undefined, {minimumFractionDigits:2}), color: '#7C3AED' },
+    { icon: 'fa-truck-loading', label: 'Pending Freight', value: d.pending_freight ? d.pending_freight.count : 0, color: (d.pending_freight && d.pending_freight.count > 0) ? '#0369A1' : '#6B7280' }
   ];
 
   var html = '<div class="po-dashboard">';
@@ -617,6 +618,7 @@ function poRenderOrderDetail(data) {
   var receivings = data.receivings || [];
   var images = data.images || [];
   var bills = data.bills || [];
+  var freightCharges = data.freight_charges || [];
 
   var pctRecv = 0;
   var totalOrdered = items.reduce(function(s, i) { return s + (i.qty_ordered || 0); }, 0);
@@ -639,6 +641,7 @@ function poRenderOrderDetail(data) {
   }
   html += '<button class="po-btn po-btn-outline po-btn-sm" onclick="poShowStatusChange(' + po.id + ',\'' + po.status + '\')"><i class="fas fa-exchange-alt"></i> Status</button>';
   html += '<button class="po-btn po-btn-outline po-btn-sm" onclick="poShowCreateBill(' + po.id + ')"><i class="fas fa-file-invoice-dollar"></i> Create Bill</button>';
+  html += '<button class="po-btn po-btn-outline po-btn-sm" onclick="poShowCreateFreight(' + po.id + ')"><i class="fas fa-truck-loading"></i> Add Freight</button>';
   html += '<button class="po-btn po-btn-outline po-btn-sm" onclick="poShowUploadImage(' + po.id + ')"><i class="fas fa-camera"></i> Photo</button>';
   html += '</div></div>';
 
@@ -748,6 +751,46 @@ function poRenderOrderDetail(data) {
         '<td onclick="event.stopPropagation()">' +
         (b.status === 'pending' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poApproveBill(' + b.id + ')" title="Approve & update costs"><i class="fas fa-check"></i></button>' : '') +
         (b.status === 'approved' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poMarkBillPaid(' + b.id + ')" title="Mark paid"><i class="fas fa-dollar-sign"></i></button>' : '') +
+        '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  // Freight Charges
+  html += '<div class="po-section">';
+  html += '<div class="po-section-header">';
+  html += '<h3 class="po-section-title" style="margin:0"><i class="fas fa-truck-loading"></i> Freight Charges</h3>';
+  html += '<button class="po-btn po-btn-sm po-btn-outline" onclick="poShowCreateFreight(' + po.id + ')"><i class="fas fa-plus"></i> Add Freight</button>';
+  html += '</div>';
+  if (freightCharges.length === 0) {
+    html += '<div style="padding:24px;text-align:center;color:#94A3B8"><i class="fas fa-truck-loading" style="font-size:32px;margin-bottom:8px;display:block"></i>No freight charges. Add a freight charge to track shipping costs and calculate landed cost.</div>';
+  } else {
+    var totalFreight = freightCharges.reduce(function(s, f) { return s + (f.amount || 0) + (f.tax || 0); }, 0);
+    html += '<div class="po-freight-summary" style="padding:8px 16px;background:#F0F9FF;border-radius:8px;margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">';
+    html += '<span style="color:#0369A1;font-weight:600"><i class="fas fa-truck-loading"></i> Total Freight: $' + totalFreight.toFixed(2) + '</span>';
+    var pendingF = freightCharges.filter(function(f) { return f.status === 'pending'; }).length;
+    var approvedF = freightCharges.filter(function(f) { return f.status === 'approved'; }).length;
+    if (pendingF > 0) html += '<span class="po-bill-status po-bill-pending">' + pendingF + ' Pending</span>';
+    if (approvedF > 0) html += '<span class="po-bill-status po-bill-approved">' + approvedF + ' Approved</span>';
+    html += '<button class="po-btn po-btn-xs po-btn-outline" onclick="poShowLandedCost(' + po.id + ')" style="margin-left:auto"><i class="fas fa-calculator"></i> View Landed Cost</button>';
+    html += '</div>';
+    html += '<div class="po-table-wrap"><table class="po-table po-table-hover"><thead><tr><th>Vendor / Carrier</th><th>Invoice #</th><th class="text-right">Amount</th><th class="text-right">Tax</th><th class="text-right">Total</th><th>Method</th><th>Status</th><th></th></tr></thead><tbody>';
+    freightCharges.forEach(function(f) {
+      var vendorLabel = f.carrier_name || f.vendor_name || f.supplier_name_resolved || 'Unknown';
+      if (f.is_third_party) vendorLabel += ' <span class="po-muted" style="font-size:11px">(3rd party)</span>';
+      html += '<tr class="po-clickable" onclick="poShowFreightDetail(' + f.id + ')">' +
+        '<td><strong>' + vendorLabel + '</strong></td>' +
+        '<td>' + poEsc(f.invoice_number || '—') + '</td>' +
+        '<td class="text-right">$' + (f.amount || 0).toFixed(2) + '</td>' +
+        '<td class="text-right">$' + (f.tax || 0).toFixed(2) + '</td>' +
+        '<td class="text-right"><strong>$' + ((f.amount || 0) + (f.tax || 0)).toFixed(2) + '</strong></td>' +
+        '<td><span class="po-muted" style="font-size:12px">' + poFreightMethodLabel(f.allocation_method) + '</span></td>' +
+        '<td><span class="po-bill-status po-bill-' + f.status + '">' + poBillStatusLabel(f.status) + '</span></td>' +
+        '<td onclick="event.stopPropagation()">' +
+        (f.status === 'pending' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poApproveFreight(' + f.id + ')" title="Approve & allocate"><i class="fas fa-check"></i></button>' +
+          '<button class="po-btn po-btn-xs po-btn-danger" onclick="poDeleteFreight(' + f.id + ')" title="Delete"><i class="fas fa-trash"></i></button>' : '') +
+        (f.status === 'approved' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poMarkFreightPaid(' + f.id + ')" title="Mark paid"><i class="fas fa-dollar-sign"></i></button>' : '') +
         '</td></tr>';
     });
     html += '</tbody></table></div>';
@@ -1113,6 +1156,251 @@ async function poDisputeBill(billId) {
     poToast('Bill disputed');
     poRender();
   } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ==================== FREIGHT CHARGES ====================
+
+function poFreightMethodLabel(m) {
+  if (m === 'by_qty') return 'By Qty';
+  if (m === 'by_value') return 'By Value';
+  if (m === 'even') return 'Even Split';
+  return m || 'By Qty';
+}
+
+async function poShowCreateFreight(poId) {
+  try {
+    // Load suppliers for vendor picker
+    var resp = await poAPI.get('/api/purchasing/suppliers?active=1', { headers: poHeaders() });
+    var suppliers = resp.data.suppliers || [];
+
+    var body = '<div class="po-form">';
+    body += '<h4 style="margin-bottom:12px"><i class="fas fa-truck-loading"></i> Add Freight Charge for this PO</h4>';
+
+    // Third party toggle
+    body += '<div class="po-form-row" style="margin-bottom:12px">';
+    body += '<label style="display:flex;align-items:center;gap:8px;cursor:pointer">';
+    body += '<input type="checkbox" id="poFreightThirdParty" onchange="poToggleFreightVendor()">';
+    body += '<span>Third-party freight carrier (different from product supplier)</span>';
+    body += '</label></div>';
+
+    // Vendor selection (for third party)
+    body += '<div id="poFreightVendorSection" style="display:none">';
+    body += '<div class="po-form-row"><label>Freight Vendor</label>';
+    body += '<select id="poFreightVendorId" class="po-input"><option value="">— Select vendor or enter name below —</option>';
+    suppliers.forEach(function(s) {
+      body += '<option value="' + s.id + '">' + poEsc(s.name) + (s.supplier_type === 'freight' ? ' (Freight)' : '') + '</option>';
+    });
+    body += '</select></div>';
+    body += '<div class="po-form-row"><label>Or enter carrier name</label><input id="poFreightCarrierName" class="po-input" placeholder="e.g. FedEx Freight, R+L Carriers"></div>';
+    body += '</div>';
+
+    // Core fields
+    body += '<div class="po-form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
+    body += '<div class="po-form-row"><label>Freight Amount *</label><input id="poFreightAmount" type="number" step="0.01" min="0" class="po-input" placeholder="0.00"></div>';
+    body += '<div class="po-form-row"><label>Tax</label><input id="poFreightTax" type="number" step="0.01" min="0" class="po-input" placeholder="0.00" value="0"></div>';
+    body += '<div class="po-form-row"><label>Invoice / BOL #</label><input id="poFreightInvoice" class="po-input" placeholder="Freight invoice number"></div>';
+    body += '<div class="po-form-row"><label>Tracking #</label><input id="poFreightTracking" class="po-input" placeholder="Tracking or PRO number"></div>';
+    body += '<div class="po-form-row"><label>Due Date</label><input id="poFreightDueDate" type="date" class="po-input"></div>';
+    body += '<div class="po-form-row"><label>Allocation Method</label>';
+    body += '<select id="poFreightMethod" class="po-input">';
+    body += '<option value="by_qty" selected>Split by Quantity (default)</option>';
+    body += '<option value="by_value">Split by Value</option>';
+    body += '<option value="even">Even Split</option>';
+    body += '</select></div>';
+    body += '</div>';
+
+    body += '<div class="po-form-row" style="margin-top:12px"><label>Notes</label><textarea id="poFreightNotes" class="po-input" rows="2" placeholder="Notes about this freight charge..."></textarea></div>';
+    body += '</div>';
+
+    var footer = '<button class="po-btn po-btn-primary" onclick="poDoCreateFreight(' + poId + ')"><i class="fas fa-plus"></i> Add Freight Charge</button>';
+    poShowModal('<i class="fas fa-truck-loading"></i> Add Freight Charge', body, footer);
+  } catch(e) { poToast('Failed to load: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+function poToggleFreightVendor() {
+  var checked = document.getElementById('poFreightThirdParty').checked;
+  document.getElementById('poFreightVendorSection').style.display = checked ? 'block' : 'none';
+}
+
+async function poDoCreateFreight(poId) {
+  var amount = parseFloat(document.getElementById('poFreightAmount').value) || 0;
+  if (amount <= 0) { poToast('Freight amount is required', 'error'); return; }
+
+  var isThirdParty = document.getElementById('poFreightThirdParty').checked;
+  var vendorId = isThirdParty ? (document.getElementById('poFreightVendorId').value || null) : null;
+  var carrierName = isThirdParty ? (document.getElementById('poFreightCarrierName').value || null) : null;
+
+  try {
+    await poAPI.post('/api/purchasing/orders/' + poId + '/freight', {
+      amount: amount,
+      tax: parseFloat(document.getElementById('poFreightTax').value) || 0,
+      invoice_number: document.getElementById('poFreightInvoice').value || null,
+      tracking_number: document.getElementById('poFreightTracking').value || null,
+      due_date: document.getElementById('poFreightDueDate').value || null,
+      allocation_method: document.getElementById('poFreightMethod').value || 'by_qty',
+      notes: document.getElementById('poFreightNotes').value || null,
+      is_third_party: isThirdParty ? 1 : 0,
+      vendor_id: vendorId,
+      carrier_name: carrierName,
+      vendor_name: carrierName
+    }, { headers: poHeaders() });
+    poToast('Freight charge added');
+    poCloseModal();
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function poShowFreightDetail(freightId) {
+  try {
+    var resp = await poAPI.get('/api/purchasing/freight/' + freightId, { headers: poHeaders() });
+    var charge = resp.data.charge;
+    var allocations = resp.data.allocations || [];
+    var poItems = resp.data.po_items || [];
+
+    var body = '<div class="po-bill-detail">';
+
+    // Header info
+    body += '<div class="po-detail-grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">';
+    body += '<div class="po-detail-info-card">';
+    body += '<div class="po-detail-row"><span>PO</span><strong>' + poEsc(charge.po_number) + '</strong></div>';
+    body += '<div class="po-detail-row"><span>Vendor</span><strong>' + poEsc(charge.carrier_name || charge.vendor_name || charge.supplier_name_resolved || '—') + '</strong></div>';
+    if (charge.is_third_party) body += '<div class="po-detail-row"><span>Type</span><strong style="color:#D97706"><i class="fas fa-external-link-alt"></i> Third-Party Carrier</strong></div>';
+    body += '<div class="po-detail-row"><span>Invoice/BOL</span><strong>' + poEsc(charge.invoice_number || '—') + '</strong></div>';
+    if (charge.tracking_number) body += '<div class="po-detail-row"><span>Tracking</span><strong>' + poEsc(charge.tracking_number) + '</strong></div>';
+    body += '</div>';
+    body += '<div class="po-detail-info-card">';
+    body += '<div class="po-detail-row"><span>Amount</span><strong style="color:#0369A1;font-size:18px">$' + (charge.amount || 0).toFixed(2) + '</strong></div>';
+    body += '<div class="po-detail-row"><span>Tax</span><strong>$' + (charge.tax || 0).toFixed(2) + '</strong></div>';
+    body += '<div class="po-detail-row"><span>Total</span><strong>$' + ((charge.amount || 0) + (charge.tax || 0)).toFixed(2) + '</strong></div>';
+    body += '<div class="po-detail-row"><span>Allocation</span><strong>' + poFreightMethodLabel(charge.allocation_method) + '</strong></div>';
+    body += '<div class="po-detail-row"><span>Status</span><span class="po-bill-status po-bill-' + charge.status + '">' + poBillStatusLabel(charge.status) + '</span></div>';
+    body += '</div></div>';
+
+    if (charge.notes) body += '<div class="po-muted" style="margin-bottom:12px"><i class="fas fa-sticky-note"></i> ' + poEsc(charge.notes) + '</div>';
+
+    // If approved/paid, show allocations
+    if (allocations.length > 0) {
+      body += '<h4 style="margin-top:8px"><i class="fas fa-sitemap" style="color:#6366F1"></i> Freight Allocation</h4>';
+      body += '<table class="po-table po-table-compact"><thead><tr><th>Product</th><th class="text-right">Qty</th><th class="text-right">Allocated</th><th class="text-right">Per Unit</th><th class="text-right">Current Cost</th></tr></thead><tbody>';
+      allocations.forEach(function(a) {
+        body += '<tr>' +
+          '<td><strong>' + poEsc(a.product_name || '—') + '</strong>' + (a.sku ? ' <span class="po-muted">(' + poEsc(a.sku) + ')</span>' : '') + '</td>' +
+          '<td class="text-right">' + a.qty + '</td>' +
+          '<td class="text-right">$' + (a.allocated_amount || 0).toFixed(2) + '</td>' +
+          '<td class="text-right" style="color:#0369A1;font-weight:600">$' + (a.per_unit_freight || 0).toFixed(2) + '</td>' +
+          '<td class="text-right">$' + (a.current_cost || 0).toFixed(2) + '</td>' +
+          '</tr>';
+      });
+      body += '</tbody></table>';
+    } else if (charge.status === 'pending') {
+      // Show preview
+      body += '<h4 style="margin-top:8px"><i class="fas fa-eye" style="color:#D97706"></i> Allocation Preview (pending approval)</h4>';
+      if (poItems.length > 0) {
+        var totalQty = poItems.reduce(function(s, i) { return s + (i.qty_received || i.qty_ordered || 0); }, 0);
+        body += '<table class="po-table po-table-compact"><thead><tr><th>Product</th><th class="text-right">Qty</th><th class="text-right">Est. Allocated</th><th class="text-right">Est. Per Unit</th><th class="text-right">Current Cost</th><th class="text-right">Est. Landed</th></tr></thead><tbody>';
+        poItems.forEach(function(item) {
+          var qty = item.qty_received || item.qty_ordered || 0;
+          var allocated = totalQty > 0 ? (qty / totalQty) * charge.amount : 0;
+          var perUnit = qty > 0 ? allocated / qty : 0;
+          var landed = (item.current_cost || 0) + perUnit;
+          body += '<tr>' +
+            '<td><strong>' + poEsc(item.product_name || '—') + '</strong></td>' +
+            '<td class="text-right">' + qty + '</td>' +
+            '<td class="text-right" style="color:#D97706">$' + allocated.toFixed(2) + '</td>' +
+            '<td class="text-right" style="color:#D97706">$' + perUnit.toFixed(2) + '</td>' +
+            '<td class="text-right">$' + (item.current_cost || 0).toFixed(2) + '</td>' +
+            '<td class="text-right" style="color:#059669;font-weight:600">$' + landed.toFixed(2) + '</td>' +
+            '</tr>';
+        });
+        body += '</tbody></table>';
+        body += '<p class="po-muted" style="font-size:12px;margin-top:8px"><i class="fas fa-info-circle"></i> These are estimates based on current quantities. Final allocation is calculated upon approval.</p>';
+      } else {
+        body += '<p class="po-muted">No PO items to allocate freight to.</p>';
+      }
+    }
+
+    body += '</div>';
+
+    var footer = '';
+    if (charge.status === 'pending') {
+      footer += '<button class="po-btn po-btn-danger" onclick="poCloseModal();poDeleteFreight(' + charge.id + ')"><i class="fas fa-trash"></i> Delete</button>';
+      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poApproveFreight(' + charge.id + ')"><i class="fas fa-check"></i> Approve & Allocate</button>';
+    } else if (charge.status === 'approved') {
+      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poMarkFreightPaid(' + charge.id + ')"><i class="fas fa-dollar-sign"></i> Mark Paid</button>';
+    }
+
+    poShowModal('<i class="fas fa-truck-loading"></i> Freight Charge Detail', body, footer);
+  } catch(e) { poToast('Failed to load freight: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function poApproveFreight(freightId) {
+  if (!confirm('Approve this freight charge?\n\nThis will allocate freight costs across PO items by quantity and update product costs.\nThe landed cost (product + freight) will be used for COGS going forward.')) return;
+  try {
+    await poAPI.put('/api/purchasing/freight/' + freightId, {
+      status: 'approved'
+    }, { headers: poHeaders() });
+    poToast('Freight approved — costs allocated to products');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function poMarkFreightPaid(freightId) {
+  try {
+    await poAPI.put('/api/purchasing/freight/' + freightId, {
+      status: 'paid',
+      paid_date: new Date().toISOString().slice(0,10)
+    }, { headers: poHeaders() });
+    poToast('Freight marked as paid');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function poDeleteFreight(freightId) {
+  if (!confirm('Delete this freight charge? This cannot be undone.')) return;
+  try {
+    await poAPI.delete('/api/purchasing/freight/' + freightId, { headers: poHeaders() });
+    poToast('Freight charge deleted');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function poShowLandedCost(poId) {
+  try {
+    var resp = await poAPI.get('/api/purchasing/orders/' + poId + '/landed-cost', { headers: poHeaders() });
+    var items = resp.data.items || [];
+    var totalFreight = resp.data.total_freight || 0;
+    var freightCount = resp.data.freight_count || 0;
+
+    var body = '<div class="po-bill-detail">';
+    body += '<div style="padding:12px 16px;background:#F0FDF4;border-radius:8px;margin-bottom:16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">';
+    body += '<span style="color:#059669;font-weight:600;font-size:16px"><i class="fas fa-calculator"></i> Landed Cost Breakdown</span>';
+    body += '<span class="po-muted">' + freightCount + ' freight charge(s) totaling $' + totalFreight.toFixed(2) + '</span>';
+    body += '</div>';
+
+    if (items.length > 0) {
+      body += '<table class="po-table po-table-compact"><thead><tr><th>Product</th><th class="text-right">Qty</th><th class="text-right">Unit Cost</th><th class="text-right">Freight/Unit</th><th class="text-right">Landed Cost</th></tr></thead><tbody>';
+      items.forEach(function(item) {
+        var hasFreight = (item.freight_per_unit || 0) > 0;
+        body += '<tr>' +
+          '<td><strong>' + poEsc(item.product_name || '—') + '</strong>' + (item.sku ? ' <span class="po-muted">(' + poEsc(item.sku) + ')</span>' : '') + '</td>' +
+          '<td class="text-right">' + (item.qty_received || item.qty_ordered || 0) + '</td>' +
+          '<td class="text-right">$' + (item.bill_unit_cost || 0).toFixed(2) + '</td>' +
+          '<td class="text-right" style="color:' + (hasFreight ? '#0369A1' : '#94A3B8') + '">' + (hasFreight ? '$' + item.freight_per_unit.toFixed(2) : '—') + '</td>' +
+          '<td class="text-right" style="color:#059669;font-weight:700;font-size:14px">$' + (item.landed_cost || 0).toFixed(2) + '</td>' +
+          '</tr>';
+      });
+      body += '</tbody></table>';
+    } else {
+      body += '<p class="po-muted" style="text-align:center;padding:24px">No items on this PO.</p>';
+    }
+
+    if (totalFreight === 0) {
+      body += '<p class="po-muted" style="font-size:12px;margin-top:12px"><i class="fas fa-info-circle"></i> No approved freight charges yet. Add and approve freight to see the full landed cost.</p>';
+    }
+
+    body += '</div>';
+    poShowModal('<i class="fas fa-calculator"></i> Landed Cost Analysis', body, '');
+  } catch(e) { poToast('Failed to load landed cost: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
 // ==================== SUPPLIERS ====================

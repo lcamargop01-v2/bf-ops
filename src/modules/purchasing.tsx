@@ -127,12 +127,25 @@ app.get('/api/purchasing/orders/:id', async (c) => {
 
   const bills = await db.prepare('SELECT * FROM po_bills WHERE po_id = ? ORDER BY created_at DESC').bind(id).all()
 
+  // Freight charges
+  let freightCharges: any[] = []
+  try {
+    const freightResult = await db.prepare(
+      `SELECT f.*, s.name as supplier_name_resolved
+       FROM po_freight_charges f
+       LEFT JOIN suppliers s ON f.vendor_id = s.id
+       WHERE f.po_id = ? ORDER BY f.created_at DESC`
+    ).bind(id).all()
+    freightCharges = freightResult.results || []
+  } catch(e) { /* table may not exist yet */ }
+
   return c.json({
     order: po,
     items: items.results || [],
     receivings: receivings.results || [],
     images: images.results || [],
-    bills: bills.results || []
+    bills: bills.results || [],
+    freight_charges: freightCharges
   })
 })
 
@@ -573,23 +586,410 @@ app.get('/api/purchasing/orders/:id/bill-preview', async (c) => {
   })
 })
 
-// Product cost history
+// Product cost history (includes bill and freight entries)
 app.get('/api/purchasing/cost-history/:productId', async (c) => {
   const db = c.env.DB
   const productId = parseInt(c.req.param('productId'))
   const limit = parseInt(c.req.query('limit') || '20')
 
   const history = await db.prepare(
-    `SELECT h.*, po.po_number, s.name as supplier_name, b.bill_number, b.supplier_invoice_number
+    `SELECT h.*, po.po_number, s.name as supplier_name, b.bill_number, b.supplier_invoice_number,
+      f.carrier_name as freight_carrier, f.invoice_number as freight_invoice, f.vendor_name as freight_vendor_name
      FROM product_cost_history h
      LEFT JOIN po_bills b ON h.bill_id = b.id
      LEFT JOIN purchase_orders po ON h.po_id = po.id
      LEFT JOIN suppliers s ON h.supplier_id = s.id
+     LEFT JOIN po_freight_charges f ON h.source = 'freight' AND h.reference_id = f.id
      WHERE h.product_id = ?
      ORDER BY h.created_at DESC LIMIT ?`
   ).bind(productId, limit).all()
 
   return c.json({ history: history.results || [] })
+})
+
+// ==================== FREIGHT CHARGES ====================
+
+function generateFreightNumber(): string {
+  const d = new Date()
+  const ymd = d.getFullYear().toString().slice(2) + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0')
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
+  return `FRT-${ymd}-${rand}`
+}
+
+// Create freight charge for a PO
+app.post('/api/purchasing/orders/:id/freight', async (c) => {
+  const db = c.env.DB
+  const poId = parseInt(c.req.param('id'))
+  const user = getUserFromHeader(c)
+  const body = await c.req.json()
+  const { vendor_id, vendor_name, invoice_number, amount, tax, allocation_method,
+    due_date, notes, is_third_party, carrier_name, tracking_number } = body
+
+  if (!amount || amount <= 0) return c.json({ error: 'Freight amount is required' }, 400)
+
+  // Verify PO exists
+  const po = await db.prepare('SELECT id FROM purchase_orders WHERE id = ?').bind(poId).first()
+  if (!po) return c.json({ error: 'Purchase order not found' }, 404)
+
+  const result = await db.prepare(
+    `INSERT INTO po_freight_charges (po_id, vendor_id, vendor_name, invoice_number, amount, tax,
+      allocation_method, status, due_date, notes, is_third_party, carrier_name, tracking_number, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`
+  ).bind(poId, vendor_id || null, vendor_name || null, invoice_number || null,
+    amount, tax || 0, allocation_method || 'by_qty',
+    due_date || null, notes || null, is_third_party ? 1 : 0,
+    carrier_name || null, tracking_number || null, user?.id || null).run()
+
+  return c.json({ id: result.meta.last_row_id, success: true })
+})
+
+// Get freight charges for a PO (with allocations)
+app.get('/api/purchasing/orders/:id/freight', async (c) => {
+  const db = c.env.DB
+  const poId = parseInt(c.req.param('id'))
+
+  const charges = await db.prepare(
+    `SELECT f.*, s.name as supplier_name_resolved
+     FROM po_freight_charges f
+     LEFT JOIN suppliers s ON f.vendor_id = s.id
+     WHERE f.po_id = ? ORDER BY f.created_at DESC`
+  ).bind(poId).all()
+
+  // For approved freight, also load allocations
+  const chargeList = charges.results || [] as any[]
+  for (const charge of chargeList as any[]) {
+    if (charge.status === 'approved' || charge.status === 'paid') {
+      const allocs = await db.prepare(
+        `SELECT fa.*, p.name as product_name, p.sku
+         FROM po_freight_allocations fa
+         LEFT JOIN products p ON fa.product_id = p.id
+         WHERE fa.freight_id = ? ORDER BY fa.id`
+      ).bind(charge.id).all()
+      charge.allocations = allocs.results || []
+    }
+  }
+
+  return c.json({ freight_charges: chargeList })
+})
+
+// Get single freight charge with allocations
+app.get('/api/purchasing/freight/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+
+  const charge = await db.prepare(
+    `SELECT f.*, s.name as supplier_name_resolved, po.po_number
+     FROM po_freight_charges f
+     LEFT JOIN suppliers s ON f.vendor_id = s.id
+     LEFT JOIN purchase_orders po ON f.po_id = po.id
+     WHERE f.id = ?`
+  ).bind(id).first() as any
+
+  if (!charge) return c.json({ error: 'Freight charge not found' }, 404)
+
+  const allocations = await db.prepare(
+    `SELECT fa.*, p.name as product_name, p.sku, p.cost as current_cost
+     FROM po_freight_allocations fa
+     LEFT JOIN products p ON fa.product_id = p.id
+     WHERE fa.freight_id = ? ORDER BY fa.id`
+  ).bind(id).all()
+
+  // Get PO items for allocation preview
+  const poItems = await db.prepare(
+    `SELECT pi.*, p.name as product_name, p.sku, p.cost as current_cost
+     FROM po_items pi
+     LEFT JOIN products p ON pi.product_id = p.id
+     WHERE pi.po_id = ? ORDER BY pi.id`
+  ).bind(charge.po_id).all()
+
+  return c.json({ charge, allocations: allocations.results || [], po_items: poItems.results || [] })
+})
+
+// Preview freight allocation before approval
+app.get('/api/purchasing/freight/:id/preview-allocation', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+
+  const charge = await db.prepare('SELECT * FROM po_freight_charges WHERE id = ?').bind(id).first() as any
+  if (!charge) return c.json({ error: 'Freight charge not found' }, 404)
+
+  const poItems = await db.prepare(
+    `SELECT pi.*, p.name as product_name, p.sku, p.cost as current_cost
+     FROM po_items pi
+     LEFT JOIN products p ON pi.product_id = p.id
+     WHERE pi.po_id = ? AND pi.qty_ordered > 0 ORDER BY pi.id`
+  ).bind(charge.po_id).all()
+
+  const items = (poItems.results || []) as any[]
+  const method = charge.allocation_method || 'by_qty'
+  const freightAmount = charge.amount || 0
+
+  let preview: any[] = []
+
+  if (method === 'by_qty') {
+    const totalQty = items.reduce((sum: number, i: any) => sum + (i.qty_received || i.qty_ordered || 0), 0)
+    preview = items.map((item: any) => {
+      const qty = item.qty_received || item.qty_ordered || 0
+      const allocated = totalQty > 0 ? (qty / totalQty) * freightAmount : 0
+      const perUnit = qty > 0 ? allocated / qty : 0
+      return {
+        po_item_id: item.id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        sku: item.sku,
+        qty,
+        allocated_amount: Math.round(allocated * 100) / 100,
+        per_unit_freight: Math.round(perUnit * 100) / 100,
+        current_cost: item.current_cost || 0,
+        new_landed_cost: Math.round(((item.current_cost || 0) + perUnit) * 100) / 100
+      }
+    })
+  } else if (method === 'by_value') {
+    const totalValue = items.reduce((sum: number, i: any) => {
+      const qty = i.qty_received || i.qty_ordered || 0
+      return sum + qty * (i.unit_cost || 0)
+    }, 0)
+    preview = items.map((item: any) => {
+      const qty = item.qty_received || item.qty_ordered || 0
+      const lineValue = qty * (item.unit_cost || 0)
+      const allocated = totalValue > 0 ? (lineValue / totalValue) * freightAmount : 0
+      const perUnit = qty > 0 ? allocated / qty : 0
+      return {
+        po_item_id: item.id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        sku: item.sku,
+        qty,
+        allocated_amount: Math.round(allocated * 100) / 100,
+        per_unit_freight: Math.round(perUnit * 100) / 100,
+        current_cost: item.current_cost || 0,
+        new_landed_cost: Math.round(((item.current_cost || 0) + perUnit) * 100) / 100
+      }
+    })
+  } else {
+    // even split
+    const itemCount = items.length
+    preview = items.map((item: any) => {
+      const qty = item.qty_received || item.qty_ordered || 0
+      const allocated = itemCount > 0 ? freightAmount / itemCount : 0
+      const perUnit = qty > 0 ? allocated / qty : 0
+      return {
+        po_item_id: item.id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        sku: item.sku,
+        qty,
+        allocated_amount: Math.round(allocated * 100) / 100,
+        per_unit_freight: Math.round(perUnit * 100) / 100,
+        current_cost: item.current_cost || 0,
+        new_landed_cost: Math.round(((item.current_cost || 0) + perUnit) * 100) / 100
+      }
+    })
+  }
+
+  return c.json({ charge, preview, method, total_freight: freightAmount })
+})
+
+// Update freight charge (status changes, approval with cost allocation)
+app.put('/api/purchasing/freight/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const user = getUserFromHeader(c)
+  const body = await c.req.json()
+  const { status, vendor_id, vendor_name, invoice_number, amount, tax,
+    allocation_method, due_date, paid_date, notes, carrier_name, tracking_number } = body
+
+  // Update header fields
+  await db.prepare(
+    `UPDATE po_freight_charges SET
+      status=COALESCE(?,status), vendor_id=COALESCE(?,vendor_id), vendor_name=COALESCE(?,vendor_name),
+      invoice_number=COALESCE(?,invoice_number), amount=COALESCE(?,amount), tax=COALESCE(?,tax),
+      allocation_method=COALESCE(?,allocation_method), due_date=?, paid_date=?,
+      notes=?, carrier_name=COALESCE(?,carrier_name), tracking_number=COALESCE(?,tracking_number),
+      updated_at=CURRENT_TIMESTAMP WHERE id=?`
+  ).bind(status, vendor_id, vendor_name, invoice_number, amount, tax,
+    allocation_method, due_date || null, paid_date || null,
+    notes ?? null, carrier_name, tracking_number, id).run()
+
+  // If approving, calculate allocation and update product costs
+  if (status === 'approved') {
+    const charge = await db.prepare('SELECT * FROM po_freight_charges WHERE id = ?').bind(id).first() as any
+    if (!charge) return c.json({ error: 'Freight not found' }, 404)
+
+    const poItems = await db.prepare(
+      `SELECT pi.*, p.cost as current_cost
+       FROM po_items pi
+       LEFT JOIN products p ON pi.product_id = p.id
+       WHERE pi.po_id = ? AND pi.qty_ordered > 0 ORDER BY pi.id`
+    ).bind(charge.po_id).all()
+
+    const items = (poItems.results || []) as any[]
+    const method = charge.allocation_method || 'by_qty'
+    const freightAmount = charge.amount || 0
+
+    // Clear previous allocations
+    await db.prepare('DELETE FROM po_freight_allocations WHERE freight_id = ?').bind(id).run()
+
+    // Calculate totals for allocation
+    let totalQty = 0, totalValue = 0
+    if (method === 'by_qty') {
+      totalQty = items.reduce((sum: number, i: any) => sum + (i.qty_received || i.qty_ordered || 0), 0)
+    } else if (method === 'by_value') {
+      totalValue = items.reduce((sum: number, i: any) => {
+        const qty = i.qty_received || i.qty_ordered || 0
+        return sum + qty * (i.unit_cost || 0)
+      }, 0)
+    }
+
+    for (const item of items) {
+      const qty = item.qty_received || item.qty_ordered || 0
+      let allocated = 0
+
+      if (method === 'by_qty') {
+        allocated = totalQty > 0 ? (qty / totalQty) * freightAmount : 0
+      } else if (method === 'by_value') {
+        const lineValue = qty * (item.unit_cost || 0)
+        allocated = totalValue > 0 ? (lineValue / totalValue) * freightAmount : 0
+      } else {
+        allocated = items.length > 0 ? freightAmount / items.length : 0
+      }
+
+      const perUnit = qty > 0 ? allocated / qty : 0
+      const roundedAllocated = Math.round(allocated * 100) / 100
+      const roundedPerUnit = Math.round(perUnit * 100) / 100
+
+      // Insert allocation record
+      await db.prepare(
+        `INSERT INTO po_freight_allocations (freight_id, po_item_id, product_id, qty, allocated_amount, per_unit_freight)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(id, item.id, item.product_id || null, qty, roundedAllocated, roundedPerUnit).run()
+
+      // Update product cost (add freight per unit to current cost)
+      if (item.product_id && roundedPerUnit > 0) {
+        const oldCost = item.current_cost || 0
+        const newCost = Math.round((oldCost + roundedPerUnit) * 100) / 100
+
+        await db.prepare('UPDATE products SET cost = ? WHERE id = ?')
+          .bind(newCost, item.product_id).run()
+
+        // Record cost history
+        await db.prepare(
+          `INSERT INTO product_cost_history (product_id, old_cost, new_cost, source, reference_type, reference_id, bill_id, po_id, supplier_id, changed_by, changed_by_name, notes)
+           VALUES (?, ?, ?, 'freight', 'freight', ?, NULL, ?, ?, ?, ?, ?)`
+        ).bind(item.product_id, oldCost, newCost, id, charge.po_id,
+          charge.vendor_id || null, user?.id || null, user?.email || 'system',
+          'Freight $' + roundedAllocated.toFixed(2) + ' allocated ($' + roundedPerUnit.toFixed(2) + '/unit) from ' + (charge.carrier_name || charge.vendor_name || 'freight charge')).run()
+      }
+    }
+  }
+
+  return c.json({ success: true })
+})
+
+// Delete freight charge (only pending)
+app.delete('/api/purchasing/freight/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+
+  const charge = await db.prepare('SELECT status FROM po_freight_charges WHERE id = ?').bind(id).first() as any
+  if (!charge) return c.json({ error: 'Not found' }, 404)
+  if (charge.status !== 'pending') return c.json({ error: 'Can only delete pending freight charges' }, 400)
+
+  await db.prepare('DELETE FROM po_freight_charges WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+// List all freight charges (for bills page)
+app.get('/api/purchasing/freight', async (c) => {
+  const db = c.env.DB
+  const status = c.req.query('status')
+  const poId = c.req.query('po_id')
+
+  let q = `SELECT f.*, po.po_number, s.name as supplier_name_resolved,
+    (SELECT COUNT(*) FROM po_freight_allocations WHERE freight_id = f.id) as allocation_count
+    FROM po_freight_charges f
+    LEFT JOIN purchase_orders po ON f.po_id = po.id
+    LEFT JOIN suppliers s ON f.vendor_id = s.id
+    WHERE 1=1`
+  const binds: any[] = []
+
+  if (status) { q += ' AND f.status = ?'; binds.push(status) }
+  if (poId) { q += ' AND f.po_id = ?'; binds.push(parseInt(poId)) }
+  q += ' ORDER BY f.created_at DESC'
+
+  const result = await db.prepare(q).bind(...binds).all()
+  return c.json({ freight_charges: result.results || [] })
+})
+
+// Get landed cost summary for a PO (product costs + freight per unit)
+app.get('/api/purchasing/orders/:id/landed-cost', async (c) => {
+  const db = c.env.DB
+  const poId = parseInt(c.req.param('id'))
+
+  // Get PO items with current product cost
+  const items = await db.prepare(
+    `SELECT pi.*, p.name as product_name, p.sku, p.cost as current_cost
+     FROM po_items pi
+     LEFT JOIN products p ON pi.product_id = p.id
+     WHERE pi.po_id = ? ORDER BY pi.id`
+  ).bind(poId).all()
+
+  // Get bill items unit costs for this PO
+  const billCosts = await db.prepare(
+    `SELECT bi.product_id, bi.unit_cost as bill_unit_cost
+     FROM po_bill_items bi
+     JOIN po_bills b ON bi.bill_id = b.id
+     WHERE b.po_id = ? AND b.status IN ('approved','paid')
+     ORDER BY b.created_at DESC`
+  ).bind(poId).all()
+
+  // Get approved freight allocations
+  const freightAllocs = await db.prepare(
+    `SELECT fa.product_id, fa.per_unit_freight, fa.allocated_amount,
+      f.carrier_name, f.vendor_name, f.invoice_number
+     FROM po_freight_allocations fa
+     JOIN po_freight_charges f ON fa.freight_id = f.id
+     WHERE f.po_id = ? AND f.status IN ('approved','paid')`
+  ).bind(poId).all()
+
+  // Get freight totals
+  const freightTotals = await db.prepare(
+    `SELECT COALESCE(SUM(amount), 0) as total_freight, COUNT(*) as freight_count
+     FROM po_freight_charges WHERE po_id = ? AND status IN ('approved','paid')`
+  ).bind(poId).first() as any
+
+  // Build cost map per product
+  const billCostMap: Record<number, number> = {}
+  for (const bc of (billCosts.results || []) as any[]) {
+    if (bc.product_id && !billCostMap[bc.product_id]) {
+      billCostMap[bc.product_id] = bc.bill_unit_cost
+    }
+  }
+
+  const freightMap: Record<number, number> = {}
+  for (const fa of (freightAllocs.results || []) as any[]) {
+    if (fa.product_id) {
+      freightMap[fa.product_id] = (freightMap[fa.product_id] || 0) + (fa.per_unit_freight || 0)
+    }
+  }
+
+  const landedItems = ((items.results || []) as any[]).map((item: any) => {
+    const billCost = billCostMap[item.product_id] || item.unit_cost || 0
+    const freightPerUnit = freightMap[item.product_id] || 0
+    const landedCost = Math.round((billCost + freightPerUnit) * 100) / 100
+    return {
+      ...item,
+      bill_unit_cost: billCost,
+      freight_per_unit: Math.round(freightPerUnit * 100) / 100,
+      landed_cost: landedCost
+    }
+  })
+
+  return c.json({
+    items: landedItems,
+    total_freight: freightTotals?.total_freight || 0,
+    freight_count: freightTotals?.freight_count || 0
+  })
 })
 
 // ==================== DASHBOARD / SUMMARY ====================
@@ -641,6 +1041,14 @@ app.get('/api/purchasing/dashboard', async (c) => {
     `SELECT COUNT(*) as cnt, COALESCE(SUM(amount + tax), 0) as total FROM po_bills WHERE status = 'pending'`
   ).first() as any
 
+  // Pending freight
+  let pendingFreight = { cnt: 0, total: 0 } as any
+  try {
+    pendingFreight = await db.prepare(
+      `SELECT COUNT(*) as cnt, COALESCE(SUM(amount + tax), 0) as total FROM po_freight_charges WHERE status = 'pending'`
+    ).first() as any
+  } catch(e) { /* table may not exist yet */ }
+
   // Recent receivings (last 7 days)
   const recentReceivings = await db.prepare(
     `SELECT r.*, po.po_number, po.order_type, l.code as location_code,
@@ -658,6 +1066,7 @@ app.get('/api/purchasing/dashboard', async (c) => {
     active_pos: activePOs.results || [],
     overdue_count: overdue?.cnt || 0,
     pending_bills: { count: pendingBills?.cnt || 0, total: pendingBills?.total || 0 },
+    pending_freight: { count: pendingFreight?.cnt || 0, total: pendingFreight?.total || 0 },
     recent_receivings: recentReceivings.results || []
   })
 })
