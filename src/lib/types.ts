@@ -2,6 +2,7 @@
 
 export type BFBindings = {
   DB: D1Database
+  ASSETS: { fetch: (request: Request | string) => Promise<Response> }
   OPENAI_API_KEY: string
   OPENAI_BASE_URL: string
   GOOGLE_MAPS_API_KEY?: string

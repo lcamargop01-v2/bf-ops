@@ -14,6 +14,16 @@ const app = new Hono<{ Bindings: BFBindings; Variables: BFVariables }>()
 
 app.use('/api/*', cors())
 
+// Serve static assets from the ASSETS binding (Workers for Platform)
+app.get('/static/*', async (c) => {
+  const assets = (c.env as any).ASSETS
+  if (assets) {
+    const resp = await assets.fetch(c.req.raw)
+    if (resp && resp.status !== 404) return resp
+  }
+  return c.notFound()
+})
+
 // Global error handler
 app.onError((err, c) => {
   console.error('Unhandled error:', err)
