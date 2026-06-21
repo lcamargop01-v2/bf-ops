@@ -4330,4 +4330,13 @@ function timeAgo(dateStr) {
   return Math.floor(hours / 24) + 'd ago';
 }
 
+// ==================== GLOBAL EXPORTS (for onclick handlers in innerHTML) ====================
+window.closeModal = closeModal;
+window.posDoTransferRequest = posDoTransferRequest;
+window.posConfirmTransfer = posConfirmTransfer;
+window.posConfirmPurchaseRequest = posConfirmPurchaseRequest;
+window.posDoPurchaseRequest = posDoPurchaseRequest;
+window.openStockCheck = openStockCheck;
+window.showModal = showModal;
+
 })();
