@@ -89,6 +89,14 @@ app.get('/api/inventory/dashboard', async (c) => {
     `SELECT COALESCE(SUM(qty), 0) as total FROM inventory_losses WHERE created_at >= datetime('now', '-30 days')`
   ).first() as any
 
+  // Total incoming (POs not yet fully received)
+  let incomingQuery = `SELECT COALESCE(SUM(pi.qty_ordered - pi.qty_received), 0) as total
+    FROM po_items pi JOIN purchase_orders po ON pi.po_id = po.id
+    WHERE po.status IN ('ordered', 'in_transit', 'delayed', 'partial')
+      AND pi.qty_received < pi.qty_ordered AND pi.product_id IS NOT NULL`
+  if (locationId) incomingQuery += ` AND po.location_id = ${parseInt(locationId)}`
+  const incomingTotal = await db.prepare(incomingQuery).first() as any
+
   return c.json({
     stock: stock.results || [],
     summary: {
@@ -98,6 +106,7 @@ app.get('/api/inventory/dashboard', async (c) => {
       low_stock: lowStock,
       on_hold: onHold,
       reserved: reserved,
+      total_incoming: incomingTotal?.total || 0,
       active_transfers: transfers?.cnt || 0,
       losses_30d: losses?.total || 0
     }
@@ -138,7 +147,28 @@ app.get('/api/inventory/stock', async (c) => {
   query += ' ORDER BY ' + (orderMap[sort || ''] || 'p.name ASC')
 
   const stock = await db.prepare(query).bind(...binds).all()
-  return c.json({ stock: stock.results || [] })
+  const stockList = stock.results || [] as any[]
+
+  // Enrich with incoming PO quantities — how much is on order but not yet received
+  if (stockList.length > 0) {
+    const incomingQuery = `SELECT pi.product_id, po.location_id, SUM(pi.qty_ordered - pi.qty_received) as qty_incoming
+      FROM po_items pi
+      JOIN purchase_orders po ON pi.po_id = po.id
+      WHERE po.status IN ('ordered', 'in_transit', 'delayed', 'partial')
+        AND pi.qty_received < pi.qty_ordered
+        AND pi.product_id IS NOT NULL
+      GROUP BY pi.product_id, po.location_id`
+    const incomingResult = await db.prepare(incomingQuery).all()
+    const incomingMap: Record<string, number> = {}
+    for (const row of (incomingResult.results || []) as any[]) {
+      incomingMap[row.product_id + '_' + row.location_id] = row.qty_incoming || 0
+    }
+    for (const s of stockList as any[]) {
+      s.qty_incoming = incomingMap[s.product_id + '_' + s.location_id] || 0
+    }
+  }
+
+  return c.json({ stock: stockList })
 })
 
 // Get stock for a single product across all locations
@@ -174,11 +204,161 @@ app.get('/api/inventory/stock/:productId', async (c) => {
      WHERE r.product_id = ? AND r.status = 'active' ORDER BY r.created_at DESC`
   ).bind(productId).all()
 
+  // Incoming PO quantities for this product
+  const incoming = await db.prepare(`
+    SELECT po.id as po_id, po.po_number, po.status as po_status, po.expected_date,
+      s.name as supplier_name, l.name as location_name, l.code as location_code,
+      pi.qty_ordered, pi.qty_received, (pi.qty_ordered - pi.qty_received) as qty_remaining,
+      po.location_id
+    FROM po_items pi
+    JOIN purchase_orders po ON pi.po_id = po.id
+    LEFT JOIN suppliers s ON po.supplier_id = s.id
+    JOIN locations l ON po.location_id = l.id
+    WHERE pi.product_id = ?
+      AND po.status IN ('ordered', 'in_transit', 'delayed', 'partial')
+      AND pi.qty_received < pi.qty_ordered
+    ORDER BY po.expected_date ASC NULLS LAST
+  `).bind(productId).all()
+
   return c.json({
     stock: stock.results || [],
     batches: batches.results || [],
     holds: holds.results || [],
-    reservations: reservations.results || []
+    reservations: reservations.results || [],
+    incoming: incoming.results || []
+  })
+})
+
+// ==================== STOCK DRILLDOWN — Who's holding this inventory? ====================
+
+app.get('/api/inventory/stock-drilldown/:productId/:locationId', async (c) => {
+  const productId = parseInt(c.req.param('productId'))
+  const locationId = parseInt(c.req.param('locationId'))
+  const db = c.env.DB
+
+  // 1. POS Held Sales — sales on hold that reserved qty_on_hold
+  const posHolds = await db.prepare(`
+    SELECT ps.id as sale_id, ps.sale_number, ps.status, ps.customer_id, ps.cashier_name,
+      ps.created_at, ps.notes,
+      psi.quantity, psi.unit_price,
+      c.business_name as customer_name
+    FROM pos_sale_items psi
+    JOIN pos_sales ps ON psi.sale_id = ps.id
+    LEFT JOIN customers c ON ps.customer_id = c.id
+    WHERE psi.product_id = ? AND psi.location_id = ?
+      AND ps.status IN ('hold', 'draft')
+    ORDER BY ps.created_at DESC
+  `).bind(productId, locationId).all()
+
+  // 2. POS Delivery Orders — completed sales awaiting shipment (hold until loaded)
+  const deliveryHolds = await db.prepare(`
+    SELECT ps.id as sale_id, ps.sale_number, ps.fulfillment_type, ps.order_id,
+      ps.created_at, ps.cashier_name,
+      psi.quantity, psi.unit_price,
+      c.business_name as customer_name,
+      o.order_number, o.status as order_status, o.scheduled_date
+    FROM pos_sale_items psi
+    JOIN pos_sales ps ON psi.sale_id = ps.id
+    LEFT JOIN customers c ON ps.customer_id = c.id
+    LEFT JOIN orders o ON ps.order_id = o.id
+    WHERE psi.product_id = ? AND psi.location_id = ?
+      AND ps.status = 'completed'
+      AND ps.fulfillment_type IN ('delivery', 'dc_pickup')
+      AND (o.id IS NULL OR o.status IN ('new', 'confirmed', 'scheduled'))
+    ORDER BY ps.created_at DESC
+  `).bind(productId, locationId).all()
+
+  // 3. Manual logistics orders — orders not linked to POS that are pending shipment
+  //    These contribute to holds for orders originating from location
+  const manualOrderHolds = await db.prepare(`
+    SELECT o.id as order_id, o.order_number, o.status as order_status, o.scheduled_date,
+      o.created_at, o.source,
+      oi.quantity,
+      c.business_name as customer_name
+    FROM order_items oi
+    JOIN orders o ON oi.order_id = o.id
+    JOIN customers c ON o.customer_id = c.id
+    LEFT JOIN pos_sales ps ON ps.order_id = o.id
+    WHERE oi.product_id = ?
+      AND o.status IN ('new', 'confirmed', 'scheduled')
+      AND ps.id IS NULL
+    ORDER BY o.scheduled_date ASC, o.created_at DESC
+  `).bind(productId).all()
+
+  // 4. Manual inventory holds from inventory_holds table
+  const manualHolds = await db.prepare(`
+    SELECT h.*, l.name as location_name, u.name as created_by_name
+    FROM inventory_holds h
+    JOIN locations l ON h.location_id = l.id
+    LEFT JOIN users u ON h.created_by = u.id
+    WHERE h.product_id = ? AND h.location_id = ? AND h.released_at IS NULL
+    ORDER BY h.created_at DESC
+  `).bind(productId, locationId).all()
+
+  // 5. Active reservations from inventory_reservations table
+  const reservations = await db.prepare(`
+    SELECT r.*, l.name as location_name, c.business_name as customer_name, o.order_number,
+      u.name as created_by_name
+    FROM inventory_reservations r
+    JOIN locations l ON r.location_id = l.id
+    LEFT JOIN customers c ON r.customer_id = c.id
+    LEFT JOIN orders o ON r.order_id = o.id
+    LEFT JOIN users u ON r.created_by = u.id
+    WHERE r.product_id = ? AND r.location_id = ? AND r.status = 'active'
+    ORDER BY r.created_at DESC
+  `).bind(productId, locationId).all()
+
+  // 6. Recent inventory audit trail for this product+location
+  const recentAudit = await db.prepare(`
+    SELECT action, qty_change, reason, reference_type, reference_id, notes, user_name, created_at
+    FROM inventory_audit
+    WHERE product_id = ? AND location_id = ?
+    ORDER BY created_at DESC LIMIT 10
+  `).bind(productId, locationId).all()
+
+  return c.json({
+    pos_holds: posHolds.results || [],
+    delivery_holds: deliveryHolds.results || [],
+    manual_order_holds: manualOrderHolds.results || [],
+    manual_holds: manualHolds.results || [],
+    reservations: reservations.results || [],
+    recent_audit: recentAudit.results || []
+  })
+})
+
+// ==================== INCOMING — Purchase Orders not yet received ====================
+
+app.get('/api/inventory/incoming/:productId', async (c) => {
+  const productId = parseInt(c.req.param('productId'))
+  const locationId = c.req.query('location_id')
+  const db = c.env.DB
+
+  let q = `SELECT po.id as po_id, po.po_number, po.order_type, po.status as po_status,
+    po.expected_date, po.order_date, po.notes as po_notes,
+    s.name as supplier_name,
+    l.name as location_name, l.code as location_code,
+    pi.id as item_id, pi.description, pi.qty_ordered, pi.qty_received, pi.unit,
+    (pi.qty_ordered - pi.qty_received) as qty_remaining
+    FROM po_items pi
+    JOIN purchase_orders po ON pi.po_id = po.id
+    LEFT JOIN suppliers s ON po.supplier_id = s.id
+    JOIN locations l ON po.location_id = l.id
+    WHERE pi.product_id = ?
+      AND po.status IN ('ordered', 'in_transit', 'delayed', 'partial')
+      AND pi.qty_received < pi.qty_ordered`
+  const binds: any[] = [productId]
+  if (locationId) { q += ' AND po.location_id = ?'; binds.push(parseInt(locationId)) }
+  q += ' ORDER BY po.expected_date ASC NULLS LAST, po.order_date ASC'
+
+  const result = await db.prepare(q).bind(...binds).all()
+
+  // Summarize totals
+  const items = result.results || []
+  const totalIncoming = items.reduce((sum: number, i: any) => sum + (i.qty_remaining || 0), 0)
+
+  return c.json({
+    incoming: items,
+    total_incoming: totalIncoming
   })
 })
 

@@ -255,6 +255,7 @@ function invRenderDashboard() {
     { icon: 'fa-triangle-exclamation', label: 'Low Stock', value: s.low_stock || 0, color: s.low_stock > 0 ? '#DC2626' : '#6B7280' },
     { icon: 'fa-lock', label: 'On Hold', value: (s.on_hold || 0).toLocaleString(), color: '#D97706' },
     { icon: 'fa-bookmark', label: 'Reserved', value: (s.reserved || 0).toLocaleString(), color: '#0891B2' },
+    { icon: 'fa-truck-loading', label: 'Incoming', value: (s.total_incoming || 0).toLocaleString(), color: '#059669' },
     { icon: 'fa-truck-ramp-box', label: 'Active Transfers', value: s.active_transfers || 0, color: '#4F46E5' },
     { icon: 'fa-chart-line-down', label: 'Losses (30d)', value: s.losses_30d || 0, color: s.losses_30d > 0 ? '#DC2626' : '#6B7280' }
   ];
@@ -373,24 +374,27 @@ function invRenderStockList() {
   var _sf = invCanViewFin();
   var _se = invCanEdit('stock');
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
-  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th>' + (_sf ? '<th class="text-right">Sell</th><th class="text-right">Cost</th><th class="text-right">Value</th>' : '') + (_se ? '<th></th>' : '') + '</tr></thead><tbody>';
+  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th><th class="text-right">Incoming</th>' + (_sf ? '<th class="text-right">Sell</th><th class="text-right">Cost</th><th class="text-right">Value</th>' : '') + (_se ? '<th></th>' : '') + '</tr></thead><tbody>';
 
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
     var lowStock = s.reorder_point > 0 && s.qty_on_hand <= s.reorder_point;
+    var pNameEsc = escH(s.product_name).replace(/'/g, "\\'");
+    var incoming = s.qty_incoming || 0;
     html += '<tr class="' + (lowStock ? 'inv-row-warning' : '') + '">' +
       '<td class="inv-clickable" onclick="invShowProductDetail(' + s.product_id + ')"><strong>' + escH(s.product_name) + '</strong></td>' +
       '<td class="inv-muted">' + escH(s.sku || '—') + '</td>' +
       '<td><span class="inv-cat-badge inv-cat-' + (s.category || 'other') + '">' + escH(s.category || 'other') + '</span></td>' +
       '<td><span class="inv-loc-badge">' + escH(s.location_code) + '</span></td>' +
-      '<td class="text-right"><strong>' + (s.qty_on_hand || 0).toLocaleString() + '</strong></td>' +
-      '<td class="text-right">' + (s.qty_on_hold || 0 ? '<span class="inv-hold-badge">' + s.qty_on_hold + '</span>' : '—') + '</td>' +
+      '<td class="text-right"><span class="inv-num-click" onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'all\',\'' + pNameEsc + '\')"><strong>' + (s.qty_on_hand || 0).toLocaleString() + '</strong></span></td>' +
+      '<td class="text-right">' + (s.qty_on_hold || 0 ? '<span class="inv-hold-badge inv-num-click" onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'on_hold\',\'' + pNameEsc + '\')">' + s.qty_on_hold + '</span>' : '—') + '</td>' +
       '<td class="text-right' + (avail <= 0 ? ' inv-danger' : lowStock ? ' inv-warning' : '') + '"><strong>' + avail.toLocaleString() + '</strong></td>' +
+      '<td class="text-right">' + (incoming > 0 ? '<span class="inv-incoming-badge inv-num-click" onclick="event.stopPropagation();invShowIncoming(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\')">' + incoming + '</span>' : '<span class="inv-muted">—</span>') + '</td>' +
       (_sf ? '<td class="text-right">$' + (s.price || 0).toFixed(2) + '</td>' +
       '<td class="text-right inv-muted">$' + (s.cost || 0).toFixed(2) + '</td>' +
       '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' : '') +
       (_se ? '<td><button class="inv-btn inv-btn-xs" onclick="invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i></button>' +
-      '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + escH(s.product_name).replace(/'/g, "\\'") + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i></button></td>' : '') +
+      '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i></button></td>' : '') +
       '</tr>';
   });
   html += '</tbody></table></div>';
@@ -400,20 +404,24 @@ function invRenderStockList() {
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
     var lowStock = s.reorder_point > 0 && s.qty_on_hand <= s.reorder_point;
+    var incoming = s.qty_incoming || 0;
+    var pNameEsc = escH(s.product_name).replace(/'/g, "\\'");
     html += '<div class="inv-stock-card' + (lowStock ? ' inv-card-warning' : '') + '" onclick="invShowProductDetail(' + s.product_id + ')">' +
       '<div class="inv-stock-card-top">' +
       '<div><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + '</span></div>' +
       '<span class="inv-loc-badge">' + escH(s.location_code) + '</span>' +
       '</div>' +
       '<div class="inv-stock-card-nums">' +
-      '<div><span class="inv-muted">On Hand</span><strong>' + (s.qty_on_hand || 0) + '</strong></div>' +
+      '<div onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'all\',\'' + pNameEsc + '\')"><span class="inv-muted">On Hand</span><strong class="inv-num-click">' + (s.qty_on_hand || 0) + '</strong></div>' +
       '<div><span class="inv-muted">Available</span><strong class="' + (avail <= 0 ? 'inv-danger' : '') + '">' + avail + '</strong></div>' +
+      (s.qty_on_hold > 0 ? '<div onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'on_hold\',\'' + pNameEsc + '\')"><span class="inv-muted">Hold</span><strong class="inv-num-click" style="color:#D97706">' + s.qty_on_hold + '</strong></div>' : '') +
+      (incoming > 0 ? '<div onclick="event.stopPropagation();invShowIncoming(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\')"><span class="inv-muted">Incoming</span><strong class="inv-num-click" style="color:#059669">' + incoming + '</strong></div>' : '') +
       (_sf ? '<div><span class="inv-muted">Sell</span><span>$' + (s.price || 0).toFixed(2) + '</span></div>' +
       '<div><span class="inv-muted">Cost</span><span>$' + (s.cost || 0).toFixed(2) + '</span></div>' : '') +
       '</div>' +
       (_se ? '<div class="inv-stock-card-actions">' +
       '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i> Adjust</button>' +
-      '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="event.stopPropagation();invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + escH(s.product_name).replace(/'/g, "\\'") + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i> Request</button>' +
+      '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="event.stopPropagation();invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i> Request</button>' +
       '</div>' : '') +
       '</div>';
   });
@@ -1768,6 +1776,216 @@ async function invDeleteBatchImage(imageId, batchId) {
   } catch(e) { invToast('Delete failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
+// ==================== STOCK DRILLDOWN POPUPS ====================
+
+// Drill into a stock number — shows WHO is holding/reserving/ordering inventory
+async function invStockDrilldown(productId, locationId, field, productName) {
+  try {
+    var resp = await invAPI.get('/api/inventory/stock-drilldown/' + productId + '/' + locationId, { headers: invHeaders() });
+    var d = resp.data;
+    var body = '';
+
+    if (field === 'on_hold' || field === 'all') {
+      // POS Held Sales
+      var posHolds = d.pos_holds || [];
+      var deliveryHolds = d.delivery_holds || [];
+      var manualHolds = d.manual_holds || [];
+      var manualOrderHolds = d.manual_order_holds || [];
+      var totalHoldQty = 0;
+
+      if (posHolds.length > 0) {
+        body += '<h4 class="inv-drill-section"><i class="fas fa-pause-circle" style="color:#D97706"></i> Held Sales</h4>';
+        posHolds.forEach(function(h) {
+          totalHoldQty += h.quantity || 0;
+          body += '<div class="inv-drill-row">' +
+            '<div class="inv-drill-qty"><span class="inv-hold-badge">' + h.quantity + '</span></div>' +
+            '<div class="inv-drill-info">' +
+            '<strong>' + escH(h.sale_number) + '</strong>' +
+            (h.customer_name ? ' — ' + escH(h.customer_name) : ' — Walk-in') +
+            '<br><span class="inv-muted"><i class="fas fa-user"></i> ' + escH(h.cashier_name || 'Unknown') +
+            ' &middot; ' + invFormatDate(h.created_at) + '</span>' +
+            (h.notes ? '<br><span class="inv-muted"><i class="fas fa-sticky-note"></i> ' + escH(h.notes) + '</span>' : '') +
+            '</div></div>';
+        });
+      }
+
+      if (deliveryHolds.length > 0) {
+        body += '<h4 class="inv-drill-section"><i class="fas fa-truck" style="color:#2563EB"></i> Delivery Orders (Awaiting Shipment)</h4>';
+        deliveryHolds.forEach(function(h) {
+          totalHoldQty += h.quantity || 0;
+          var statusLabel = h.order_status === 'new' ? 'Unrouted' : h.order_status === 'confirmed' ? 'Confirmed' : h.order_status === 'scheduled' ? 'Scheduled' : h.order_status || 'Pending';
+          body += '<div class="inv-drill-row">' +
+            '<div class="inv-drill-qty"><span class="inv-hold-badge">' + h.quantity + '</span></div>' +
+            '<div class="inv-drill-info">' +
+            '<strong>' + escH(h.sale_number) + '</strong>' +
+            (h.order_number ? ' → <span class="inv-drill-order">' + escH(h.order_number) + '</span>' : '') +
+            (h.customer_name ? ' — ' + escH(h.customer_name) : '') +
+            '<br><span class="inv-muted"><i class="fas fa-route"></i> ' + escH(h.fulfillment_type) +
+            ' &middot; <span class="inv-drill-status inv-drill-status-' + (h.order_status || 'new') + '">' + statusLabel + '</span>' +
+            (h.scheduled_date ? ' &middot; <i class="fas fa-calendar"></i> ' + h.scheduled_date : '') +
+            '</span></div></div>';
+        });
+      }
+
+      if (manualOrderHolds.length > 0) {
+        body += '<h4 class="inv-drill-section"><i class="fas fa-clipboard-list" style="color:#7C3AED"></i> Manual Orders (Pending)</h4>';
+        manualOrderHolds.forEach(function(h) {
+          totalHoldQty += h.quantity || 0;
+          body += '<div class="inv-drill-row">' +
+            '<div class="inv-drill-qty"><span class="inv-hold-badge">' + h.quantity + '</span></div>' +
+            '<div class="inv-drill-info">' +
+            '<strong>' + escH(h.order_number) + '</strong>' +
+            (h.customer_name ? ' — ' + escH(h.customer_name) : '') +
+            '<br><span class="inv-muted"><span class="inv-drill-status inv-drill-status-' + h.order_status + '">' + escH(h.order_status) + '</span>' +
+            (h.scheduled_date ? ' &middot; <i class="fas fa-calendar"></i> ' + h.scheduled_date : '') +
+            '</span></div></div>';
+        });
+      }
+
+      if (manualHolds.length > 0) {
+        body += '<h4 class="inv-drill-section"><i class="fas fa-hand" style="color:#DC2626"></i> Manual Holds</h4>';
+        manualHolds.forEach(function(h) {
+          totalHoldQty += h.qty || 0;
+          body += '<div class="inv-drill-row">' +
+            '<div class="inv-drill-qty"><span class="inv-hold-badge">' + h.qty + '</span></div>' +
+            '<div class="inv-drill-info">' +
+            '<strong>' + escH(h.reason) + '</strong>' +
+            (h.notes ? ' — ' + escH(h.notes) : '') +
+            '<br><span class="inv-muted">' + escH(h.created_by_name || 'System') + ' &middot; ' + invFormatDate(h.created_at) + '</span>' +
+            '</div></div>';
+        });
+      }
+
+      if (totalHoldQty === 0) {
+        body += '<p class="inv-muted" style="text-align:center;padding:20px">No active holds for this product at this location.</p>';
+      }
+    }
+
+    if (field === 'reserved') {
+      var reservations = d.reservations || [];
+      if (reservations.length > 0) {
+        body += '<h4 class="inv-drill-section"><i class="fas fa-bookmark" style="color:#0891B2"></i> Active Reservations</h4>';
+        reservations.forEach(function(r) {
+          body += '<div class="inv-drill-row">' +
+            '<div class="inv-drill-qty"><span class="inv-res-badge">' + r.qty + '</span></div>' +
+            '<div class="inv-drill-info">' +
+            (r.customer_name ? '<strong>' + escH(r.customer_name) + '</strong>' : '<strong>No customer</strong>') +
+            (r.order_number ? ' — Order ' + escH(r.order_number) : '') +
+            '<br><span class="inv-muted">' + escH(r.created_by_name || 'System') + ' &middot; ' + invFormatDate(r.created_at) +
+            (r.notes ? ' &middot; ' + escH(r.notes) : '') + '</span>' +
+            '</div></div>';
+        });
+      } else {
+        body += '<p class="inv-muted" style="text-align:center;padding:20px">No active reservations for this product at this location.</p>';
+      }
+    }
+
+    // Recent audit trail
+    if (d.recent_audit && d.recent_audit.length > 0) {
+      body += '<h4 class="inv-drill-section" style="margin-top:16px"><i class="fas fa-history" style="color:#6B7280"></i> Recent Activity</h4>';
+      body += '<div class="inv-drill-audit">';
+      d.recent_audit.forEach(function(a) {
+        var icon = a.action === 'sale' ? 'fa-cash-register' : a.action === 'hold' ? 'fa-pause' : a.action === 'hold_release' ? 'fa-play' :
+          a.action === 'shipment' ? 'fa-truck' : a.action === 'count' ? 'fa-clipboard-check' : a.action === 'receive' ? 'fa-dolly' : 'fa-circle-info';
+        var changeStr = a.qty_change > 0 ? '+' + a.qty_change : a.qty_change < 0 ? '' + a.qty_change : '';
+        body += '<div class="inv-drill-audit-row">' +
+          '<i class="fas ' + icon + ' inv-muted"></i> ' +
+          '<span class="inv-drill-audit-change' + (a.qty_change > 0 ? ' inv-drill-pos' : a.qty_change < 0 ? ' inv-drill-neg' : '') + '">' + changeStr + '</span> ' +
+          '<span>' + escH(a.reason || a.action) + '</span>' +
+          '<span class="inv-muted" style="margin-left:auto;font-size:11px">' + escH(a.user_name || '') + ' &middot; ' + invFormatDate(a.created_at) + '</span>' +
+          '</div>';
+      });
+      body += '</div>';
+    }
+
+    var titleIcon = field === 'on_hold' ? 'fa-lock' : field === 'reserved' ? 'fa-bookmark' : 'fa-boxes-stacked';
+    var titleColor = field === 'on_hold' ? '#D97706' : field === 'reserved' ? '#0891B2' : '#059669';
+    var titleText = field === 'on_hold' ? 'On Hold' : field === 'reserved' ? 'Reserved' : 'Stock Detail';
+    invShowModal('<i class="fas ' + titleIcon + '" style="color:' + titleColor + '"></i> ' + escH(productName) + ' — ' + titleText, body, '');
+  } catch(e) { invToast('Failed to load stock detail: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// Show incoming POs for a product
+async function invShowIncoming(productId, locationId, productName) {
+  try {
+    var url = '/api/inventory/incoming/' + productId;
+    if (locationId) url += '?location_id=' + locationId;
+    var resp = await invAPI.get(url, { headers: invHeaders() });
+    var incoming = resp.data.incoming || [];
+    var totalIncoming = resp.data.total_incoming || 0;
+    var body = '';
+
+    if (incoming.length === 0) {
+      body += '<div style="text-align:center;padding:30px"><i class="fas fa-box-open fa-2x inv-muted" style="margin-bottom:12px;display:block"></i>' +
+        '<p class="inv-muted">No purchase orders pending for this product.</p></div>';
+    } else {
+      body += '<div class="inv-drill-summary">' +
+        '<div class="inv-drill-summary-num" style="color:#059669"><i class="fas fa-truck-ramp-box"></i> ' + totalIncoming + ' total incoming</div>' +
+        '</div>';
+
+      // Group by PO
+      var byPO = {};
+      incoming.forEach(function(item) {
+        if (!byPO[item.po_id]) byPO[item.po_id] = { po: item, items: [] };
+        byPO[item.po_id].items.push(item);
+      });
+
+      Object.values(byPO).forEach(function(group) {
+        var po = group.po;
+        var poQty = group.items.reduce(function(s, i) { return s + (i.qty_remaining || 0); }, 0);
+        var statusClass = po.po_status === 'in_transit' ? 'transit' : po.po_status === 'delayed' ? 'delayed' : po.po_status === 'partial' ? 'partial' : 'ordered';
+
+        body += '<div class="inv-drill-po-card">' +
+          '<div class="inv-drill-po-header">' +
+          '<div>' +
+          '<strong>' + escH(po.po_number) + '</strong>' +
+          (po.supplier_name ? ' — <span class="inv-muted">' + escH(po.supplier_name) + '</span>' : '') +
+          '</div>' +
+          '<span class="inv-drill-po-status inv-drill-po-' + statusClass + '">' + escH(po.po_status) + '</span>' +
+          '</div>';
+
+        // ETA row
+        if (po.expected_date) {
+          var today = new Date(); today.setHours(0,0,0,0);
+          var eta = new Date(po.expected_date + 'T00:00:00'); eta.setHours(0,0,0,0);
+          var diff = Math.ceil((eta - today) / 86400000);
+          var etaLabel = diff < 0 ? Math.abs(diff) + ' days overdue' : diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff + ' days away';
+          var etaColor = diff < 0 ? '#DC2626' : diff <= 2 ? '#D97706' : '#059669';
+          body += '<div class="inv-drill-po-eta">' +
+            '<i class="fas fa-calendar-day" style="color:' + etaColor + '"></i> ' +
+            '<strong style="color:' + etaColor + '">ETA: ' + po.expected_date + '</strong>' +
+            ' <span class="inv-muted">(' + etaLabel + ')</span>' +
+            '</div>';
+        } else {
+          body += '<div class="inv-drill-po-eta"><i class="fas fa-question-circle inv-muted"></i> <span class="inv-muted">No ETA set</span></div>';
+        }
+
+        body += '<div class="inv-drill-po-qty">' +
+          '<span class="inv-incoming-badge">' + poQty + ' incoming</span>' +
+          '<span class="inv-muted" style="margin-left:8px">' + escH(po.location_code) + '</span>' +
+          '</div>';
+
+        if (po.po_notes) {
+          body += '<div class="inv-muted" style="font-size:12px;margin-top:4px"><i class="fas fa-sticky-note"></i> ' + escH(po.po_notes) + '</div>';
+        }
+
+        body += '</div>';
+      });
+    }
+
+    invShowModal('<i class="fas fa-truck-ramp-box" style="color:#059669"></i> ' + escH(productName) + ' — Incoming', body, '');
+  } catch(e) { invToast('Failed to load incoming data: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// Format date helper
+function invFormatDate(dateStr) {
+  if (!dateStr) return '';
+  try {
+    var d = new Date(dateStr);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch(e) { return dateStr; }
+}
+
 // Product detail modal (no images — images are on batches)
 async function invShowProductDetail(productId) {
   try {
@@ -1800,15 +2018,21 @@ async function invShowProductDetail(productId) {
     }
 
     body += '<h4 style="margin-top:16px">Stock by Location</h4>';
+    var incomingData = resp.data.incoming || [];
     if (stock.length === 0) {
       body += '<p class="inv-muted">No stock records for this product.</p>';
     } else {
-      body += '<table class="inv-table inv-table-compact"><thead><tr><th>Location</th><th>On Hand</th><th>Hold</th><th>Reserved</th><th>Available</th></tr></thead><tbody>';
+      body += '<table class="inv-table inv-table-compact"><thead><tr><th>Location</th><th>On Hand</th><th>Hold</th><th>Reserved</th><th>Available</th><th>Incoming</th></tr></thead><tbody>';
       stock.forEach(function(s) {
         var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
+        var locIncoming = incomingData.filter(function(i) { return i.location_id === s.location_id; }).reduce(function(sum, i) { return sum + (i.qty_remaining || i.qty_ordered - i.qty_received || 0); }, 0);
         body += '<tr><td><span class="inv-loc-badge">' + escH(s.location_code) + '</span> ' + escH(s.location_name) + '</td>' +
-          '<td><strong>' + s.qty_on_hand + '</strong></td><td>' + s.qty_on_hold + '</td><td>' + s.qty_reserved + '</td>' +
-          '<td class="' + (avail <= 0 ? 'inv-danger' : '') + '"><strong>' + avail + '</strong></td></tr>';
+          '<td><span class="inv-num-click" onclick="invStockDrilldown(' + productId + ',' + s.location_id + ',\'all\',\'' + escH(pName).replace(/'/g, "\\'") + '\')"><strong>' + s.qty_on_hand + '</strong></span></td>' +
+          '<td>' + (s.qty_on_hold ? '<span class="inv-hold-badge inv-num-click" onclick="invStockDrilldown(' + productId + ',' + s.location_id + ',\'on_hold\',\'' + escH(pName).replace(/'/g, "\\'") + '\')">' + s.qty_on_hold + '</span>' : '0') + '</td>' +
+          '<td>' + (s.qty_reserved ? '<span class="inv-res-badge inv-num-click" onclick="invStockDrilldown(' + productId + ',' + s.location_id + ',\'reserved\',\'' + escH(pName).replace(/'/g, "\\'") + '\')">' + s.qty_reserved + '</span>' : '0') + '</td>' +
+          '<td class="' + (avail <= 0 ? 'inv-danger' : '') + '"><strong>' + avail + '</strong></td>' +
+          '<td>' + (locIncoming > 0 ? '<span class="inv-incoming-badge inv-num-click" onclick="invShowIncoming(' + productId + ',' + s.location_id + ',\'' + escH(pName).replace(/'/g, "\\'") + '\')">' + locIncoming + '</span>' : '<span class="inv-muted">—</span>') + '</td>' +
+          '</tr>';
       });
       body += '</tbody></table>';
     }
@@ -1860,11 +2084,11 @@ async function invInitStock(locationId) {
 // ==================== EXPORT ====================
 function invExportStock() {
   var _sf = invCanViewFin();
-  var csv = 'Product,SKU,Category,Location,On Hand,On Hold,Reserved,Available' + (_sf ? ',Sell Price,Cost,Value' : '') + '\n';
+  var csv = 'Product,SKU,Category,Location,On Hand,On Hold,Reserved,Available,Incoming' + (_sf ? ',Sell Price,Cost,Value' : '') + '\n';
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
     csv += '"' + (s.product_name || '') + '","' + (s.sku || '') + '","' + (s.category || '') + '","' + (s.location_name || '') + '",' +
-      (s.qty_on_hand || 0) + ',' + (s.qty_on_hold || 0) + ',' + (s.qty_reserved || 0) + ',' + avail +
+      (s.qty_on_hand || 0) + ',' + (s.qty_on_hold || 0) + ',' + (s.qty_reserved || 0) + ',' + avail + ',' + (s.qty_incoming || 0) +
       (_sf ? ',' + (s.price || 0) + ',' + (s.cost || 0) + ',' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toFixed(2) : '') + '\n';
   });
   var blob = new Blob([csv], { type: 'text/csv' });

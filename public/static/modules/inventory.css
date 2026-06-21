@@ -620,6 +620,150 @@
   font-size: 13px;
 }
 
+/* ==================== CLICKABLE STOCK NUMBERS ==================== */
+.inv-num-click {
+  cursor: pointer;
+  position: relative;
+  transition: all 0.15s;
+  border-bottom: 1px dashed transparent;
+}
+.inv-num-click:hover {
+  border-bottom-color: currentColor;
+  opacity: 0.8;
+}
+.inv-table td .inv-num-click:hover { background: #F1F5F9; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+.inv-incoming-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #DCFCE7;
+  color: #166534;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ==================== DRILLDOWN POPUP ==================== */
+.inv-drill-section {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  margin: 16px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #E2E8F0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.inv-drill-section:first-child { margin-top: 0; }
+.inv-drill-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  background: #F8FAFC;
+  transition: background 0.15s;
+}
+.inv-drill-row:hover { background: #F1F5F9; }
+.inv-drill-qty { flex-shrink: 0; min-width: 50px; text-align: center; padding-top: 2px; }
+.inv-drill-info { flex: 1; font-size: 13px; line-height: 1.5; }
+.inv-drill-order {
+  display: inline-block;
+  padding: 1px 6px;
+  background: #EFF6FF;
+  color: #1E40AF;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.inv-drill-status {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.inv-drill-status-new { background: #DBEAFE; color: #1E40AF; }
+.inv-drill-status-confirmed { background: #D1FAE5; color: #065F46; }
+.inv-drill-status-scheduled { background: #E0E7FF; color: #3730A3; }
+.inv-drill-status-loaded { background: #FEF3C7; color: #92400E; }
+
+/* Audit trail mini-log */
+.inv-drill-audit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.inv-drill-audit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+.inv-drill-audit-row:hover { background: #F8FAFC; }
+.inv-drill-audit-change { font-weight: 700; min-width: 32px; text-align: right; }
+.inv-drill-pos { color: #059669; }
+.inv-drill-neg { color: #DC2626; }
+
+/* Drilldown summary */
+.inv-drill-summary {
+  text-align: center;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: #F0FDF4;
+  border-radius: 8px;
+}
+.inv-drill-summary-num {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* PO card in incoming popup */
+.inv-drill-po-card {
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+.inv-drill-po-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.inv-drill-po-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.inv-drill-po-ordered { background: #DBEAFE; color: #1E40AF; }
+.inv-drill-po-transit { background: #D1FAE5; color: #065F46; }
+.inv-drill-po-delayed { background: #FEE2E2; color: #991B1B; }
+.inv-drill-po-partial { background: #FEF3C7; color: #92400E; }
+.inv-drill-po-eta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.inv-drill-po-qty {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+}
+
 /* ==================== EMPTY STATE ==================== */
 .inv-empty {
   text-align: center;
