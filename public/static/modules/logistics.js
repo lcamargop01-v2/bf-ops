@@ -16612,7 +16612,7 @@ async function renderStandingOrders() {
     html += '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:flex-start;gap:12px">';
     html += '<i class="fas fa-info-circle" style="color:#2563EB;margin-top:2px"></i>';
     html += '<div style="font-size:13px;color:#1E40AF;line-height:1.5">';
-    html += '<strong>How it works:</strong> Generate a confirmation run for a delivery date → system pulls standing orders + broadcast customers by zone → review stock → send texts → customers reply C to confirm or text changes → orders auto-created.';
+    html += '<strong>How it works:</strong> Generate a run for a delivery date → system pulls standing orders + broadcast customers by zone → click AI Messages to draft personalized texts → review stock → preview & edit messages → send texts → customers reply C to confirm or text changes → send reminders if needed → orders auto-created.';
     html += '</div></div>';
 
     if (!runs.length) {
@@ -16754,11 +16754,13 @@ async function renderStandingOrderRunDetail(runId) {
     // Action buttons
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
     if (run.status === 'draft') {
+      html += '<button onclick="soGenerateAIMessages(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px;color:#8B5CF6;border-color:#8B5CF6"><i class="fas fa-wand-magic-sparkles"></i> AI Messages</button>';
       html += '<button onclick="soStockCheck(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px"><i class="fas fa-boxes-stacked"></i> Stock Check</button>';
       html += '<button onclick="soHoldInventory(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px"><i class="fas fa-lock"></i> Hold Inventory</button>';
       html += '<button onclick="soSendTexts(' + run.id + ')" class="btn btn-primary" style="padding:8px 14px;font-size:13px"><i class="fas fa-paper-plane"></i> Send Texts</button>';
     }
     if (run.status === 'sent') {
+      html += '<button onclick="soSendReminders(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px;color:#F59E0B;border-color:#F59E0B"><i class="fas fa-bell"></i> Send Reminders</button>';
       html += '<button onclick="soStockCheck(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px"><i class="fas fa-boxes-stacked"></i> Stock Check</button>';
       html += '<button onclick="soExpireRun(' + run.id + ')" class="btn btn-outline" style="padding:8px 14px;font-size:13px;color:#DC2626;border-color:#DC2626"><i class="fas fa-clock"></i> Expire Pending</button>';
     }
@@ -16838,6 +16840,16 @@ function soRenderEntries(entries, filter) {
         });
         html += '</div>';
       } catch {}
+    }
+    // Draft message preview
+    if (e.draft_message) {
+      html += '<div style="margin-top:6px;padding:8px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;font-size:12px;color:#92400E;position:relative">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
+      html += '<div><i class="fas fa-wand-magic-sparkles" style="color:#D97706"></i> <span id="soDraftText_' + e.id + '">' + soEsc(e.draft_message) + '</span></div>';
+      html += '<div style="display:flex;gap:4px;flex-shrink:0">';
+      html += '<button onclick="event.stopPropagation();soEditDraft(' + e.id + ')" style="background:none;border:none;color:#D97706;cursor:pointer;font-size:11px;padding:2px" title="Edit"><i class="fas fa-pen"></i></button>';
+      html += '<button onclick="event.stopPropagation();soRegenerateMessage(' + e.id + ')" style="background:none;border:none;color:#8B5CF6;cursor:pointer;font-size:11px;padding:2px" title="Regenerate"><i class="fas fa-rotate"></i></button>';
+      html += '</div></div></div>';
     }
     // Modified message
     if (e.status === 'modified' && e.modified_items) {
@@ -16959,6 +16971,112 @@ async function soExpireRun(runId) {
   } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
 }
 window.soExpireRun = soExpireRun;
+
+// ==================== AI MESSAGE GENERATION ====================
+
+async function soGenerateAIMessages(runId) {
+  // Show promotion input modal
+  var html = '<div id="soAIModal" style="position:fixed;inset:0;z-index:1100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4)" onclick="if(event.target===this)this.remove()">';
+  html += '<div style="background:#fff;border-radius:14px;max-width:480px;width:95%;box-shadow:0 20px 60px rgba(0,0,0,.2)">';
+  html += '<div style="padding:16px 24px;border-bottom:1px solid #E5E7EB"><h3 style="margin:0;font-size:17px;font-weight:700"><i class="fas fa-wand-magic-sparkles" style="color:#8B5CF6"></i> Generate AI Messages</h3></div>';
+  html += '<div style="padding:20px 24px">';
+  html += '<p style="font-size:13px;color:#6B7280;margin:0 0 16px">AI will draft personalized texts for each customer based on their order history, standing order items, and any promotion you want to include.</p>';
+  html += '<div style="margin-bottom:16px"><label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px">Current Promotion <span style="font-weight:400;color:#9CA3AF">(optional)</span></label>';
+  html += '<input type="text" id="soPromoInput" placeholder="e.g. 10% off all shavings this week, Free delivery on orders over $200..." style="width:100%;padding:10px 12px;border:1px solid #D1D5DB;border-radius:8px;font-size:13px;box-sizing:border-box"></div>';
+  html += '<p style="font-size:12px;color:#9CA3AF;margin:0 0 16px"><i class="fas fa-info-circle"></i> Messages will appear as drafts you can review and edit before sending.</p>';
+  html += '<button onclick="soDoGenerateAI(' + runId + ')" class="btn btn-primary" style="width:100%;padding:12px;font-size:14px;font-weight:600;background:#8B5CF6;border-color:#8B5CF6"><i class="fas fa-wand-magic-sparkles"></i> Generate for All Entries</button>';
+  html += '</div></div></div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+window.soGenerateAIMessages = soGenerateAIMessages;
+
+async function soDoGenerateAI(runId) {
+  var promo = (document.getElementById('soPromoInput') || {}).value || '';
+  var modal = document.getElementById('soAIModal');
+  if (modal) {
+    var btn = modal.querySelector('button.btn-primary');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating... (this may take a moment)'; }
+  }
+  try {
+    var resp = await API.post('/standing-orders/runs/' + runId + '/generate-messages', { promotion: promo });
+    if (modal) modal.remove();
+    shellToast('AI generated ' + resp.data.generated + ' / ' + resp.data.total + ' messages' + (resp.data.errors?.length ? ' (' + resp.data.errors.length + ' errors)' : ''));
+    if (resp.data.errors?.length) console.warn('AI errors:', resp.data.errors);
+    renderStandingOrderRunDetail(runId);
+  } catch (e) {
+    if (modal) modal.remove();
+    shellToast(e.response?.data?.error || e.message, 'error');
+  }
+}
+window.soDoGenerateAI = soDoGenerateAI;
+
+async function soRegenerateMessage(entryId) {
+  var promo = prompt('Any promotion to mention? (leave blank for none)');
+  if (promo === null) return; // cancelled
+  try {
+    var resp = await API.post('/standing-orders/entries/' + entryId + '/generate-message', { promotion: promo || '' });
+    shellToast('Message regenerated');
+    // Update in-page
+    var el = document.getElementById('soDraftText_' + entryId);
+    if (el) el.textContent = resp.data.message;
+    // Also update the cached entry
+    var entry = _soEntries.find(function(e) { return e.id === entryId; });
+    if (entry) entry.draft_message = resp.data.message;
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soRegenerateMessage = soRegenerateMessage;
+
+function soEditDraft(entryId) {
+  var entry = _soEntries.find(function(e) { return e.id === entryId; });
+  var current = entry?.draft_message || '';
+  var html = '<div id="soEditDraftModal" style="position:fixed;inset:0;z-index:1100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4)" onclick="if(event.target===this)this.remove()">';
+  html += '<div style="background:#fff;border-radius:14px;max-width:480px;width:95%;box-shadow:0 20px 60px rgba(0,0,0,.2)">';
+  html += '<div style="padding:16px 24px;border-bottom:1px solid #E5E7EB"><h3 style="margin:0;font-size:16px;font-weight:700"><i class="fas fa-pen" style="color:#D97706"></i> Edit Message — ' + soEsc(entry?.customer_name || '') + '</h3></div>';
+  html += '<div style="padding:20px 24px">';
+  html += '<textarea id="soEditDraftText" style="width:100%;height:120px;padding:10px 12px;border:1px solid #D1D5DB;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box">' + soEsc(current) + '</textarea>';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><span style="font-size:11px;color:#9CA3AF" id="soCharCount">' + current.length + ' chars</span>';
+  html += '<div style="display:flex;gap:8px">';
+  html += '<button onclick="document.getElementById(\'soEditDraftModal\').remove()" class="btn btn-outline" style="padding:8px 16px;font-size:13px">Cancel</button>';
+  html += '<button onclick="soSaveDraft(' + entryId + ')" class="btn btn-primary" style="padding:8px 16px;font-size:13px"><i class="fas fa-save"></i> Save</button>';
+  html += '</div></div></div></div></div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+  // Char counter
+  var textarea = document.getElementById('soEditDraftText');
+  if (textarea) textarea.addEventListener('input', function() {
+    var counter = document.getElementById('soCharCount');
+    if (counter) counter.textContent = this.value.length + ' chars' + (this.value.length > 160 ? ' (multi-part SMS)' : '');
+  });
+}
+window.soEditDraft = soEditDraft;
+
+async function soSaveDraft(entryId) {
+  var text = (document.getElementById('soEditDraftText') || {}).value || '';
+  if (!text.trim()) { shellToast('Message cannot be empty', 'error'); return; }
+  try {
+    await API.put('/standing-orders/entries/' + entryId + '/draft-message', { message: text.trim() });
+    shellToast('Message saved');
+    document.getElementById('soEditDraftModal')?.remove();
+    // Update in-page
+    var el = document.getElementById('soDraftText_' + entryId);
+    if (el) el.textContent = text.trim();
+    var entry = _soEntries.find(function(e) { return e.id === entryId; });
+    if (entry) entry.draft_message = text.trim();
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soSaveDraft = soSaveDraft;
+
+// ==================== REMINDERS ====================
+
+async function soSendReminders(runId) {
+  if (!confirm('Send AI-personalized reminder texts to all customers who haven\'t responded yet?')) return;
+  try {
+    var resp = await API.post('/standing-orders/runs/' + runId + '/send-reminders');
+    shellToast('Reminders sent: ' + resp.data.sent + ' / ' + resp.data.total);
+    if (resp.data.errors?.length) console.warn('Reminder errors:', resp.data.errors);
+    renderStandingOrderRunDetail(runId);
+  } catch (e) { shellToast(e.response?.data?.error || e.message, 'error'); }
+}
+window.soSendReminders = soSendReminders;
 
 // ==================== ENTRY ACTIONS ====================
 

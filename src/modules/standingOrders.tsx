@@ -242,14 +242,16 @@ app.post('/api/standing-orders/runs/:id/send', async (c) => {
     const phone = entry.customer_phone || entry.sms_phone || entry.phone
     if (!phone) { failCount++; errors.push(`No phone for ${entry.customer_name}`); continue }
 
-    // Build the message
-    let messageBody = ''
-    if (entry.entry_type === 'standing' && entry.proposed_items) {
-      const items = JSON.parse(entry.proposed_items)
-      const itemList = items.map((i: any) => `${i.quantity}x ${i.product_name}`).join(', ')
-      messageBody = `Hi ${entry.customer_name}! Your standing order for ${run.run_date}: ${itemList}. Reply C to confirm, N to skip, or text changes. Cutoff: ${run.cutoff_time ? new Date(run.cutoff_time).toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) : 'EOD'}.`
-    } else {
-      messageBody = `Hi ${entry.customer_name}! We're delivering in your area on ${run.run_date}. Need anything? Text your order or N to skip.`
+    // Use AI-drafted message if available, otherwise build template
+    let messageBody = entry.draft_message || ''
+    if (!messageBody) {
+      if (entry.entry_type === 'standing' && entry.proposed_items) {
+        const items = JSON.parse(entry.proposed_items)
+        const itemList = items.map((i: any) => `${i.quantity}x ${i.product_name}`).join(', ')
+        messageBody = `Hi ${entry.customer_name}! Your standing order for ${run.run_date}: ${itemList}. Reply C to confirm, N to skip, or text changes. Cutoff: ${run.cutoff_time ? new Date(run.cutoff_time).toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) : 'EOD'}.`
+      } else {
+        messageBody = `Hi ${entry.customer_name}! We're delivering in your area on ${run.run_date}. Need anything? Text your order or N to skip.`
+      }
     }
 
     // Log the outbound SMS
@@ -736,6 +738,337 @@ app.post('/api/standing-orders/runs/:id/expire', async (c) => {
   await recountRun(db, parseInt(runId))
 
   return c.json({ expired: expired.results?.length || 0 })
+})
+
+// ==================== AI MESSAGE GENERATION ====================
+
+// Generate AI-personalized messages for all entries in a run
+app.post('/api/standing-orders/runs/:id/generate-messages', async (c) => {
+  const db = c.env.DB
+  const runId = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const promoText = body.promotion || '' // optional promotion text to include
+
+  const run = await db.prepare('SELECT * FROM confirmation_runs WHERE id = ?').bind(runId).first() as any
+  if (!run) return c.json({ error: 'Run not found' }, 404)
+
+  const apiKey = c.env.OPENAI_API_KEY
+  const baseUrl = c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+  const model = 'gpt-4o-mini'
+  if (!apiKey) return c.json({ error: 'OpenAI API key not configured' }, 500)
+
+  // Get entries that need messages
+  const entries = await db.prepare(`
+    SELECT ce.* FROM confirmation_entries ce WHERE ce.run_id = ? AND ce.status IN ('pending', 'draft')
+  `).bind(runId).all()
+
+  if (!entries.results?.length) return c.json({ generated: 0, message: 'No pending entries' })
+
+  let generated = 0
+  const errors: string[] = []
+
+  // Process in batches — gather all context first, then make AI calls
+  for (const entry of entries.results as any[]) {
+    try {
+      // Get customer order history (last 5 orders)
+      let orderHistory: any[] = []
+      try {
+        const hist = await db.prepare(`
+          SELECT o.order_number, o.scheduled_date, o.status,
+            GROUP_CONCAT(oi.quantity || 'x ' || p.name, ', ') as items
+          FROM orders o
+          JOIN order_items oi ON oi.order_id = o.id
+          JOIN products p ON oi.product_id = p.id
+          WHERE o.customer_id = ? AND o.status NOT IN ('cancelled')
+          GROUP BY o.id
+          ORDER BY o.scheduled_date DESC LIMIT 5
+        `).bind(entry.customer_id).all()
+        orderHistory = hist.results as any[] || []
+      } catch {}
+
+      // Get customer details
+      let customer: any = {}
+      try {
+        customer = await db.prepare('SELECT business_name, contact_name, customer_type, notes FROM customers WHERE id = ?')
+          .bind(entry.customer_id).first() || {}
+      } catch {}
+
+      // Build the context for AI
+      const isStanding = entry.entry_type === 'standing'
+      const proposedItems = entry.proposed_items ? JSON.parse(entry.proposed_items) : []
+
+      let context = `Customer: ${entry.customer_name}\n`
+      context += `Type: ${customer.customer_type || 'unknown'}\n`
+      context += `Delivery date: ${run.run_date} (${run.delivery_day})\n`
+      if (run.cutoff_time) context += `Confirmation cutoff: ${run.cutoff_time}\n`
+
+      if (isStanding && proposedItems.length > 0) {
+        context += `Standing order items: ${proposedItems.map((i: any) => `${i.quantity}x ${i.product_name}`).join(', ')}\n`
+      }
+
+      if (orderHistory.length > 0) {
+        context += `Recent orders:\n`
+        orderHistory.forEach((oh: any) => {
+          context += `  - ${oh.scheduled_date}: ${oh.items}\n`
+        })
+      } else {
+        context += `No recent order history found.\n`
+      }
+
+      if (promoText) context += `Current promotion: ${promoText}\n`
+
+      // Choose the right prompt based on entry type
+      let systemPrompt = ''
+      if (isStanding) {
+        systemPrompt = `You are a friendly SMS message writer for British Feed, an animal feed delivery company in South Florida.
+
+Write a SHORT, warm confirmation text for a customer with a standing order. Rules:
+- Keep it under 160 characters if possible (SMS length), max 300
+- Start with "Hi [first name or business name]!"
+- Mention what's on their standing order
+- Ask them to reply C to confirm or text any changes
+- If there's a promotion, naturally mention it (don't force it)
+- If their cutoff time is given, mention it casually
+- Sound friendly and human, not robotic
+- End with reply instructions: "Reply C to confirm, or text changes"
+- Do NOT include any emojis
+- Return ONLY the message text, nothing else`
+      } else {
+        // Broadcast — this is the money maker
+        systemPrompt = `You are a friendly SMS message writer for British Feed, an animal feed delivery company in South Florida.
+
+Write a SHORT, personalized outreach text to a customer to see if they'd like a delivery. Rules:
+- Keep it under 200 characters if possible, max 300
+- Start with "Hi [business name]!"
+- If they have order history, reference what they usually buy (e.g. "Time for more Premium Feed?")
+- If they haven't ordered recently, be warm and re-engaging
+- If there's a promotion, lead with it naturally
+- Mention you're delivering in their area on [date]
+- Make it feel personal, not mass-sent
+- Create gentle urgency (limited truck space, fresh stock just arrived, etc.)
+- Sound friendly, conversational, like a text from someone they know
+- End with something like "Text your order or let me know!" 
+- Do NOT include any emojis
+- Return ONLY the message text, nothing else`
+      }
+
+      // Call OpenAI
+      const resp = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model, max_tokens: 200, temperature: 0.8,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: context }
+          ]
+        })
+      })
+
+      if (!resp.ok) {
+        errors.push(`AI failed for ${entry.customer_name}: ${resp.status}`)
+        continue
+      }
+
+      const data = await resp.json() as any
+      const aiMessage = data.choices?.[0]?.message?.content?.trim()
+      if (!aiMessage) {
+        errors.push(`Empty AI response for ${entry.customer_name}`)
+        continue
+      }
+
+      // Store the AI-drafted message
+      await db.prepare(`
+        UPDATE confirmation_entries SET draft_message = ?, updated_at = datetime('now') WHERE id = ?
+      `).bind(aiMessage, entry.id).run()
+      generated++
+
+    } catch (e: any) {
+      errors.push(`Error for ${entry.customer_name}: ${e.message}`)
+    }
+  }
+
+  return c.json({ generated, total: entries.results.length, errors })
+})
+
+// Generate AI message for a single entry
+app.post('/api/standing-orders/entries/:id/generate-message', async (c) => {
+  const db = c.env.DB
+  const entryId = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+
+  const entry = await db.prepare('SELECT * FROM confirmation_entries WHERE id = ?').bind(entryId).first() as any
+  if (!entry) return c.json({ error: 'Entry not found' }, 404)
+
+  const run = await db.prepare('SELECT * FROM confirmation_runs WHERE id = ?').bind(entry.run_id).first() as any
+
+  const apiKey = c.env.OPENAI_API_KEY
+  const baseUrl = c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+  if (!apiKey) return c.json({ error: 'OpenAI API key not configured' }, 500)
+
+  // Get order history
+  let orderHistory: any[] = []
+  try {
+    const hist = await db.prepare(`
+      SELECT o.scheduled_date, GROUP_CONCAT(oi.quantity || 'x ' || p.name, ', ') as items
+      FROM orders o JOIN order_items oi ON oi.order_id = o.id JOIN products p ON oi.product_id = p.id
+      WHERE o.customer_id = ? AND o.status NOT IN ('cancelled')
+      GROUP BY o.id ORDER BY o.scheduled_date DESC LIMIT 5
+    `).bind(entry.customer_id).all()
+    orderHistory = hist.results as any[] || []
+  } catch {}
+
+  const proposedItems = entry.proposed_items ? JSON.parse(entry.proposed_items) : []
+  const isStanding = entry.entry_type === 'standing'
+
+  let context = `Customer: ${entry.customer_name}\nDelivery: ${run?.run_date} (${run?.delivery_day})\n`
+  if (run?.cutoff_time) context += `Cutoff: ${run.cutoff_time}\n`
+  if (isStanding && proposedItems.length) context += `Standing order: ${proposedItems.map((i: any) => `${i.quantity}x ${i.product_name}`).join(', ')}\n`
+  if (orderHistory.length) context += `Recent: ${orderHistory.map((h: any) => `${h.scheduled_date}: ${h.items}`).join('; ')}\n`
+  if (body.promotion) context += `Promo: ${body.promotion}\n`
+  if (body.extra_context) context += `Note: ${body.extra_context}\n`
+
+  const systemPrompt = isStanding
+    ? `You write short, friendly SMS texts for British Feed (animal feed delivery, South Florida). Write a standing order confirmation text. Under 250 chars. Say hi, list the items, ask to reply C to confirm or text changes. Mention cutoff if given. Sound human and warm, not corporate. No emojis. Return ONLY the message.`
+    : `You write short, friendly SMS texts for British Feed (animal feed delivery, South Florida). Write a personalized outreach text. Under 250 chars. Reference their past orders if available. Mention you're delivering nearby on the date. Create gentle urgency. Sound personal and warm. No emojis. Return ONLY the message.`
+
+  try {
+    const resp = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini', max_tokens: 200, temperature: 0.8,
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: context }]
+      })
+    })
+    if (!resp.ok) return c.json({ error: `AI returned ${resp.status}` }, 500)
+    const data = await resp.json() as any
+    const aiMessage = data.choices?.[0]?.message?.content?.trim()
+    if (!aiMessage) return c.json({ error: 'Empty AI response' }, 500)
+
+    await db.prepare("UPDATE confirmation_entries SET draft_message = ?, updated_at = datetime('now') WHERE id = ?")
+      .bind(aiMessage, entryId).run()
+
+    return c.json({ message: aiMessage })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
+// Update draft message (staff edit)
+app.put('/api/standing-orders/entries/:id/draft-message', async (c) => {
+  const db = c.env.DB
+  const entryId = c.req.param('id')
+  const body = await c.req.json()
+  if (!body.message) return c.json({ error: 'message is required' }, 400)
+
+  await db.prepare("UPDATE confirmation_entries SET draft_message = ?, updated_at = datetime('now') WHERE id = ?")
+    .bind(body.message, entryId).run()
+  return c.json({ success: true })
+})
+
+// ==================== REMINDER TEXTS ====================
+
+// Send reminders to entries that haven't responded
+app.post('/api/standing-orders/runs/:id/send-reminders', async (c) => {
+  const db = c.env.DB
+  const runId = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+
+  const run = await db.prepare('SELECT * FROM confirmation_runs WHERE id = ?').bind(runId).first() as any
+  if (!run) return c.json({ error: 'Run not found' }, 404)
+
+  // Get sent entries that haven't responded
+  const entries = await db.prepare(`
+    SELECT ce.*, c.business_name, c.phone, c.sms_phone
+    FROM confirmation_entries ce JOIN customers c ON ce.customer_id = c.id
+    WHERE ce.run_id = ? AND ce.status = 'sent'
+  `).bind(runId).all()
+
+  if (!entries.results?.length) return c.json({ sent: 0, message: 'No entries need reminders' })
+
+  const apiKey = c.env.OPENAI_API_KEY
+  const baseUrl = c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+  const webhookUrl = c.env.MAKE_WEBHOOK_URL
+  let sentCount = 0
+  const errors: string[] = []
+
+  for (const entry of entries.results as any[]) {
+    const phone = entry.customer_phone || entry.sms_phone || entry.phone
+    if (!phone) continue
+
+    let reminderMsg = ''
+
+    // Try AI-generated reminder
+    if (apiKey) {
+      try {
+        const proposedItems = entry.proposed_items ? JSON.parse(entry.proposed_items) : []
+        const itemStr = proposedItems.map((i: any) => `${i.quantity}x ${i.product_name}`).join(', ')
+        const isStanding = entry.entry_type === 'standing'
+
+        const context = `Customer: ${entry.customer_name}\nDelivery: ${run.run_date}\nCutoff: ${run.cutoff_time || 'soon'}\nType: ${isStanding ? 'standing order' : 'broadcast'}\n${itemStr ? 'Items: ' + itemStr : 'No specific items (open invite)'}`
+
+        const resp = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini', max_tokens: 150, temperature: 0.7,
+            messages: [{
+              role: 'system',
+              content: `You write friendly reminder SMS texts for British Feed (animal feed delivery). Write a brief, gentle reminder that their delivery confirmation is needed soon. Under 160 chars. Be warm, mention the cutoff is approaching. If they have a standing order, remind them of the items. Reply C to confirm. No emojis. Return ONLY the message.`
+            }, { role: 'user', content: context }]
+          })
+        })
+        if (resp.ok) {
+          const data = await resp.json() as any
+          reminderMsg = data.choices?.[0]?.message?.content?.trim() || ''
+        }
+      } catch {}
+    }
+
+    // Fallback if AI fails
+    if (!reminderMsg) {
+      reminderMsg = `Hey ${entry.customer_name}! Just a reminder — we need your delivery confirmation for ${run.run_date}. Reply C to confirm or N to skip. Cutoff is approaching!`
+    }
+
+    // Log outbound SMS
+    const smsRes = await db.prepare(`
+      INSERT INTO sms_messages (confirmation_entry_id, customer_id, customer_phone, direction, message_body, status, sent_at)
+      VALUES (?, ?, ?, 'outbound', ?, 'queued', datetime('now'))
+    `).bind(entry.id, entry.customer_id, phone, reminderMsg).run()
+    const smsId = smsRes.meta.last_row_id
+
+    // Fire webhook
+    if (webhookUrl) {
+      try {
+        const resp = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phone, message: reminderMsg,
+            customer_name: entry.customer_name, customer_id: entry.customer_id,
+            entry_id: entry.id, run_id: runId, type: 'reminder'
+          })
+        })
+        if (resp.ok) {
+          await db.prepare("UPDATE sms_messages SET status = 'sent' WHERE id = ?").bind(smsId).run()
+          sentCount++
+        } else {
+          await db.prepare("UPDATE sms_messages SET status = 'failed' WHERE id = ?").bind(smsId).run()
+          errors.push(`Webhook failed for ${entry.customer_name}`)
+        }
+      } catch (e: any) {
+        await db.prepare("UPDATE sms_messages SET status = 'failed', error_message = ? WHERE id = ?").bind(e.message, smsId).run()
+        errors.push(`Error for ${entry.customer_name}: ${e.message}`)
+      }
+    } else {
+      // No webhook — just mark as sent for testing
+      await db.prepare("UPDATE sms_messages SET status = 'sent' WHERE id = ?").bind(smsId).run()
+      sentCount++
+    }
+  }
+
+  return c.json({ sent: sentCount, total: entries.results.length, errors })
 })
 
 // ==================== CUSTOMER SMS PREFERENCES ====================

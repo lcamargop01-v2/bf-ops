@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS confirmation_entries (
   last_inbound_sms_id INTEGER,        -- last customer reply
   sms_sent_at DATETIME,
   confirmed_at DATETIME,
+  -- AI-drafted message (editable by staff before sending)
+  draft_message TEXT,
   -- Staff handling
   reviewed_by INTEGER,
   reviewed_by_name TEXT,
