@@ -726,7 +726,14 @@
 }
 .po-item-product-select {
   width: 100%;
-  font-size: 12px;
+  font-size: 13px;
+  border: 2px solid #D97706;
+  background: #FFFBEB;
+  font-weight: 500;
+}
+.po-item-product-select:focus {
+  border-color: #B45309;
+  box-shadow: 0 0 0 3px rgba(217,119,6,0.15);
 }
 .po-create-actions {
   margin-top: 20px;

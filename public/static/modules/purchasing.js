@@ -119,6 +119,7 @@ async function poRender() {
       root = document.getElementById('purchasing-app'); if (!root) return;
       root.innerHTML = poRenderNav() + poRenderOrderList();
     } else if (poPage === 'create') {
+      await Promise.all([poLoadSuppliers(), poLoadLocations(), poLoadCatalog()]);
       root = document.getElementById('purchasing-app'); if (!root) return;
       root.innerHTML = poRenderNav() + poRenderCreateOrder();
     } else if (poPage === 'detail') {
@@ -429,6 +430,14 @@ async function poLoadAndRenderOrders() {
 
 // ==================== CREATE ORDER ====================
 var poNewItems = [{ product_id: '', description: '', qty_ordered: '', unit: 'each', unit_cost: '' }];
+var poCatalogProducts = [];
+
+async function poLoadCatalog() {
+  try {
+    var resp = await poAPI.get('/api/purchasing/products?limit=2000', { headers: poHeaders() });
+    poCatalogProducts = resp.data.products || [];
+  } catch(e) { poCatalogProducts = []; }
+}
 
 function poRenderCreateOrder() {
   poNewItems = [{ product_id: '', description: '', qty_ordered: '', unit: 'each', unit_cost: '' }];
@@ -493,9 +502,17 @@ function poRenderNewItems() {
   poNewItems.forEach(function(item, idx) {
     html += '<div class="po-new-item" data-idx="' + idx + '">';
     html += '<div class="po-new-item-row">';
-    html += '<div class="po-form-group" style="flex:2"><label>Description / Product</label>' +
-      '<input type="text" class="po-input" placeholder="Search or type description..." value="' + poEsc(item.description) + '" oninput="poSearchItemProduct(this.value,' + idx + ')" id="poItemDesc_' + idx + '">' +
-      '<select class="po-select po-item-product-select" id="poItemProduct_' + idx + '" onchange="poSelectItemProduct(' + idx + ')" style="margin-top:4px"><option value="">— or pick from catalog —</option></select></div>';
+    html += '<div class="po-form-group" style="flex:2"><label>Pick from Catalog</label>' +
+      '<select class="po-select po-item-product-select" id="poItemProduct_' + idx + '" onchange="poSelectItemProduct(' + idx + ')" style="margin-bottom:6px">' +
+      '<option value="">— select a product —</option>' +
+      (poCatalogProducts || []).map(function(p) {
+        return '<option value="' + p.id + '" data-name="' + poEsc(p.name) + '" data-cost="' + (p.cost || 0) + '" data-price="' + (p.price || 0) + '" data-unit="' + poEsc(p.unit_type || 'each') + '"' +
+          (item.product_id == p.id ? ' selected' : '') + '>' +
+          poEsc(p.name) + (p.sku ? ' (' + poEsc(p.sku) + ')' : '') + ' — $' + (p.cost || 0).toFixed(2) + '</option>';
+      }).join('') +
+      '</select>' +
+      '<input type="text" class="po-input" placeholder="Or type a custom description..." value="' + poEsc(item.product_id ? '' : item.description) + '" id="poItemDesc_' + idx + '" style="font-size:13px">' +
+      '</div>';
     html += '<div class="po-form-group" style="flex:0.5"><label>Qty *</label><input type="number" class="po-input" placeholder="0" value="' + (item.qty_ordered || '') + '" id="poItemQty_' + idx + '" inputmode="numeric"></div>';
     html += '<div class="po-form-group" style="flex:0.5"><label>Unit</label><select class="po-select" id="poItemUnit_' + idx + '">' +
       ['each','bag','bale','pallet','ton','load','case','box','roll'].map(function(u) {
@@ -528,43 +545,73 @@ function poSyncNewItemFields() {
     var unit = document.getElementById('poItemUnit_' + idx);
     var cost = document.getElementById('poItemCost_' + idx);
     var prod = document.getElementById('poItemProduct_' + idx);
-    if (desc) item.description = desc.value;
+    if (prod && prod.value) {
+      // Product selected from catalog — use catalog product data
+      item.product_id = prod.value;
+      var opt = prod.options[prod.selectedIndex];
+      if (opt && opt.dataset.name) item.description = opt.dataset.name;
+    } else if (desc && desc.value) {
+      // Custom description (no product selected)
+      item.description = desc.value;
+      item.product_id = '';
+    }
     if (qty) item.qty_ordered = qty.value;
     if (unit) item.unit = unit.value;
     if (cost) item.unit_cost = cost.value;
-    if (prod && prod.value) item.product_id = prod.value;
   });
 }
 
 var poItemSearchTimer = null;
 async function poSearchItemProduct(term, idx) {
   clearTimeout(poItemSearchTimer);
+  var sel = document.getElementById('poItemProduct_' + idx);
+  if (!term || term.length < 2) {
+    if (sel) sel.innerHTML = '<option value="">— type 2+ chars to search catalog —</option>';
+    return;
+  }
+  if (sel) sel.innerHTML = '<option value="">Searching...</option>';
   poItemSearchTimer = setTimeout(async function() {
-    if (!term || term.length < 2) return;
     try {
       var resp = await poAPI.get('/api/purchasing/products?search=' + encodeURIComponent(term), { headers: poHeaders() });
-      var sel = document.getElementById('poItemProduct_' + idx);
-      if (!sel) return;
-      sel.innerHTML = '<option value="">— or pick from catalog —</option>';
-      (resp.data.products || []).forEach(function(p) {
-        sel.innerHTML += '<option value="' + p.id + '" data-name="' + poEsc(p.name) + '" data-cost="' + (p.cost || 0) + '" data-price="' + (p.price || 0) + '" data-unit="' + poEsc(p.unit_type || 'each') + '">' +
-          poEsc(p.name) + ' (' + poEsc(p.sku || 'no SKU') + ') - Cost: $' + (p.cost || 0).toFixed(2) + ' / Sell: $' + (p.price || 0) + '</option>';
+      var sel2 = document.getElementById('poItemProduct_' + idx);
+      if (!sel2) return;
+      var products = resp.data.products || [];
+      var optionsHtml = '<option value="">— ' + products.length + ' product(s) found — select one —</option>';
+      products.forEach(function(p) {
+        optionsHtml += '<option value="' + p.id + '" data-name="' + poEsc(p.name) + '" data-cost="' + (p.cost || 0) + '" data-price="' + (p.price || 0) + '" data-unit="' + poEsc(p.unit_type || 'each') + '">' +
+          poEsc(p.name) + (p.sku ? ' (' + poEsc(p.sku) + ')' : '') + ' — Cost: $' + (p.cost || 0).toFixed(2) + ' / Sell: $' + (p.price || 0).toFixed(2) + '</option>';
       });
-    } catch(e) {}
+      if (products.length === 0) {
+        optionsHtml = '<option value="">— no products match "' + poEsc(term) + '" —</option>';
+      }
+      sel2.innerHTML = optionsHtml;
+    } catch(e) {
+      var sel3 = document.getElementById('poItemProduct_' + idx);
+      if (sel3) sel3.innerHTML = '<option value="">— search failed —</option>';
+    }
   }, 300);
 }
 
 function poSelectItemProduct(idx) {
   var sel = document.getElementById('poItemProduct_' + idx);
-  if (!sel || !sel.value) return;
-  var opt = sel.options[sel.selectedIndex];
+  if (!sel) return;
   var descInput = document.getElementById('poItemDesc_' + idx);
   var costInput = document.getElementById('poItemCost_' + idx);
   var unitInput = document.getElementById('poItemUnit_' + idx);
-  if (descInput && opt.dataset.name) descInput.value = opt.dataset.name;
+  if (!sel.value) {
+    // Deselected — clear product link
+    poNewItems[idx].product_id = '';
+    return;
+  }
+  var opt = sel.options[sel.selectedIndex];
+  // Fill in fields from catalog product
+  if (descInput) descInput.value = ''; // Clear custom desc — catalog product selected
   if (costInput) costInput.value = opt.dataset.cost || opt.dataset.price || '';
   if (unitInput && opt.dataset.unit) unitInput.value = opt.dataset.unit;
   poNewItems[idx].product_id = sel.value;
+  poNewItems[idx].description = opt.dataset.name || '';
+  poNewItems[idx].unit_cost = opt.dataset.cost || opt.dataset.price || '';
+  poNewItems[idx].unit = opt.dataset.unit || 'each';
 }
 
 async function poSubmitNewOrder() {

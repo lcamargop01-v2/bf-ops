@@ -1102,12 +1102,15 @@ app.get('/api/purchasing/products', async (c) => {
   const db = c.env.DB
   const search = c.req.query('search') || ''
   const category = c.req.query('category')
+  const limit = parseInt(c.req.query('limit') || '50')
+  const safeLimit = Math.min(limit, 2000)
 
   let q = 'SELECT id, name, sku, category, unit_type, price, cost FROM products WHERE active = 1'
   const binds: any[] = []
   if (search) { q += ' AND (name LIKE ? OR sku LIKE ?)'; binds.push(`%${search}%`, `%${search}%`) }
   if (category) { q += ' AND category = ?'; binds.push(category) }
-  q += ' ORDER BY name LIMIT 50'
+  q += ' ORDER BY name LIMIT ?'
+  binds.push(safeLimit)
 
   const result = await db.prepare(q).bind(...binds).all()
   return c.json({ products: result.results || [] })
