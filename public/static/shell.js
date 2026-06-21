@@ -23,6 +23,28 @@ function setToken(t) {
   else { localStorage.removeItem('bf_ops_token'); delete API.defaults.headers.common['Authorization']; }
 }
 
+/**
+ * Returns the stored token if it exists AND is not expired.
+ * Token payload format: { id, email, role, exp } where exp is ms timestamp.
+ * Returns the raw token string or null.
+ */
+function _getValidToken() {
+  var token = localStorage.getItem('bf_ops_token');
+  if (!token) return null;
+  try {
+    var payload = JSON.parse(atob(token));
+    if (!payload.exp || payload.exp < Date.now()) {
+      // Token expired — clean it up
+      console.warn('[Shell] Token expired, clearing session');
+      return null;
+    }
+    return token;
+  } catch(e) {
+    console.warn('[Shell] Invalid token format', e);
+    return null;
+  }
+}
+
 function getInitials(name) {
   return (name || '?').split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
 }
@@ -1392,10 +1414,18 @@ function helpAskSubmit(e) {
   _helpChatHistory.push({ role: 'assistant', text: '...', loading: true });
   helpRenderChat();
 
-  // Call AI — use axios directly with token from localStorage (module may overwrite API)
+  // Call AI — use _getValidToken to ensure token isn't expired
   var ctx = window._helpContext || {};
-  var _hToken = localStorage.getItem('bf_ops_token');
-  var _hHeaders = _hToken ? { Authorization: 'Bearer ' + _hToken } : {};
+  var _hToken = _getValidToken();
+  if (!_hToken) {
+    _helpChatHistory = _helpChatHistory.filter(function(m) { return !m.loading; });
+    _helpChatHistory.push({ role: 'assistant', text: 'Your session has expired. Please log in again.' });
+    helpRenderChat();
+    shellToast('Session expired — please log in again', 'error');
+    setTimeout(function() { shellLogout(); }, 2000);
+    return;
+  }
+  var _hHeaders = { Authorization: 'Bearer ' + _hToken };
   axios.post('/api/help/ask', { question: q, module: ctx.module || '', page: ctx.page || '' }, { headers: _hHeaders })
     .then(function(resp) {
       // Remove loading message
@@ -1524,8 +1554,15 @@ function submitFeatureRequest(e) {
   btn.disabled = true;
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
   // Always use token from localStorage — module scripts may overwrite global API
-  var token = localStorage.getItem('bf_ops_token');
-  var headers = token ? { Authorization: 'Bearer ' + token } : {};
+  var token = _getValidToken();
+  if (!token) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit';
+    shellToast('Session expired — please log in again', 'error');
+    setTimeout(function() { shellLogout(); }, 1500);
+    return;
+  }
+  var headers = { Authorization: 'Bearer ' + token };
   axios.post('/api/feature-requests', {
     title: title,
     description: (document.getElementById('frDesc').value || '').trim(),
@@ -1540,7 +1577,12 @@ function submitFeatureRequest(e) {
   }).catch(function(err) {
     btn.disabled = false;
     btn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit';
-    shellToast('Error: ' + (err.response?.data?.error || err.message), 'error');
+    if (err.response && err.response.status === 401) {
+      shellToast('Session expired — please log in again', 'error');
+      setTimeout(function() { shellLogout(); }, 1500);
+    } else {
+      shellToast('Error: ' + (err.response?.data?.error || err.message), 'error');
+    }
   });
 }
 
@@ -2878,6 +2920,18 @@ async function avSavePreferences(userId) {
   const savedToken = localStorage.getItem('bf_ops_token');
   if (savedUser && savedToken) {
     try {
+      // Check token expiry before restoring session
+      var tokenPayload = JSON.parse(atob(savedToken));
+      if (!tokenPayload.exp || tokenPayload.exp < Date.now()) {
+        console.warn('[Shell] Saved token expired, forcing re-login');
+        localStorage.removeItem('bf_ops_user');
+        localStorage.removeItem('bf_ops_token');
+        localStorage.removeItem('bf_ops_permissions');
+        localStorage.removeItem('bf_ops_can_view_financials');
+        localStorage.removeItem('bf_token');
+        renderLogin();
+        return;
+      }
       currentUser = JSON.parse(savedUser);
       setToken(savedToken);
       // Restore permissions from localStorage (show UI immediately)
