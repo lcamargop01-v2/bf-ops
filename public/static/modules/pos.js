@@ -198,6 +198,8 @@ function renderRegisterView() {
         '<button class="pos-topbar-btn" id="posBtnReg"><i class="fas fa-cash-register"></i> <span class="hide-mobile">Register</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnHist"><i class="fas fa-clock-rotate-left"></i> <span class="hide-mobile">History</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnCust"><i class="fas fa-address-book"></i> <span class="hide-mobile">Customers</span></button>' +
+        '<button class="pos-topbar-btn" id="posBtnInvReq"><i class="fas fa-boxes-stacked"></i> <span class="hide-mobile">Stock Req</span></button>' +
+        '<button class="pos-topbar-btn" id="posBtnStmts"><i class="fas fa-file-invoice-dollar"></i> <span class="hide-mobile">Statements</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnHeld"><i class="fas fa-pause-circle"></i> <span class="hide-mobile">Held</span> <span id="posHeldBadge" class="pos-held-badge" style="display:none">0</span></button>' +
         '<button class="pos-topbar-btn danger" id="posBtnClose"><i class="fas fa-power-off"></i> <span class="hide-mobile">Close</span></button>' +
       '</div>' +
@@ -205,12 +207,16 @@ function renderRegisterView() {
     '<div id="posViewDashboard" class="pos-view pos-dashboard"></div>' +
     '<div id="posViewRegister" class="pos-view pos-register"></div>' +
     '<div id="posViewHistory" class="pos-view pos-history"></div>' +
-    '<div id="posViewCustomers" class="pos-view pos-customers"></div>';
+    '<div id="posViewCustomers" class="pos-view pos-customers"></div>' +
+    '<div id="posViewInventory-requests" class="pos-view pos-inv-requests"></div>' +
+    '<div id="posViewStatements" class="pos-view pos-statements"></div>';
 
   on('posBtnDash', 'click', function() { switchView('dashboard'); });
   on('posBtnReg', 'click', function() { switchView('register'); });
   on('posBtnHist', 'click', function() { switchView('history'); });
   on('posBtnCust', 'click', function() { switchView('customers'); });
+  on('posBtnInvReq', 'click', function() { switchView('inventory-requests'); });
+  on('posBtnStmts', 'click', function() { switchView('statements'); });
   on('posBtnHeld', 'click', showHeld);
   on('posBtnClose', 'click', closeSession);
 
@@ -228,6 +234,8 @@ function switchView(view) {
   else if (view === 'dashboard') loadDashboard();
   else if (view === 'history') loadHistory();
   else if (view === 'customers') loadCustomerList();
+  else if (view === 'inventory-requests') loadInventoryRequests();
+  else if (view === 'statements') loadStatements();
 }
 
 // ==================== REGISTER CONTENT ====================
@@ -763,8 +771,14 @@ function showCustomerPanel(id) {
     var rules = r.data.priceRules || [];
     var addrs = r.data.addresses || [];
 
+    var crmOrg = r.data.crmOrg;
+
     var html = '<div class="pos-cust-panel">' +
       '<div class="pos-cust-panel-header"><h3><i class="fas fa-user"></i> ' + esc(c.business_name || c.contact_name) + '</h3>' +
+      '<div class="pos-cust-panel-actions">' +
+        '<button class="pos-btn pos-btn-sm" id="posCustPanelQuickEdit" title="Quick Edit"><i class="fas fa-pen"></i></button>' +
+        '<button class="pos-btn pos-btn-sm" id="posCustPanelCRM" title="CRM Link"><i class="fas fa-link"></i></button>' +
+      '</div>' +
       '<button class="pos-modal-close" id="posCustPanelClose"><i class="fas fa-times"></i></button></div>' +
       '<div class="pos-cust-panel-body">';
 
@@ -813,6 +827,19 @@ function showCustomerPanel(id) {
       html += '</div>';
     }
 
+    // CRM link info
+    if (crmOrg) {
+      html += '<div class="pos-cust-section"><h4><i class="fas fa-link"></i> CRM Organization</h4>' +
+        fld('Name', crmOrg.name) + fld('Type', crmOrg.org_type) +
+        (crmOrg.tags ? fld('Tags', crmOrg.tags) : '') +
+      '</div>';
+    }
+
+    if (c.notes) {
+      html += '<div class="pos-cust-section"><h4><i class="fas fa-sticky-note"></i> Notes</h4>' +
+        '<div style="font-size:12px;white-space:pre-wrap;color:var(--pos-gray-600)">' + esc(c.notes) + '</div></div>';
+    }
+
     html += '</div></div>';
 
     var existing = document.querySelector('.pos-cust-panel');
@@ -822,6 +849,16 @@ function showCustomerPanel(id) {
     on('posCustPanelClose', 'click', function() {
       var p = document.querySelector('.pos-cust-panel');
       if (p) p.remove();
+    });
+    on('posCustPanelQuickEdit', 'click', function() {
+      var p = document.querySelector('.pos-cust-panel');
+      if (p) p.remove();
+      openQuickEditCustomer(c.id);
+    });
+    on('posCustPanelCRM', 'click', function() {
+      var p = document.querySelector('.pos-cust-panel');
+      if (p) p.remove();
+      openCRMLink(c.id);
     });
   });
 }
@@ -1345,12 +1382,15 @@ function loadDashboard() {
     }
 
     if (d.lowStock && d.lowStock.length > 0) {
-      html += '<div class="pos-dash-section"><h3><i class="fas fa-exclamation-triangle" style="color:var(--pos-orange)"></i> Low Stock Alerts</h3>' +
-        '<table class="pos-table"><thead><tr><th>Product</th><th>Location</th><th class="right">Available</th><th class="right">Reorder</th></tr></thead><tbody>';
+      html += '<div class="pos-dash-section"><h3><i class="fas fa-exclamation-triangle" style="color:var(--pos-orange)"></i> Low Stock Alerts' +
+        ' <button class="pos-btn pos-btn-sm" id="posDashRequestStock" style="margin-left:12px;background:var(--pos-navy);color:white;font-size:11px"><i class="fas fa-paper-plane"></i> Request All Low Stock</button></h3>' +
+        '<table class="pos-table"><thead><tr><th>Product</th><th>Location</th><th class="right">Available</th><th class="right">Reorder</th><th></th></tr></thead><tbody>';
       d.lowStock.forEach(function(s) {
-        html += '<tr><td>' + esc(s.name) + '</td><td>' + esc(s.location||'') + '</td><td class="right" style="color:var(--pos-red);font-weight:700">' + fmtN(s.qty_available) + '</td><td class="right">' + fmtN(s.reorder_point) + '</td></tr>';
+        html += '<tr><td>' + esc(s.name) + '</td><td>' + esc(s.location||'') + '</td><td class="right" style="color:var(--pos-red);font-weight:700">' + fmtN(s.qty_available) + '</td><td class="right">' + fmtN(s.reorder_point) + '</td>' +
+          '<td><button class="pos-btn pos-btn-sm" data-req-product="' + s.id + '" data-req-name="' + esc(s.name) + '" data-req-stock="' + (s.qty_available||0) + '" data-req-reorder="' + (s.reorder_point||0) + '" style="font-size:10px"><i class="fas fa-paper-plane"></i></button></td></tr>';
       });
       html += '</tbody></table></div>';
+      window._dashLowStock = d.lowStock;
     }
 
     // === SETTINGS & TOOLS ===
@@ -1367,6 +1407,23 @@ function loadDashboard() {
     on('posDashPromos', 'click', openPromotionsManager);
     on('posDashTax', 'click', openTaxSettings);
     on('posDashReservations', 'click', openReservationsList);
+
+    // Wire low stock request buttons
+    on('posDashRequestStock', 'click', function() {
+      if (!window._dashLowStock || window._dashLowStock.length === 0) return;
+      var items = window._dashLowStock.map(function(s) {
+        var needed = Math.max(1, (s.reorder_point || 0) - (s.qty_available || 0));
+        return { product_id: s.id, product_name: s.name, qty_requested: needed, current_stock: s.qty_available || 0, reorder_point: s.reorder_point || 0 };
+      });
+      openInvRequestForm(items);
+    });
+    el.querySelectorAll('[data-req-product]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var needed = Math.max(1, parseInt(btn.dataset.reqReorder||'0') - parseInt(btn.dataset.reqStock||'0'));
+        openInvRequestForm([{ product_id: parseInt(btn.dataset.reqProduct), product_name: btn.dataset.reqName, qty_requested: needed, current_stock: parseInt(btn.dataset.reqStock||'0'), reorder_point: parseInt(btn.dataset.reqReorder||'0') }]);
+      });
+    });
   }).catch(function() {
     el.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)"><i class="fas fa-exclamation-triangle"></i> Failed to load dashboard</div>';
   });
@@ -1762,6 +1819,7 @@ function renderCustomerSheet(c, addrs, history, rules, acct) {
           (isNew ? '' : '<button class="pos-cust-tab" data-tab="discounts"><i class="fas fa-tags"></i> Discounts</button>') +
           (isNew ? '' : '<button class="pos-cust-tab" data-tab="history"><i class="fas fa-receipt"></i> Orders</button>') +
           (isNew ? '' : '<button class="pos-cust-tab" data-tab="account"><i class="fas fa-credit-card"></i> Account</button>') +
+          (isNew ? '' : '<button class="pos-cust-tab" data-tab="crm"><i class="fas fa-link"></i> CRM</button>') +
         '</div>' +
 
         // === DETAILS TAB ===
@@ -1863,6 +1921,12 @@ function renderCustomerSheet(c, addrs, history, rules, acct) {
           renderCustAccount(acct || {}) +
         '</div>') +
 
+        // === CRM TAB ===
+        (isNew ? '' :
+        '<div class="pos-cust-tab-content" data-content="crm">' +
+          '<div id="posCustCRMTabContent"><div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading CRM data...</div></div>' +
+        '</div>') +
+
       '</div>' +
       '<div class="pos-cust-sheet-footer">' +
         (isNew ? '' : '<button class="pos-btn pos-cust-delete-btn" id="posCustDeleteBtn"><i class="fas fa-trash"></i> Deactivate</button>') +
@@ -1938,6 +2002,13 @@ function renderCustomerSheet(c, addrs, history, rules, acct) {
         tab.addEventListener('click', function() { renderCustDiscounts(c.id); });
       }
     });
+    // Load CRM data when tab clicked
+    document.querySelectorAll('.pos-cust-tab').forEach(function(tab) {
+      if (tab.dataset.tab === 'crm') {
+        tab.addEventListener('click', function() { loadCRMTabContent(c.id); });
+      }
+    });
+
     // Also add merge button to sheet header
     var sheetHeader = document.querySelector('.pos-cust-sheet-header h3');
     if (sheetHeader && c.id) {
@@ -2942,6 +3013,843 @@ function toast(msg, type) {
   el.innerHTML = '<i class="fas ' + (type === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle') + '"></i> ' + msg;
   document.body.appendChild(el);
   setTimeout(function() { el.style.opacity = '0'; setTimeout(function() { el.remove(); }, 300); }, 3000);
+}
+
+// ==================== INVENTORY REQUESTS ====================
+
+function loadInventoryRequests() {
+  var el = document.getElementById('posViewInventory-requests');
+  if (!el) return;
+  el.innerHTML = '<div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+
+  API.get('/pos/inventory-requests?location_id=' + getLocationId()).then(function(r) {
+    var reqs = r.data || [];
+    var html = '<div class="pos-cust-view-header">' +
+      '<div class="pos-cust-view-title"><h2><i class="fas fa-boxes-stacked"></i> Inventory Requests</h2></div>' +
+      '<div class="pos-cust-view-actions">' +
+        '<button class="pos-btn pos-btn-add-cust" id="posNewInvReq"><i class="fas fa-plus"></i> New Request</button>' +
+      '</div>' +
+    '</div>';
+
+    if (reqs.length === 0) {
+      html += '<div class="pos-loading">No inventory requests yet</div>';
+    } else {
+      html += '<table class="pos-table"><thead><tr><th>Request #</th><th>Location</th><th>Items</th><th>Urgency</th><th>Status</th><th>Requested By</th><th>Date</th><th></th></tr></thead><tbody>';
+      reqs.forEach(function(r) {
+        var urgClass = r.urgency === 'critical' ? 'pos-badge-red' : r.urgency === 'high' ? 'pos-badge-orange' : r.urgency === 'low' ? 'pos-badge-blue' : '';
+        var statClass = r.status === 'approved' ? 'pos-badge-green' : r.status === 'rejected' ? 'pos-badge-red' : r.status === 'fulfilled' ? 'pos-badge-purple' : 'pos-badge-blue';
+        html += '<tr class="clickable" data-invreq-id="' + r.id + '">' +
+          '<td style="font-weight:600;color:var(--pos-navy)">' + esc(r.request_number) + '</td>' +
+          '<td>' + esc(r.location_name || '') + '</td>' +
+          '<td>' + (r.item_count || 0) + ' items (' + (r.total_qty || 0) + ' qty)</td>' +
+          '<td><span class="pos-badge ' + urgClass + '">' + esc(r.urgency) + '</span></td>' +
+          '<td><span class="pos-badge ' + statClass + '">' + esc(r.status) + '</span></td>' +
+          '<td>' + esc(r.requested_by_name || '') + '</td>' +
+          '<td>' + (r.created_at || '').slice(0, 10) + '</td>' +
+          '<td><button class="pos-btn pos-btn-sm" data-invreq-detail="' + r.id + '"><i class="fas fa-eye"></i></button></td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    el.innerHTML = html;
+    on('posNewInvReq', 'click', function() { openInvRequestForm([]); });
+    el.querySelectorAll('[data-invreq-detail]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) { e.stopPropagation(); openInvRequestDetail(parseInt(btn.dataset.invreqDetail)); });
+    });
+    el.querySelectorAll('[data-invreq-id]').forEach(function(row) {
+      row.addEventListener('click', function() { openInvRequestDetail(parseInt(row.dataset.invreqId)); });
+    });
+  }).catch(function(err) {
+    el.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)">Error: ' + errMsg(err) + '</div>';
+  });
+}
+
+function openInvRequestForm(prefillItems) {
+  var user = getUser();
+  var old = document.getElementById('posInvReqOverlay');
+  if (old) old.remove();
+
+  var html = '<div class="pos-modal-overlay" id="posInvReqOverlay">' +
+    '<div class="pos-cust-sheet" style="max-width:700px">' +
+      '<div class="pos-cust-sheet-header"><h3><i class="fas fa-paper-plane"></i> New Inventory Request</h3>' +
+        '<button class="pos-modal-close" id="posInvReqClose"><i class="fas fa-times"></i></button></div>' +
+      '<div class="pos-cust-sheet-body" style="padding:16px">' +
+        '<div class="pos-cust-form-grid">' +
+          '<div class="pos-cust-form-group">' +
+            '<label>Urgency</label>' +
+            '<select id="posInvReqUrgency"><option value="low">Low</option><option value="normal" selected>Normal</option><option value="high">High</option><option value="critical">Critical</option></select>' +
+          '</div>' +
+          '<div class="pos-cust-form-group">' +
+            '<label>Reason</label>' +
+            '<input type="text" id="posInvReqReason" placeholder="e.g. Running low, customer order">' +
+          '</div>' +
+          '<div class="pos-cust-form-group full">' +
+            '<label>Notes</label>' +
+            '<textarea id="posInvReqNotes" rows="2" placeholder="Additional details..."></textarea>' +
+          '</div>' +
+        '</div>' +
+        '<h4 style="margin:12px 0 8px"><i class="fas fa-list"></i> Items <button class="pos-btn pos-btn-sm" id="posInvReqAddItem" style="margin-left:8px"><i class="fas fa-plus"></i> Add</button></h4>' +
+        '<div id="posInvReqItemSearch" style="margin-bottom:8px;display:none;position:relative">' +
+          '<input type="text" id="posInvReqSearchInput" placeholder="Search product..." style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:6px">' +
+          '<div id="posInvReqSearchResults" style="position:absolute;top:100%;left:0;right:0;background:white;border:1px solid var(--pos-gray-200);border-radius:0 0 6px 6px;max-height:200px;overflow-y:auto;z-index:10;display:none"></div>' +
+        '</div>' +
+        '<table class="pos-table" id="posInvReqItemsTable"><thead><tr><th>Product</th><th class="right">Current Stock</th><th class="right">Reorder Point</th><th class="right">Qty Requested</th><th></th></tr></thead>' +
+          '<tbody id="posInvReqItemsBody"></tbody></table>' +
+      '</div>' +
+      '<div class="pos-cust-sheet-footer">' +
+        '<div style="flex:1"></div>' +
+        '<button class="pos-btn pos-btn-hold" id="posInvReqCancelBtn">Cancel</button>' +
+        '<button class="pos-btn pos-btn-pay" id="posInvReqSubmitBtn"><i class="fas fa-paper-plane"></i> Submit Request</button>' +
+      '</div>' +
+    '</div></div>';
+
+  document.body.insertAdjacentHTML('beforeend', html);
+
+  var _reqItems = prefillItems || [];
+  renderInvReqItems();
+
+  function renderInvReqItems() {
+    var body = document.getElementById('posInvReqItemsBody');
+    if (!body) return;
+    if (_reqItems.length === 0) {
+      body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--pos-gray-400);padding:16px">No items yet — click "Add" to search products</td></tr>';
+      return;
+    }
+    var h = '';
+    _reqItems.forEach(function(item, i) {
+      h += '<tr>' +
+        '<td>' + esc(item.product_name) + '</td>' +
+        '<td class="right">' + (item.current_stock || 0) + '</td>' +
+        '<td class="right">' + (item.reorder_point || 0) + '</td>' +
+        '<td class="right"><input type="number" class="pos-inline-input" data-reqitem-qty="' + i + '" value="' + (item.qty_requested || 1) + '" min="1" style="width:60px;text-align:right"></td>' +
+        '<td><button class="pos-btn pos-btn-sm" data-reqitem-remove="' + i + '" style="color:var(--pos-red)"><i class="fas fa-trash"></i></button></td>' +
+      '</tr>';
+    });
+    body.innerHTML = h;
+    body.querySelectorAll('[data-reqitem-qty]').forEach(function(inp) {
+      inp.addEventListener('change', function() { _reqItems[parseInt(inp.dataset.reqitemQty)].qty_requested = parseInt(inp.value) || 1; });
+    });
+    body.querySelectorAll('[data-reqitem-remove]').forEach(function(btn) {
+      btn.addEventListener('click', function() { _reqItems.splice(parseInt(btn.dataset.reqitemRemove), 1); renderInvReqItems(); });
+    });
+  }
+
+  on('posInvReqAddItem', 'click', function() {
+    var searchDiv = document.getElementById('posInvReqItemSearch');
+    searchDiv.style.display = 'block';
+    var inp = document.getElementById('posInvReqSearchInput');
+    inp.focus();
+  });
+
+  var searchTimer;
+  var searchInp = document.getElementById('posInvReqSearchInput');
+  if (searchInp) searchInp.addEventListener('input', function() {
+    clearTimeout(searchTimer);
+    var term = searchInp.value;
+    if (term.length < 1) { document.getElementById('posInvReqSearchResults').style.display = 'none'; return; }
+    searchTimer = setTimeout(function() {
+      API.get('/pos/products?search=' + encodeURIComponent(term) + '&location_id=' + getLocationId()).then(function(r) {
+        var results = document.getElementById('posInvReqSearchResults');
+        var products = r.data || [];
+        if (products.length === 0) { results.innerHTML = '<div style="padding:8px;color:var(--pos-gray-400)">No products found</div>'; results.style.display = 'block'; return; }
+        var h = '';
+        products.forEach(function(p) {
+          h += '<div class="pos-customer-option" data-add-product=\'' + JSON.stringify({id:p.id,name:p.name,stock:p.qty_available||0,reorder:p.reorder_point||0}).replace(/'/g,'&#39;') + '\'>' +
+            '<div style="font-weight:600;font-size:13px">' + esc(p.name) + '</div>' +
+            '<div style="font-size:11px;color:var(--pos-gray-500)">Stock: ' + (p.qty_available||0) + ' | Reorder: ' + (p.reorder_point||0) + '</div>' +
+          '</div>';
+        });
+        results.innerHTML = h;
+        results.style.display = 'block';
+        results.querySelectorAll('[data-add-product]').forEach(function(opt) {
+          opt.addEventListener('click', function() {
+            var pd = JSON.parse(opt.dataset.addProduct);
+            if (_reqItems.some(function(i) { return i.product_id === pd.id; })) { toast('Product already in list', 'error'); return; }
+            var needed = Math.max(1, (pd.reorder||0) - (pd.stock||0));
+            _reqItems.push({ product_id: pd.id, product_name: pd.name, qty_requested: needed, current_stock: pd.stock, reorder_point: pd.reorder });
+            renderInvReqItems();
+            results.style.display = 'none';
+            searchInp.value = '';
+            document.getElementById('posInvReqItemSearch').style.display = 'none';
+          });
+        });
+      });
+    }, 200);
+  });
+
+  on('posInvReqClose', 'click', function() { document.getElementById('posInvReqOverlay').remove(); });
+  on('posInvReqCancelBtn', 'click', function() { document.getElementById('posInvReqOverlay').remove(); });
+  on('posInvReqSubmitBtn', 'click', function() {
+    if (_reqItems.length === 0) { toast('Add at least one item', 'error'); return; }
+    API.post('/pos/inventory-request', {
+      location_id: getLocationId(),
+      urgency: gv('posInvReqUrgency'),
+      reason: gv('posInvReqReason'),
+      notes: gv('posInvReqNotes'),
+      requested_by: user ? user.id : null,
+      requested_by_name: user ? user.name : '',
+      items: _reqItems
+    }).then(function(r) {
+      toast('Inventory request ' + r.data.request_number + ' submitted');
+      document.getElementById('posInvReqOverlay').remove();
+      if (_s.view === 'inventory-requests') loadInventoryRequests();
+    }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+  });
+}
+
+function openInvRequestDetail(id) {
+  API.get('/pos/inventory-request/' + id).then(function(r) {
+    var req = r.data.request;
+    var items = r.data.items || [];
+    var urgClass = req.urgency === 'critical' ? 'pos-badge-red' : req.urgency === 'high' ? 'pos-badge-orange' : req.urgency === 'low' ? 'pos-badge-blue' : '';
+    var statClass = req.status === 'approved' ? 'pos-badge-green' : req.status === 'rejected' ? 'pos-badge-red' : req.status === 'fulfilled' ? 'pos-badge-purple' : 'pos-badge-blue';
+
+    var old = document.getElementById('posInvReqDetailOverlay');
+    if (old) old.remove();
+
+    var html = '<div class="pos-modal-overlay" id="posInvReqDetailOverlay">' +
+      '<div class="pos-cust-sheet" style="max-width:600px">' +
+        '<div class="pos-cust-sheet-header"><h3><i class="fas fa-clipboard-list"></i> ' + esc(req.request_number) + '</h3>' +
+          '<button class="pos-modal-close" id="posInvReqDetailClose"><i class="fas fa-times"></i></button></div>' +
+        '<div class="pos-cust-sheet-body" style="padding:16px">' +
+          '<div class="pos-cust-field">' + fld('Status', '<span class="pos-badge ' + statClass + '">' + esc(req.status) + '</span>') + '</div>' +
+          fld('Urgency', '<span class="pos-badge ' + urgClass + '">' + esc(req.urgency) + '</span>') +
+          fld('Location', req.location_name) +
+          fld('Requested By', req.requested_by_name) +
+          fld('Date', (req.created_at || '').slice(0, 16)) +
+          fld('Reason', req.reason || '-') +
+          fld('Notes', req.notes || '-') +
+          (req.reviewed_by_name ? fld('Reviewed By', req.reviewed_by_name + ' on ' + (req.reviewed_at || '').slice(0, 10)) : '') +
+          (req.review_notes ? fld('Review Notes', req.review_notes) : '') +
+          '<h4 style="margin:12px 0 8px"><i class="fas fa-list"></i> Items</h4>' +
+          '<table class="pos-table"><thead><tr><th>Product</th><th class="right">Current</th><th class="right">Reorder</th><th class="right">Requested</th><th class="right">Fulfilled</th></tr></thead><tbody>';
+
+    items.forEach(function(item) {
+      html += '<tr><td>' + esc(item.product_name || 'Product #' + item.product_id) + '</td>' +
+        '<td class="right">' + (item.current_stock || 0) + '</td>' +
+        '<td class="right">' + (item.reorder_point || 0) + '</td>' +
+        '<td class="right" style="font-weight:700">' + item.qty_requested + '</td>' +
+        '<td class="right">' + (item.qty_fulfilled || 0) + '</td></tr>';
+    });
+
+    html += '</tbody></table></div>';
+
+    // Actions for pending requests
+    if (req.status === 'pending') {
+      html += '<div class="pos-cust-sheet-footer">' +
+        '<button class="pos-btn" id="posInvReqReject" style="background:var(--pos-red);color:white"><i class="fas fa-times"></i> Reject</button>' +
+        '<div style="flex:1"></div>' +
+        '<button class="pos-btn" id="posInvReqCancel" style="background:var(--pos-gray-400);color:white"><i class="fas fa-ban"></i> Cancel</button>' +
+        '<button class="pos-btn pos-btn-pay" id="posInvReqApprove"><i class="fas fa-check"></i> Approve</button>' +
+      '</div>';
+    } else {
+      html += '<div class="pos-cust-sheet-footer"><div style="flex:1"></div><button class="pos-btn pos-btn-hold" id="posInvReqDetailCloseBtn">Close</button></div>';
+    }
+
+    html += '</div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    on('posInvReqDetailClose', 'click', function() { document.getElementById('posInvReqDetailOverlay').remove(); });
+    on('posInvReqDetailCloseBtn', 'click', function() { document.getElementById('posInvReqDetailOverlay').remove(); });
+
+    var user = getUser();
+    on('posInvReqApprove', 'click', function() {
+      API.patch('/pos/inventory-request/' + id, { status: 'approved', reviewed_by: user ? user.id : null, reviewed_by_name: user ? user.name : '' })
+        .then(function() { toast('Request approved'); document.getElementById('posInvReqDetailOverlay').remove(); loadInventoryRequests(); })
+        .catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+    on('posInvReqReject', 'click', function() {
+      var notes = prompt('Rejection reason:');
+      API.patch('/pos/inventory-request/' + id, { status: 'rejected', review_notes: notes || '', reviewed_by: user ? user.id : null, reviewed_by_name: user ? user.name : '' })
+        .then(function() { toast('Request rejected'); document.getElementById('posInvReqDetailOverlay').remove(); loadInventoryRequests(); })
+        .catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+    on('posInvReqCancel', 'click', function() {
+      API.patch('/pos/inventory-request/' + id, { status: 'cancelled' })
+        .then(function() { toast('Request cancelled'); document.getElementById('posInvReqDetailOverlay').remove(); loadInventoryRequests(); })
+        .catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+  }).catch(function(err) { toast('Error loading request: ' + errMsg(err), 'error'); });
+}
+
+// ==================== MONTHLY STATEMENTS ====================
+
+function loadStatements() {
+  var el = document.getElementById('posViewStatements');
+  if (!el) return;
+  el.innerHTML = '<div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+
+  API.get('/pos/account-customers').then(function(r) {
+    var customers = r.data || [];
+
+    var html = '<div class="pos-cust-view-header">' +
+      '<div class="pos-cust-view-title"><h2><i class="fas fa-file-invoice-dollar"></i> Monthly Statements</h2></div>' +
+      '<div class="pos-cust-view-actions">' +
+        '<button class="pos-btn pos-btn-add-cust" id="posStmtViewAll"><i class="fas fa-list"></i> All Statements</button>' +
+      '</div>' +
+    '</div>';
+
+    if (customers.length === 0) {
+      html += '<div class="pos-loading">No account customers found. Customers with payment terms other than COD will appear here.</div>';
+    } else {
+      html += '<div class="pos-stmt-grid">';
+      customers.forEach(function(c) {
+        var balClass = (c.balance || 0) > 0 ? 'pos-badge-red' : 'pos-badge-green';
+        html += '<div class="pos-stmt-card" data-stmt-cust="' + c.id + '">' +
+          '<div class="pos-stmt-card-header">' +
+            '<div class="pos-stmt-card-name">' + esc(c.business_name || c.contact_name) + '</div>' +
+            '<span class="pos-badge ' + balClass + '">$' + (c.balance || 0).toFixed(2) + '</span>' +
+          '</div>' +
+          '<div class="pos-stmt-card-body">' +
+            '<div class="pos-stmt-card-info">' + esc(c.payment_terms || 'Net 30') + ' &middot; ' + esc(c.account_status || 'active') + '</div>' +
+            '<div class="pos-stmt-card-info">' + (c.total_sales || 0) + ' sales &middot; Last: ' + ((c.last_sale_date || '').slice(0, 10) || 'Never') + '</div>' +
+            '<div class="pos-stmt-card-info">' + (c.statement_count || 0) + ' statements' + (c.last_statement_period ? ' &middot; Last: ' + c.last_statement_period : '') + '</div>' +
+          '</div>' +
+          '<div class="pos-stmt-card-actions">' +
+            '<button class="pos-btn pos-btn-sm" data-gen-stmt="' + c.id + '" data-gen-name="' + esc(c.business_name || c.contact_name) + '"><i class="fas fa-file-circle-plus"></i> Generate</button>' +
+            '<button class="pos-btn pos-btn-sm" data-view-stmts="' + c.id + '"><i class="fas fa-list"></i> History</button>' +
+          '</div>' +
+        '</div>';
+      });
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+
+    on('posStmtViewAll', 'click', function() { loadAllStatements(); });
+
+    el.querySelectorAll('[data-gen-stmt]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        openGenerateStatement(parseInt(btn.dataset.genStmt), btn.dataset.genName);
+      });
+    });
+    el.querySelectorAll('[data-view-stmts]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        loadAllStatements(parseInt(btn.dataset.viewStmts));
+      });
+    });
+  }).catch(function(err) {
+    el.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)">Error: ' + errMsg(err) + '</div>';
+  });
+}
+
+function openGenerateStatement(customerId, customerName) {
+  var now = new Date();
+  var firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+  var lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  // Default to previous month
+  var prevFirst = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  var prevLast = new Date(now.getFullYear(), now.getMonth(), 0);
+
+  var old = document.getElementById('posStmtGenOverlay');
+  if (old) old.remove();
+
+  var html = '<div class="pos-modal-overlay" id="posStmtGenOverlay">' +
+    '<div class="pos-cust-sheet" style="max-width:500px">' +
+      '<div class="pos-cust-sheet-header"><h3><i class="fas fa-file-circle-plus"></i> Generate Statement</h3>' +
+        '<button class="pos-modal-close" id="posStmtGenClose"><i class="fas fa-times"></i></button></div>' +
+      '<div class="pos-cust-sheet-body" style="padding:16px">' +
+        '<div class="pos-cust-form-grid">' +
+          '<div class="pos-cust-form-group full">' +
+            '<label>Customer</label>' +
+            '<input type="text" value="' + esc(customerName || '') + '" disabled style="background:var(--pos-gray-100)">' +
+          '</div>' +
+          '<div class="pos-cust-form-group">' +
+            '<label>Period Start</label>' +
+            '<input type="date" id="posStmtStart" value="' + prevFirst.toISOString().slice(0,10) + '">' +
+          '</div>' +
+          '<div class="pos-cust-form-group">' +
+            '<label>Period End</label>' +
+            '<input type="date" id="posStmtEnd" value="' + prevLast.toISOString().slice(0,10) + '">' +
+          '</div>' +
+          '<div class="pos-cust-form-group full">' +
+            '<label>Due Date</label>' +
+            '<input type="date" id="posStmtDue" value="' + lastDay.toISOString().slice(0,10) + '">' +
+          '</div>' +
+          '<div class="pos-cust-form-group full">' +
+            '<label>Notes</label>' +
+            '<textarea id="posStmtNotes" rows="2" placeholder="Optional notes..."></textarea>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="pos-cust-sheet-footer">' +
+        '<div style="flex:1"></div>' +
+        '<button class="pos-btn pos-btn-hold" id="posStmtGenCancelBtn">Cancel</button>' +
+        '<button class="pos-btn pos-btn-pay" id="posStmtGenSubmit"><i class="fas fa-file-circle-plus"></i> Generate</button>' +
+      '</div>' +
+    '</div></div>';
+
+  document.body.insertAdjacentHTML('beforeend', html);
+  on('posStmtGenClose', 'click', function() { document.getElementById('posStmtGenOverlay').remove(); });
+  on('posStmtGenCancelBtn', 'click', function() { document.getElementById('posStmtGenOverlay').remove(); });
+  on('posStmtGenSubmit', 'click', function() {
+    var user = getUser();
+    API.post('/pos/statements/generate', {
+      customer_id: customerId,
+      period_start: gv('posStmtStart'),
+      period_end: gv('posStmtEnd'),
+      due_date: gv('posStmtDue'),
+      notes: gv('posStmtNotes'),
+      generated_by: user ? user.id : null,
+      generated_by_name: user ? user.name : ''
+    }).then(function(r) {
+      toast('Statement ' + r.data.statement_number + ' generated. Balance: $' + (r.data.closing_balance || 0).toFixed(2));
+      document.getElementById('posStmtGenOverlay').remove();
+      openStatementDetail(r.data.id);
+    }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+  });
+}
+
+function loadAllStatements(customerId) {
+  var old = document.getElementById('posStmtListOverlay');
+  if (old) old.remove();
+
+  var url = '/pos/statements';
+  if (customerId) url += '?customer_id=' + customerId;
+
+  API.get(url).then(function(r) {
+    var stmts = r.data || [];
+    var html = '<div class="pos-modal-overlay" id="posStmtListOverlay">' +
+      '<div class="pos-cust-sheet" style="max-width:800px">' +
+        '<div class="pos-cust-sheet-header"><h3><i class="fas fa-file-invoice-dollar"></i> Statement History</h3>' +
+          '<button class="pos-modal-close" id="posStmtListClose"><i class="fas fa-times"></i></button></div>' +
+        '<div class="pos-cust-sheet-body" style="padding:16px">';
+
+    if (stmts.length === 0) {
+      html += '<div class="pos-loading">No statements found</div>';
+    } else {
+      html += '<table class="pos-table"><thead><tr><th>Statement #</th><th>Customer</th><th>Period</th><th>Status</th><th class="right">Charges</th><th class="right">Payments</th><th class="right">Balance</th><th></th></tr></thead><tbody>';
+      stmts.forEach(function(s) {
+        var statClass = s.status === 'paid' ? 'pos-badge-green' : s.status === 'overdue' ? 'pos-badge-red' : s.status === 'sent' ? 'pos-badge-blue' : '';
+        html += '<tr class="clickable" data-stmt-id="' + s.id + '">' +
+          '<td style="font-weight:600;color:var(--pos-navy)">' + esc(s.statement_number) + '</td>' +
+          '<td>' + esc(s.business_name || s.contact_name || '') + '</td>' +
+          '<td>' + (s.period_start || '') + ' to ' + (s.period_end || '') + '</td>' +
+          '<td><span class="pos-badge ' + statClass + '">' + esc(s.status) + '</span></td>' +
+          '<td class="right money">$' + (s.total_charges || 0).toFixed(2) + '</td>' +
+          '<td class="right money">$' + (s.total_payments || 0).toFixed(2) + '</td>' +
+          '<td class="right money" style="font-weight:700">$' + (s.closing_balance || 0).toFixed(2) + '</td>' +
+          '<td><button class="pos-btn pos-btn-sm" data-stmt-view="' + s.id + '"><i class="fas fa-eye"></i></button></td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    html += '</div><div class="pos-cust-sheet-footer"><div style="flex:1"></div><button class="pos-btn pos-btn-hold" id="posStmtListCloseBtn">Close</button></div></div></div>';
+
+    document.body.insertAdjacentHTML('beforeend', html);
+    on('posStmtListClose', 'click', function() { document.getElementById('posStmtListOverlay').remove(); });
+    on('posStmtListCloseBtn', 'click', function() { document.getElementById('posStmtListOverlay').remove(); });
+
+    document.querySelectorAll('[data-stmt-view]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) { e.stopPropagation(); openStatementDetail(parseInt(btn.dataset.stmtView)); });
+    });
+    document.querySelectorAll('[data-stmt-id]').forEach(function(row) {
+      row.addEventListener('click', function() { openStatementDetail(parseInt(row.dataset.stmtId)); });
+    });
+  });
+}
+
+function openStatementDetail(id) {
+  API.get('/pos/statements/' + id).then(function(r) {
+    var s = r.data.statement;
+    var lines = r.data.lines || [];
+
+    var old = document.getElementById('posStmtDetailOverlay');
+    if (old) old.remove();
+
+    var statClass = s.status === 'paid' ? 'pos-badge-green' : s.status === 'overdue' ? 'pos-badge-red' : s.status === 'sent' ? 'pos-badge-blue' : '';
+    var html = '<div class="pos-modal-overlay" id="posStmtDetailOverlay">' +
+      '<div class="pos-cust-sheet pos-stmt-detail" style="max-width:800px">' +
+        '<div class="pos-cust-sheet-header"><h3><i class="fas fa-file-invoice-dollar"></i> ' + esc(s.statement_number) + '</h3>' +
+          '<button class="pos-modal-close" id="posStmtDetailClose"><i class="fas fa-times"></i></button></div>' +
+        '<div class="pos-cust-sheet-body pos-stmt-print" id="posStmtPrintArea" style="padding:16px">' +
+          '<div class="pos-stmt-header-block">' +
+            '<div>' +
+              '<h2 style="margin:0 0 4px;font-size:18px">STATEMENT</h2>' +
+              '<div style="font-size:12px;color:var(--pos-gray-500)">' + esc(s.statement_number) + '</div>' +
+            '</div>' +
+            '<div style="text-align:right">' +
+              '<div style="font-weight:600">' + esc(s.business_name || s.contact_name || '') + '</div>' +
+              '<div style="font-size:12px">' + esc(s.phone || '') + (s.email ? ' | ' + esc(s.email) : '') + '</div>' +
+              (s.address ? '<div style="font-size:12px">' + esc(s.address) + '</div>' : '') +
+            '</div>' +
+          '</div>' +
+          '<div class="pos-stmt-summary">' +
+            '<div>Period: <strong>' + (s.period_start || '') + '</strong> to <strong>' + (s.period_end || '') + '</strong></div>' +
+            '<div>Due Date: <strong>' + (s.due_date || '-') + '</strong></div>' +
+            '<div>Status: <span class="pos-badge ' + statClass + '">' + esc(s.status) + '</span></div>' +
+          '</div>' +
+          '<table class="pos-table pos-stmt-lines-table"><thead><tr><th>Date</th><th>Description</th><th>Reference</th><th class="right">Amount</th><th class="right">Balance</th></tr></thead><tbody>';
+
+    lines.forEach(function(l) {
+      var isCredit = l.amount < 0 || l.line_type === 'payment' || l.line_type === 'credit';
+      html += '<tr' + (l.line_type === 'opening_balance' ? ' style="background:var(--pos-gray-50);font-weight:600"' : '') + '>' +
+        '<td>' + (l.line_date || '') + '</td>' +
+        '<td>' + esc(l.description || '') + '</td>' +
+        '<td style="font-size:11px">' + esc(l.reference_number || '') + '</td>' +
+        '<td class="right" style="color:' + (isCredit ? 'var(--pos-green)' : 'inherit') + '">' +
+          (l.line_type !== 'opening_balance' ? (l.amount >= 0 ? '$' : '-$') + Math.abs(l.amount).toFixed(2) : '') + '</td>' +
+        '<td class="right" style="font-weight:600">$' + (l.running_balance || 0).toFixed(2) + '</td>' +
+      '</tr>';
+    });
+
+    html += '</tbody></table>' +
+          '<div class="pos-stmt-totals">' +
+            '<div>Opening Balance: <strong>$' + (s.opening_balance || 0).toFixed(2) + '</strong></div>' +
+            '<div>Total Charges: <strong style="color:var(--pos-red)">$' + (s.total_charges || 0).toFixed(2) + '</strong></div>' +
+            '<div>Total Payments: <strong style="color:var(--pos-green)">-$' + (s.total_payments || 0).toFixed(2) + '</strong></div>' +
+            '<div style="font-size:16px;border-top:2px solid var(--pos-navy);padding-top:8px">Balance Due: <strong>$' + (s.closing_balance || 0).toFixed(2) + '</strong></div>' +
+          '</div>' +
+          (s.notes ? '<div style="margin-top:12px;padding:8px;background:var(--pos-gray-50);border-radius:6px;font-size:12px"><strong>Notes:</strong> ' + esc(s.notes) + '</div>' : '') +
+        '</div>';
+
+    // Actions
+    html += '<div class="pos-cust-sheet-footer no-print">';
+    if (s.status === 'draft') {
+      html += '<button class="pos-btn" id="posStmtMarkSent" style="background:var(--pos-navy);color:white"><i class="fas fa-paper-plane"></i> Mark Sent</button>';
+    }
+    if (s.status !== 'paid' && s.status !== 'void') {
+      html += '<button class="pos-btn" id="posStmtMarkPaid" style="background:var(--pos-green);color:white"><i class="fas fa-check"></i> Mark Paid</button>';
+    }
+    html += '<div style="flex:1"></div>' +
+      '<button class="pos-btn" id="posStmtPrint" style="background:var(--pos-gray-600);color:white"><i class="fas fa-print"></i> Print</button>' +
+      '<button class="pos-btn pos-btn-hold" id="posStmtDetailCloseBtn">Close</button>' +
+    '</div></div></div>';
+
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    on('posStmtDetailClose', 'click', function() { document.getElementById('posStmtDetailOverlay').remove(); });
+    on('posStmtDetailCloseBtn', 'click', function() { document.getElementById('posStmtDetailOverlay').remove(); });
+
+    on('posStmtMarkSent', 'click', function() {
+      API.patch('/pos/statements/' + id, { status: 'sent', sent_at: new Date().toISOString(), sent_method: 'manual' })
+        .then(function() { toast('Statement marked as sent'); document.getElementById('posStmtDetailOverlay').remove(); openStatementDetail(id); })
+        .catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+    on('posStmtMarkPaid', 'click', function() {
+      API.patch('/pos/statements/' + id, { status: 'paid' })
+        .then(function() { toast('Statement marked as paid'); document.getElementById('posStmtDetailOverlay').remove(); if (_s.view === 'statements') loadStatements(); })
+        .catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+    on('posStmtPrint', 'click', function() {
+      var printArea = document.getElementById('posStmtPrintArea');
+      if (!printArea) return;
+      var w = window.open('', '_blank');
+      w.document.write('<html><head><title>Statement ' + esc(s.statement_number) + '</title>' +
+        '<style>body{font-family:system-ui,-apple-system,sans-serif;padding:20px;font-size:12px}table{width:100%;border-collapse:collapse}th,td{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left}.right{text-align:right}h2{margin:0}' +
+        '.pos-stmt-header-block{display:flex;justify-content:space-between;margin-bottom:16px}.pos-stmt-summary{display:flex;gap:20px;margin:12px 0;padding:10px;background:#f8f8f8;border-radius:4px}' +
+        '.pos-stmt-totals{margin-top:16px;text-align:right;line-height:1.8}.pos-badge{padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700}' +
+        '</style></head><body>' + printArea.innerHTML + '</body></html>');
+      w.document.close();
+      w.print();
+    });
+  }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+}
+
+// ==================== QUICK-EDIT CUSTOMER (inline from panel) ====================
+
+function openQuickEditCustomer(custId) {
+  API.get('/pos/customers/' + custId).then(function(r) {
+    var c = r.data.customer;
+    var acct = r.data.account || {};
+    var crmOrg = r.data.crmOrg;
+
+    var old = document.getElementById('posQuickEditOverlay');
+    if (old) old.remove();
+
+    var html = '<div class="pos-modal-overlay" id="posQuickEditOverlay">' +
+      '<div class="pos-cust-sheet" style="max-width:500px">' +
+        '<div class="pos-cust-sheet-header"><h3><i class="fas fa-pen"></i> Quick Edit</h3>' +
+          '<button class="pos-modal-close" id="posQEClose"><i class="fas fa-times"></i></button></div>' +
+        '<div class="pos-cust-sheet-body" style="padding:16px">' +
+          '<div class="pos-cust-form-grid">' +
+            '<div class="pos-cust-form-group full">' +
+              '<label>Business Name</label>' +
+              '<input type="text" id="posQEBizName" value="' + esc(c.business_name || '') + '">' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Contact Name</label>' +
+              '<input type="text" id="posQEContact" value="' + esc(c.contact_name || '') + '">' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Phone</label>' +
+              '<input type="tel" id="posQEPhone" value="' + esc(c.phone || '') + '">' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Email</label>' +
+              '<input type="email" id="posQEEmail" value="' + esc(c.email || '') + '">' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Payment Terms</label>' +
+              '<select id="posQETerms">' +
+                '<option value="COD"' + ((acct.payment_terms||'COD')==='COD'?' selected':'') + '>COD</option>' +
+                '<option value="Net 7"' + ((acct.payment_terms)==='Net 7'?' selected':'') + '>Net 7</option>' +
+                '<option value="Net 15"' + ((acct.payment_terms)==='Net 15'?' selected':'') + '>Net 15</option>' +
+                '<option value="Net 30"' + ((acct.payment_terms)==='Net 30'?' selected':'') + '>Net 30</option>' +
+                '<option value="Net 60"' + ((acct.payment_terms)==='Net 60'?' selected':'') + '>Net 60</option>' +
+                '<option value="Monthly"' + ((acct.payment_terms)==='Monthly'?' selected':'') + '>Monthly</option>' +
+              '</select>' +
+            '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>Credit Limit</label>' +
+              '<input type="number" id="posQECreditLimit" value="' + (acct.credit_limit || 0) + '" min="0" step="100">' +
+            '</div>' +
+            '<div class="pos-cust-form-group full">' +
+              '<label>Notes</label>' +
+              '<textarea id="posQENotes" rows="3">' + esc(c.notes || '') + '</textarea>' +
+            '</div>' +
+            '<div class="pos-cust-form-group full">' +
+              '<label>Tags</label>' +
+              '<input type="text" id="posQETags" value="' + esc(c.tags || '') + '" placeholder="comma-separated">' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="pos-cust-sheet-footer">' +
+          '<div style="flex:1"></div>' +
+          '<button class="pos-btn pos-btn-hold" id="posQECancelBtn">Cancel</button>' +
+          '<button class="pos-btn pos-btn-pay" id="posQESaveBtn"><i class="fas fa-save"></i> Save</button>' +
+        '</div>' +
+      '</div></div>';
+
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    on('posQEClose', 'click', function() { document.getElementById('posQuickEditOverlay').remove(); });
+    on('posQECancelBtn', 'click', function() { document.getElementById('posQuickEditOverlay').remove(); });
+    on('posQESaveBtn', 'click', function() {
+      var body = {
+        business_name: gv('posQEBizName'),
+        contact_name: gv('posQEContact'),
+        phone: gv('posQEPhone'),
+        email: gv('posQEEmail'),
+        notes: gv('posQENotes'),
+        tags: gv('posQETags'),
+        payment_terms: gv('posQETerms'),
+        credit_limit: parseFloat(gv('posQECreditLimit') || '0')
+      };
+      API.patch('/pos/customer-manage/' + custId, body).then(function(r) {
+        toast('Customer updated');
+        document.getElementById('posQuickEditOverlay').remove();
+        // Refresh customer in register if selected
+        if (_s.customer && _s.customer.id === custId) {
+          selectCustomer(custId);
+        }
+      }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+  }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+}
+
+// ==================== CRM TAB in Customer Sheet ====================
+
+function loadCRMTabContent(custId) {
+  var container = document.getElementById('posCustCRMTabContent');
+  if (!container) return;
+  container.innerHTML = '<div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading CRM data...</div>';
+
+  API.get('/pos/customer-crm/' + custId).then(function(r) {
+    var org = r.data.organization;
+    var contacts = r.data.contacts || [];
+    var activities = r.data.activities || [];
+    var html = '';
+
+    if (org) {
+      html += '<div class="pos-crm-linked-banner"><i class="fas fa-check-circle"></i> Linked to: <strong>' + esc(org.name) + '</strong> (' + esc(org.org_type) + ')</div>';
+      html += fld('Phone', org.phone) + fld('Email', org.email) + fld('Industry', org.industry) + fld('Tags', org.tags);
+
+      if (contacts.length > 0) {
+        html += '<h4 style="margin:12px 0 4px"><i class="fas fa-users"></i> Contacts</h4>';
+        contacts.forEach(function(ct) {
+          html += '<div style="padding:4px 0;border-bottom:1px solid var(--pos-gray-100);font-size:12px">' +
+            '<strong>' + esc((ct.first_name||'') + ' ' + (ct.last_name||'')) + '</strong>' +
+            (ct.is_primary ? ' <span class="pos-badge pos-badge-green">Primary</span>' : '') +
+            (ct.phone ? ' &middot; ' + esc(ct.phone) : '') + (ct.email ? ' &middot; ' + esc(ct.email) : '') +
+          '</div>';
+        });
+      }
+
+      if (activities.length > 0) {
+        html += '<h4 style="margin:12px 0 4px"><i class="fas fa-list-check"></i> Recent Activities</h4>';
+        activities.forEach(function(a) {
+          html += '<div style="padding:4px 0;border-bottom:1px solid var(--pos-gray-100);font-size:12px">' +
+            '<span class="pos-badge">' + esc(a.activity_type) + '</span> ' + esc(a.subject || '') +
+            ' <span style="color:var(--pos-gray-400)">' + (a.activity_date || '').slice(0, 10) + '</span></div>';
+        });
+      }
+
+      html += '<div style="margin-top:12px"><button class="pos-btn pos-btn-sm" id="posCustCRMUnlink" style="background:var(--pos-red);color:white"><i class="fas fa-unlink"></i> Unlink</button>' +
+        ' <button class="pos-btn pos-btn-sm" id="posCustCRMOpen" style="background:var(--pos-navy);color:white"><i class="fas fa-external-link-alt"></i> Full CRM View</button></div>';
+    } else {
+      html += '<div class="pos-crm-unlinked-banner"><i class="fas fa-unlink"></i> Not linked to any CRM organization</div>';
+      html += '<div style="margin:12px 0">' +
+        '<button class="pos-btn pos-btn-pay" id="posCustCRMCreate"><i class="fas fa-plus"></i> Create CRM Organization</button>' +
+        ' <button class="pos-btn pos-btn-sm" id="posCustCRMLinkSearch" style="margin-left:8px"><i class="fas fa-search"></i> Search & Link</button>' +
+      '</div>';
+    }
+
+    container.innerHTML = html;
+
+    on('posCustCRMUnlink', 'click', function() {
+      if (!confirm('Unlink from CRM?')) return;
+      API.delete('/pos/customer-crm-link/' + custId).then(function() { toast('Unlinked'); loadCRMTabContent(custId); })
+        .catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+    on('posCustCRMOpen', 'click', function() {
+      closeCustomerSheet();
+      openCRMLink(custId);
+    });
+    on('posCustCRMCreate', 'click', function() {
+      var user = getUser();
+      API.post('/pos/customer-crm-link', { customer_id: custId, create_org: true, created_by: user ? user.id : null }).then(function() {
+        toast('CRM org created'); loadCRMTabContent(custId);
+      }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+    });
+    on('posCustCRMLinkSearch', 'click', function() {
+      closeCustomerSheet();
+      openCRMLink(custId);
+    });
+  }).catch(function(err) {
+    container.innerHTML = '<div style="color:var(--pos-red)">Error: ' + errMsg(err) + '</div>';
+  });
+}
+
+// ==================== POS ↔ CRM LINKING ====================
+
+function openCRMLink(custId) {
+  API.get('/pos/customer-crm/' + custId).then(function(r) {
+    var org = r.data.organization;
+    var contacts = r.data.contacts || [];
+    var activities = r.data.activities || [];
+    var opportunities = r.data.opportunities || [];
+
+    var old = document.getElementById('posCRMLinkOverlay');
+    if (old) old.remove();
+
+    var html = '<div class="pos-modal-overlay" id="posCRMLinkOverlay">' +
+      '<div class="pos-cust-sheet" style="max-width:700px">' +
+        '<div class="pos-cust-sheet-header"><h3><i class="fas fa-link"></i> CRM Link</h3>' +
+          '<button class="pos-modal-close" id="posCRMLinkClose"><i class="fas fa-times"></i></button></div>' +
+        '<div class="pos-cust-sheet-body" style="padding:16px">';
+
+    if (org) {
+      // Linked — show CRM data
+      html += '<div class="pos-crm-linked-banner"><i class="fas fa-check-circle"></i> Linked to CRM Organization</div>';
+      html += '<div class="pos-cust-section"><h4><i class="fas fa-building"></i> ' + esc(org.name) + '</h4>' +
+        fld('Type', org.org_type) + fld('Phone', org.phone) + fld('Email', org.email) +
+        fld('Industry', org.industry) + fld('Tags', org.tags) +
+        (org.address_street ? fld('Address', org.address_street + ', ' + (org.address_city||'') + ' ' + (org.address_state||'') + ' ' + (org.address_zip||'')) : '') +
+      '</div>';
+
+      if (contacts.length > 0) {
+        html += '<div class="pos-cust-section"><h4><i class="fas fa-users"></i> Contacts (' + contacts.length + ')</h4>';
+        contacts.forEach(function(ct) {
+          html += '<div class="pos-crm-contact-row">' +
+            '<div><strong>' + esc((ct.first_name||'') + ' ' + (ct.last_name||'')) + '</strong>' + (ct.is_primary ? ' <span class="pos-badge pos-badge-green">Primary</span>' : '') + '</div>' +
+            '<div style="font-size:11px;color:var(--pos-gray-500)">' + esc(ct.title||'') + (ct.phone ? ' &middot; ' + esc(ct.phone) : '') + (ct.email ? ' &middot; ' + esc(ct.email) : '') + '</div>' +
+          '</div>';
+        });
+        html += '</div>';
+      }
+
+      if (opportunities.length > 0) {
+        html += '<div class="pos-cust-section"><h4><i class="fas fa-handshake"></i> Opportunities (' + opportunities.length + ')</h4>';
+        opportunities.forEach(function(opp) {
+          var stageClass = opp.stage === 'won' ? 'pos-badge-green' : opp.stage === 'lost' ? 'pos-badge-red' : 'pos-badge-blue';
+          html += '<div style="padding:4px 0;border-bottom:1px solid var(--pos-gray-100);font-size:12px;display:flex;justify-content:space-between">' +
+            '<span>' + esc(opp.name) + '</span><span class="pos-badge ' + stageClass + '">' + esc(opp.stage) + '</span></div>';
+        });
+        html += '</div>';
+      }
+
+      if (activities.length > 0) {
+        html += '<div class="pos-cust-section"><h4><i class="fas fa-list-check"></i> Recent Activities</h4>';
+        activities.forEach(function(a) {
+          html += '<div style="padding:4px 0;border-bottom:1px solid var(--pos-gray-100);font-size:12px">' +
+            '<span class="pos-badge">' + esc(a.activity_type) + '</span> ' + esc(a.subject || '') + ' <span style="color:var(--pos-gray-400)">' + (a.activity_date || '').slice(0, 10) + '</span></div>';
+        });
+        html += '</div>';
+      }
+
+      html += '<div style="margin-top:12px"><button class="pos-btn" id="posCRMUnlink" style="background:var(--pos-red);color:white;font-size:12px"><i class="fas fa-unlink"></i> Unlink from CRM</button></div>';
+    } else {
+      // Not linked — show link options
+      html += '<div class="pos-crm-unlinked-banner"><i class="fas fa-unlink"></i> Not linked to CRM</div>';
+      html += '<div style="margin:16px 0">' +
+        '<h4>Link to Existing Organization</h4>' +
+        '<div style="position:relative;margin:8px 0">' +
+          '<input type="text" id="posCRMLinkSearch" placeholder="Search CRM organizations..." style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:6px">' +
+          '<div id="posCRMLinkResults" style="position:absolute;top:100%;left:0;right:0;background:white;border:1px solid var(--pos-gray-200);border-radius:0 0 6px 6px;max-height:200px;overflow-y:auto;z-index:10;display:none"></div>' +
+        '</div>' +
+        '<div style="margin-top:16px;text-align:center;padding:12px;border:2px dashed var(--pos-gray-200);border-radius:8px">' +
+          '<p style="color:var(--pos-gray-500);margin:0 0 8px;font-size:12px">Or create a new CRM organization from this customer</p>' +
+          '<button class="pos-btn pos-btn-pay" id="posCRMCreateOrg"><i class="fas fa-plus"></i> Create CRM Organization</button>' +
+        '</div>' +
+      '</div>';
+    }
+
+    html += '</div><div class="pos-cust-sheet-footer"><div style="flex:1"></div><button class="pos-btn pos-btn-hold" id="posCRMLinkCloseBtn">Close</button></div></div></div>';
+
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    on('posCRMLinkClose', 'click', function() { document.getElementById('posCRMLinkOverlay').remove(); });
+    on('posCRMLinkCloseBtn', 'click', function() { document.getElementById('posCRMLinkOverlay').remove(); });
+
+    if (org) {
+      on('posCRMUnlink', 'click', function() {
+        if (!confirm('Unlink this customer from CRM organization "' + org.name + '"?')) return;
+        API.delete('/pos/customer-crm-link/' + custId).then(function() {
+          toast('CRM link removed');
+          document.getElementById('posCRMLinkOverlay').remove();
+          openCRMLink(custId);
+        }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+      });
+    } else {
+      // Search CRM orgs
+      var searchTimer;
+      var searchInp = document.getElementById('posCRMLinkSearch');
+      if (searchInp) searchInp.addEventListener('input', function() {
+        clearTimeout(searchTimer);
+        var term = searchInp.value;
+        if (term.length < 2) { document.getElementById('posCRMLinkResults').style.display = 'none'; return; }
+        searchTimer = setTimeout(function() {
+          API.get('/pos/crm-orgs-search?search=' + encodeURIComponent(term)).then(function(r) {
+            var results = document.getElementById('posCRMLinkResults');
+            var orgs = r.data || [];
+            if (orgs.length === 0) { results.innerHTML = '<div style="padding:8px;color:var(--pos-gray-400)">No unlinked organizations found</div>'; results.style.display = 'block'; return; }
+            var h = '';
+            orgs.forEach(function(o) {
+              h += '<div class="pos-customer-option" data-link-org="' + o.id + '">' +
+                '<div style="font-weight:600;font-size:13px">' + esc(o.name) + '</div>' +
+                '<div style="font-size:11px;color:var(--pos-gray-500)">' + esc(o.org_type || '') + (o.phone ? ' &middot; ' + esc(o.phone) : '') + '</div>' +
+              '</div>';
+            });
+            results.innerHTML = h;
+            results.style.display = 'block';
+            results.querySelectorAll('[data-link-org]').forEach(function(opt) {
+              opt.addEventListener('click', function() {
+                API.post('/pos/customer-crm-link', { customer_id: custId, organization_id: parseInt(opt.dataset.linkOrg) }).then(function() {
+                  toast('Linked to CRM organization');
+                  document.getElementById('posCRMLinkOverlay').remove();
+                  openCRMLink(custId);
+                }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+              });
+            });
+          });
+        }, 300);
+      });
+
+      on('posCRMCreateOrg', 'click', function() {
+        var user = getUser();
+        API.post('/pos/customer-crm-link', { customer_id: custId, create_org: true, created_by: user ? user.id : null }).then(function(r) {
+          toast('CRM organization created and linked');
+          document.getElementById('posCRMLinkOverlay').remove();
+          openCRMLink(custId);
+        }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+      });
+    }
+  }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
 }
 
 // ==================== UTILITY ====================

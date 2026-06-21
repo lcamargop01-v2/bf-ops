@@ -1727,4 +1727,452 @@ app.put('/api/pos/darts-sync/:type/:id', async (c) => {
   return c.json({ success: true, synced })
 })
 
+// ==================== POS INVENTORY REQUESTS ====================
+
+// Create inventory request from POS
+app.post('/api/pos/inventory-request', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+
+  if (!body.items || body.items.length === 0) return c.json({ error: 'At least one item required' }, 400)
+  if (!body.location_id) return c.json({ error: 'Location required' }, 400)
+
+  const num = 'PIR-' + Date.now().toString(36).toUpperCase()
+
+  const r = await db.prepare(`
+    INSERT INTO pos_inventory_requests (request_number, location_id, urgency, requested_by, requested_by_name, reason, notes)
+    VALUES (?,?,?,?,?,?,?)
+  `).bind(num, body.location_id, body.urgency || 'normal', body.requested_by || null, body.requested_by_name || '', body.reason || '', body.notes || '').run()
+
+  const reqId = r.meta.last_row_id
+
+  for (const item of body.items) {
+    await db.prepare(`
+      INSERT INTO pos_inventory_request_items (request_id, product_id, product_name, qty_requested, current_stock, reorder_point, unit, notes)
+      VALUES (?,?,?,?,?,?,?,?)
+    `).bind(reqId, item.product_id, item.product_name || '', item.qty_requested || 1, item.current_stock || 0, item.reorder_point || 0, item.unit || 'each', item.notes || '').run()
+  }
+
+  return c.json({ id: reqId, request_number: num, success: true }, 201)
+})
+
+// List inventory requests
+app.get('/api/pos/inventory-requests', async (c) => {
+  const db = c.env.DB
+  const locationId = c.req.query('location_id') || ''
+  const status = c.req.query('status') || ''
+
+  let where = 'WHERE 1=1'
+  const params: any[] = []
+  if (locationId) { where += ' AND r.location_id = ?'; params.push(locationId) }
+  if (status) { where += ' AND r.status = ?'; params.push(status) }
+
+  const rows = await db.prepare(`
+    SELECT r.*, l.name as location_name,
+           (SELECT COUNT(*) FROM pos_inventory_request_items WHERE request_id = r.id) as item_count,
+           (SELECT SUM(qty_requested) FROM pos_inventory_request_items WHERE request_id = r.id) as total_qty
+    FROM pos_inventory_requests r
+    LEFT JOIN locations l ON l.id = r.location_id
+    ${where}
+    ORDER BY CASE r.urgency WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, r.created_at DESC
+    LIMIT 100
+  `).bind(...params).all<any>()
+
+  return c.json(rows.results || [])
+})
+
+// Get inventory request detail
+app.get('/api/pos/inventory-request/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const req = await db.prepare(`
+    SELECT r.*, l.name as location_name
+    FROM pos_inventory_requests r LEFT JOIN locations l ON l.id = r.location_id WHERE r.id = ?
+  `).bind(id).first()
+  if (!req) return c.json({ error: 'Request not found' }, 404)
+
+  const items = await db.prepare('SELECT * FROM pos_inventory_request_items WHERE request_id = ? ORDER BY id').bind(id).all()
+  return c.json({ request: req, items: items.results || [] })
+})
+
+// Update inventory request status (approve/reject/cancel)
+app.patch('/api/pos/inventory-request/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+
+  const fields: string[] = []
+  const vals: any[] = []
+
+  if (body.status) { fields.push('status = ?'); vals.push(body.status) }
+  if (body.review_notes !== undefined) { fields.push('review_notes = ?'); vals.push(body.review_notes) }
+  if (body.reviewed_by) { fields.push('reviewed_by = ?'); vals.push(body.reviewed_by) }
+  if (body.reviewed_by_name) { fields.push('reviewed_by_name = ?'); vals.push(body.reviewed_by_name) }
+  if (body.status === 'approved' || body.status === 'rejected') {
+    fields.push('reviewed_at = CURRENT_TIMESTAMP')
+  }
+  if (body.converted_po_id) { fields.push('converted_po_id = ?'); vals.push(body.converted_po_id) }
+  if (body.converted_transfer_id) { fields.push('converted_transfer_id = ?'); vals.push(body.converted_transfer_id) }
+  fields.push('updated_at = CURRENT_TIMESTAMP')
+  vals.push(id)
+
+  await db.prepare(`UPDATE pos_inventory_requests SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run()
+  return c.json({ success: true })
+})
+
+// ==================== QUICK-EDIT CUSTOMER (PATCH) ====================
+app.patch('/api/pos/customer-manage/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+
+  const existing = await db.prepare('SELECT id FROM customers WHERE id = ?').bind(id).first()
+  if (!existing) return c.json({ error: 'Customer not found' }, 404)
+
+  const allowed = ['business_name', 'contact_name', 'phone', 'email', 'notes', 'tags', 'customer_type', 'tax_exempt', 'priority_rank', 'sponsor_discount', 'location_id', 'salesperson_id', 'salesperson_name']
+  const fields: string[] = []
+  const vals: any[] = []
+
+  for (const key of allowed) {
+    if (body[key] !== undefined) {
+      fields.push(`${key} = ?`)
+      vals.push(body[key])
+    }
+  }
+
+  if (fields.length === 0) return c.json({ error: 'No fields to update' }, 400)
+
+  fields.push('updated_at = CURRENT_TIMESTAMP')
+  vals.push(id)
+
+  await db.prepare(`UPDATE customers SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run()
+
+  // Also update account terms if provided
+  if (body.payment_terms || body.credit_limit !== undefined) {
+    const acctFields: string[] = []
+    const acctVals: any[] = []
+    if (body.payment_terms) { acctFields.push('payment_terms = ?'); acctVals.push(body.payment_terms) }
+    if (body.credit_limit !== undefined) { acctFields.push('credit_limit = ?'); acctVals.push(body.credit_limit) }
+    acctFields.push('updated_at = CURRENT_TIMESTAMP')
+    acctVals.push(id)
+
+    // Ensure account exists
+    await db.prepare('INSERT INTO customer_accounts (customer_id) VALUES (?) ON CONFLICT(customer_id) DO NOTHING').bind(id).run()
+    await db.prepare(`UPDATE customer_accounts SET ${acctFields.join(', ')} WHERE customer_id = ?`).bind(...acctVals).run()
+  }
+
+  const updated = await db.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first()
+  const acct = await db.prepare('SELECT * FROM customer_accounts WHERE customer_id = ?').bind(id).first()
+  return c.json({ success: true, customer: updated, account: acct })
+})
+
+// ==================== MONTHLY STATEMENT SYSTEM ====================
+
+// Generate a statement for a customer for a given period
+app.post('/api/pos/statements/generate', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+
+  if (!body.customer_id) return c.json({ error: 'Customer required' }, 400)
+  if (!body.period_start || !body.period_end) return c.json({ error: 'Period start and end dates required' }, 400)
+
+  const customer = await db.prepare('SELECT id, business_name, contact_name FROM customers WHERE id = ?').bind(body.customer_id).first<any>()
+  if (!customer) return c.json({ error: 'Customer not found' }, 404)
+
+  // Get opening balance from account transactions before period_start
+  const priorBal = await db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) as bal
+    FROM customer_account_transactions
+    WHERE customer_id = ? AND created_at < ?
+  `).bind(body.customer_id, body.period_start).first<any>()
+  const openingBalance = priorBal?.bal || 0
+
+  // Get all sales in period
+  const sales = await db.prepare(`
+    SELECT s.id, s.sale_number, s.total, s.created_at, s.sale_type,
+           (SELECT GROUP_CONCAT(method || ':' || amount) FROM pos_payments WHERE sale_id = s.id) as payments
+    FROM pos_sales s
+    WHERE s.customer_id = ? AND DATE(s.created_at) >= ? AND DATE(s.created_at) <= ? AND s.status = 'completed'
+    ORDER BY s.created_at
+  `).bind(body.customer_id, body.period_start, body.period_end).all<any>()
+
+  // Get account transactions in period (payments, credits, adjustments)
+  const txns = await db.prepare(`
+    SELECT * FROM customer_account_transactions
+    WHERE customer_id = ? AND DATE(created_at) >= ? AND DATE(created_at) <= ?
+    ORDER BY created_at
+  `).bind(body.customer_id, body.period_start, body.period_end).all<any>()
+
+  // Build statement lines
+  const lines: any[] = []
+  let runBal = openingBalance
+  let totalCharges = 0, totalPayments = 0, totalCredits = 0
+
+  // Opening balance line
+  lines.push({
+    line_date: body.period_start,
+    line_type: 'opening_balance',
+    description: 'Opening Balance',
+    amount: openingBalance,
+    running_balance: openingBalance
+  })
+
+  // Merge sales (as charges) and transactions, sorted by date
+  const allEvents: any[] = []
+
+  for (const s of (sales.results || [])) {
+    // Check if sale was charged to account (has 'account' payment)
+    const payStr = s.payments || ''
+    if (payStr.includes('account:')) {
+      const acctAmt = parseFloat((payStr.match(/account:([\d.]+)/) || [, '0'])[1])
+      if (acctAmt > 0) {
+        allEvents.push({ date: s.created_at, type: 'charge', desc: `POS Sale ${s.sale_number}`, amount: acctAmt, ref_type: 'pos_sale', ref_id: s.id, ref_number: s.sale_number })
+        totalCharges += acctAmt
+      }
+    }
+  }
+
+  for (const t of (txns.results || [])) {
+    if (t.transaction_type === 'payment') {
+      allEvents.push({ date: t.created_at, type: 'payment', desc: t.description || 'Payment', amount: t.amount, ref_type: 'payment', ref_id: t.id })
+      totalPayments += Math.abs(t.amount)
+    } else if (t.transaction_type === 'credit' || t.transaction_type === 'refund') {
+      allEvents.push({ date: t.created_at, type: 'credit', desc: t.description || 'Credit/Refund', amount: t.amount, ref_type: t.transaction_type, ref_id: t.id })
+      totalCredits += Math.abs(t.amount)
+    } else if (t.transaction_type === 'adjustment') {
+      allEvents.push({ date: t.created_at, type: 'adjustment', desc: t.description || 'Adjustment', amount: t.amount, ref_type: 'adjustment', ref_id: t.id })
+    }
+  }
+
+  // Sort by date
+  allEvents.sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+
+  for (const ev of allEvents) {
+    runBal += ev.amount
+    lines.push({
+      line_date: (ev.date || '').slice(0, 10),
+      line_type: ev.type,
+      description: ev.desc,
+      reference_type: ev.ref_type,
+      reference_id: ev.ref_id,
+      reference_number: ev.ref_number || '',
+      amount: ev.amount,
+      running_balance: runBal
+    })
+  }
+
+  const closingBalance = runBal
+  const stmtNum = 'STMT-' + Date.now().toString(36).toUpperCase()
+  const dueDate = body.due_date || new Date(new Date(body.period_end).getTime() + 30 * 86400000).toISOString().slice(0, 10)
+
+  const r = await db.prepare(`
+    INSERT INTO customer_statements (statement_number, customer_id, period_start, period_end, opening_balance, total_charges, total_payments, total_credits, closing_balance, due_date, generated_by, generated_by_name, notes)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(stmtNum, body.customer_id, body.period_start, body.period_end, openingBalance, totalCharges, totalPayments, totalCredits, closingBalance, dueDate, body.generated_by || null, body.generated_by_name || '', body.notes || '').run()
+
+  const stmtId = r.meta.last_row_id
+
+  for (const line of lines) {
+    await db.prepare(`
+      INSERT INTO customer_statement_lines (statement_id, line_date, line_type, description, reference_type, reference_id, reference_number, amount, running_balance)
+      VALUES (?,?,?,?,?,?,?,?,?)
+    `).bind(stmtId, line.line_date, line.line_type, line.description, line.reference_type || null, line.reference_id || null, line.reference_number || '', line.amount, line.running_balance).run()
+  }
+
+  return c.json({ id: stmtId, statement_number: stmtNum, opening_balance: openingBalance, closing_balance: closingBalance, total_charges: totalCharges, total_payments: totalPayments, total_credits: totalCredits, line_count: lines.length, due_date: dueDate }, 201)
+})
+
+// List statements for a customer
+app.get('/api/pos/statements', async (c) => {
+  const db = c.env.DB
+  const customerId = c.req.query('customer_id') || ''
+  const status = c.req.query('status') || ''
+
+  let where = 'WHERE 1=1'
+  const params: any[] = []
+  if (customerId) { where += ' AND s.customer_id = ?'; params.push(customerId) }
+  if (status) { where += ' AND s.status = ?'; params.push(status) }
+
+  const rows = await db.prepare(`
+    SELECT s.*, c.business_name, c.contact_name, c.phone, c.email
+    FROM customer_statements s
+    LEFT JOIN customers c ON c.id = s.customer_id
+    ${where}
+    ORDER BY s.created_at DESC LIMIT 100
+  `).bind(...params).all<any>()
+
+  return c.json(rows.results || [])
+})
+
+// Get statement detail with lines
+app.get('/api/pos/statements/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const stmt = await db.prepare(`
+    SELECT s.*, c.business_name, c.contact_name, c.phone, c.email,
+           (SELECT street || ', ' || city || ' ' || state || ' ' || zip FROM addresses WHERE customer_id = c.id AND is_primary = 1 LIMIT 1) as address
+    FROM customer_statements s
+    LEFT JOIN customers c ON c.id = s.customer_id
+    WHERE s.id = ?
+  `).bind(id).first()
+  if (!stmt) return c.json({ error: 'Statement not found' }, 404)
+
+  const lines = await db.prepare('SELECT * FROM customer_statement_lines WHERE statement_id = ? ORDER BY line_date, id').bind(id).all()
+  return c.json({ statement: stmt, lines: lines.results || [] })
+})
+
+// Update statement status (mark sent, paid, etc.)
+app.patch('/api/pos/statements/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+
+  const fields: string[] = []
+  const vals: any[] = []
+
+  if (body.status) { fields.push('status = ?'); vals.push(body.status) }
+  if (body.sent_at) { fields.push('sent_at = ?'); vals.push(body.sent_at) }
+  if (body.sent_method) { fields.push('sent_method = ?'); vals.push(body.sent_method) }
+  if (body.notes !== undefined) { fields.push('notes = ?'); vals.push(body.notes) }
+  fields.push('updated_at = CURRENT_TIMESTAMP')
+  vals.push(id)
+
+  await db.prepare(`UPDATE customer_statements SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run()
+  return c.json({ success: true })
+})
+
+// List monthly-account customers (payment_terms != 'COD')
+app.get('/api/pos/account-customers', async (c) => {
+  const db = c.env.DB
+  const rows = await db.prepare(`
+    SELECT c.id, c.business_name, c.contact_name, c.phone, c.email,
+           ca.balance, ca.credit_limit, ca.payment_terms, ca.status as account_status,
+           ca.last_payment_date, ca.last_payment_amount,
+           (SELECT COUNT(*) FROM pos_sales WHERE customer_id = c.id AND status = 'completed') as total_sales,
+           (SELECT MAX(created_at) FROM pos_sales WHERE customer_id = c.id AND status = 'completed') as last_sale_date,
+           (SELECT COUNT(*) FROM customer_statements WHERE customer_id = c.id) as statement_count,
+           (SELECT MAX(period_end) FROM customer_statements WHERE customer_id = c.id) as last_statement_period
+    FROM customers c
+    JOIN customer_accounts ca ON ca.customer_id = c.id
+    WHERE c.active = 1 AND ca.payment_terms != 'COD'
+    ORDER BY ca.balance DESC
+  `).all<any>()
+  return c.json(rows.results || [])
+})
+
+// ==================== POS ↔ CRM CUSTOMER LINKING ====================
+
+// Link POS customer to CRM org
+app.post('/api/pos/customer-crm-link', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+
+  if (!body.customer_id) return c.json({ error: 'customer_id required' }, 400)
+
+  if (body.organization_id) {
+    // Link to existing CRM org
+    await db.prepare('UPDATE crm_organizations SET customer_id = ?, org_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .bind(body.customer_id, 'customer', body.organization_id).run()
+    return c.json({ success: true, linked: 'organization', id: body.organization_id })
+  }
+
+  if (body.contact_id) {
+    // Link to existing CRM contact
+    await db.prepare('UPDATE crm_contacts SET customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .bind(body.customer_id, body.contact_id).run()
+    return c.json({ success: true, linked: 'contact', id: body.contact_id })
+  }
+
+  if (body.create_org) {
+    // Create new CRM org from customer data
+    const cust = await db.prepare('SELECT * FROM customers WHERE id = ?').bind(body.customer_id).first<any>()
+    if (!cust) return c.json({ error: 'Customer not found' }, 404)
+
+    const addr = await db.prepare('SELECT * FROM addresses WHERE customer_id = ? AND is_primary = 1 LIMIT 1').bind(body.customer_id).first<any>()
+
+    const r = await db.prepare(`
+      INSERT INTO crm_organizations (name, phone, email, address_street, address_city, address_state, address_zip, industry, org_type, customer_id, notes, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    `).bind(
+      cust.business_name || cust.contact_name || 'Unknown',
+      cust.phone || '', cust.email || '',
+      addr?.street || '', addr?.city || '', addr?.state || 'FL', addr?.zip || '',
+      'equestrian', 'customer', body.customer_id,
+      cust.notes || '',
+      body.created_by || null
+    ).run()
+
+    const orgId = r.meta.last_row_id
+
+    // Also create a CRM contact if contact_name exists
+    if (cust.contact_name) {
+      const nameParts = (cust.contact_name || '').split(' ')
+      const firstName = nameParts[0] || ''
+      const lastName = nameParts.slice(1).join(' ') || ''
+      await db.prepare(`
+        INSERT INTO crm_contacts (first_name, last_name, phone, email, organization_id, is_primary, lead_status, customer_id, created_by)
+        VALUES (?,?,?,?,?,1,'converted',?,?)
+      `).bind(firstName, lastName, cust.phone || '', cust.email || '', orgId, body.customer_id, body.created_by || null).run()
+    }
+
+    return c.json({ success: true, linked: 'organization', id: orgId, created: true })
+  }
+
+  return c.json({ error: 'Provide organization_id, contact_id, or set create_org: true' }, 400)
+})
+
+// Unlink POS customer from CRM
+app.delete('/api/pos/customer-crm-link/:customerId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  await db.prepare('UPDATE crm_organizations SET customer_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE customer_id = ?').bind(customerId).run()
+  await db.prepare('UPDATE crm_contacts SET customer_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE customer_id = ?').bind(customerId).run()
+  return c.json({ success: true })
+})
+
+// Search CRM orgs for linking (not already linked)
+app.get('/api/pos/crm-orgs-search', async (c) => {
+  const db = c.env.DB
+  const search = c.req.query('search') || ''
+  const rows = await db.prepare(`
+    SELECT id, name, phone, email, org_type, customer_id FROM crm_organizations
+    WHERE (name LIKE ? OR phone LIKE ? OR email LIKE ?) AND customer_id IS NULL
+    ORDER BY name LIMIT 20
+  `).bind(`%${search}%`, `%${search}%`, `%${search}%`).all<any>()
+  return c.json(rows.results || [])
+})
+
+// Get full CRM data for a customer
+app.get('/api/pos/customer-crm/:customerId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+
+  const org = await db.prepare('SELECT * FROM crm_organizations WHERE customer_id = ?').bind(customerId).first<any>()
+  const contacts = org
+    ? await db.prepare('SELECT * FROM crm_contacts WHERE organization_id = ? ORDER BY is_primary DESC').bind(org.id).all<any>()
+    : { results: [] }
+  const directContacts = await db.prepare('SELECT * FROM crm_contacts WHERE customer_id = ? AND organization_id IS NULL').bind(customerId).all<any>()
+
+  let recentActivities: any = { results: [] }
+  if (org) {
+    recentActivities = await db.prepare(`
+      SELECT * FROM crm_activities WHERE organization_id = ? ORDER BY activity_date DESC LIMIT 10
+    `).bind(org.id).all<any>()
+  }
+
+  let opportunities: any = { results: [] }
+  if (org) {
+    opportunities = await db.prepare(`
+      SELECT * FROM crm_opportunities WHERE organization_id = ? ORDER BY created_at DESC LIMIT 10
+    `).bind(org.id).all<any>()
+  }
+
+  return c.json({
+    organization: org,
+    contacts: (contacts.results || []).concat(directContacts.results || []),
+    activities: recentActivities.results || [],
+    opportunities: opportunities.results || []
+  })
+})
+
 export { app as posApp }

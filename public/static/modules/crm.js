@@ -899,7 +899,7 @@ function crmRenderOrgDetail() {
           '<div class="crm-detail-meta">' +
             crmOrgTypeBadge(org.org_type) +
             (org.industry ? '<span class="crm-muted" style="margin-left:8px">' + crmEsc(org.industry) + '</span>' : '') +
-            (org.customer_id ? '<span class="crm-badge-converted"><i class="fas fa-check-circle"></i> POS Customer #' + org.customer_id + '</span>' : '') +
+            (org.customer_id ? '<span class="crm-badge-converted crm-pos-link" data-pos-customer="' + org.customer_id + '" style="cursor:pointer" title="View POS Customer"><i class="fas fa-check-circle"></i> POS Customer #' + org.customer_id + ' <i class="fas fa-external-link-alt" style="font-size:9px"></i></span>' : '') +
           '</div>' +
         '</div>' +
       '</div>' +

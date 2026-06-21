@@ -465,4 +465,146 @@
   .pos-cust-sheet { max-width: 100%; border-radius: 0; max-height: 100vh; }
   .pos-cust-form-grid { grid-template-columns: 1fr; }
   .pos-cust-filters input { min-width: 150px; }
+  .pos-stmt-grid { grid-template-columns: 1fr; }
+  .pos-stmt-header-block { flex-direction: column; gap: 8px; }
+  .pos-stmt-summary { flex-direction: column; gap: 4px; }
 }
+
+/* ==================== INVENTORY REQUESTS ==================== */
+.pos-inv-requests { padding: 16px; }
+
+/* ==================== STATEMENTS ==================== */
+.pos-statements { padding: 16px; }
+
+.pos-stmt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.pos-stmt-card {
+  background: white;
+  border: 1px solid var(--pos-gray-200);
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+
+.pos-stmt-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+
+.pos-stmt-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.pos-stmt-card-name { font-weight: 700; font-size: 14px; color: var(--pos-navy); }
+
+.pos-stmt-card-body { margin-bottom: 10px; }
+
+.pos-stmt-card-info { font-size: 12px; color: var(--pos-gray-500); line-height: 1.6; }
+
+.pos-stmt-card-actions {
+  display: flex;
+  gap: 6px;
+  border-top: 1px solid var(--pos-gray-100);
+  padding-top: 10px;
+}
+
+/* Statement Detail */
+.pos-stmt-detail .pos-stmt-header-block {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--pos-navy);
+}
+
+.pos-stmt-summary {
+  display: flex;
+  gap: 24px;
+  padding: 10px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--pos-gray-100);
+  margin-bottom: 12px;
+}
+
+.pos-stmt-totals {
+  margin-top: 16px;
+  text-align: right;
+  line-height: 1.8;
+  font-size: 13px;
+}
+
+.pos-stmt-lines-table th { font-size: 11px; }
+.pos-stmt-lines-table td { font-size: 12px; }
+
+/* ==================== CRM LINKING ==================== */
+.pos-crm-linked-banner {
+  background: #ECFDF5;
+  color: #059669;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.pos-crm-unlinked-banner {
+  background: #FFF7ED;
+  color: #EA580C;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.pos-crm-contact-row {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--pos-gray-100);
+}
+
+/* ==================== CUSTOMER PANEL ACTIONS ==================== */
+.pos-cust-panel-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.pos-cust-panel-actions .pos-btn-sm {
+  background: var(--pos-navy);
+  color: white;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.pos-cust-panel-actions .pos-btn-sm:hover {
+  opacity: 0.85;
+}
+
+/* ==================== INLINE INPUT ==================== */
+.pos-inline-input {
+  border: 1px solid var(--pos-gray-200);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  background: white;
+}
+
+.pos-inline-input:focus {
+  border-color: var(--pos-navy);
+  outline: none;
+}
+
+/* ==================== PRINT STYLES ==================== */
+@media print {
+  .no-print { display: none !important; }
+  .pos-stmt-print { padding: 0 !important; }
+  .pos-cust-sheet { max-width: 100% !important; box-shadow: none !important; border: none !important; }
