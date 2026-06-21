@@ -3161,6 +3161,21 @@ async function showNewOrderModal() {
         </div>
         <div class="form-group"><label class="form-label">Delivery Address</label>
           <select class="form-select" id="newOrderAddress"><option value="">Select customer first...</option></select>
+          <div id="logNewAddrToggle" style="margin-top:4px"><a href="javascript:void(0)" onclick="document.getElementById('logNewAddrForm').style.display='block';this.style.display='none'" style="font-size:12px;color:var(--navy,#1e40af)"><i class="fas fa-plus"></i> Add New Address</a></div>
+          <div id="logNewAddrForm" style="display:none;margin-top:6px;padding:10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px">
+            <div style="font-weight:600;font-size:12px;color:var(--navy,#1e40af);margin-bottom:6px"><i class="fas fa-plus"></i> New Delivery Address</div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label" style="font-size:11px">Label</label><input class="form-input" id="logNewAddrLabel" placeholder="e.g. Farm, Barn"></div>
+              <div class="form-group"><label class="form-label" style="font-size:11px">Street *</label><input class="form-input" id="logNewAddrStreet" placeholder="Street address"></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label" style="font-size:11px">City *</label><input class="form-input" id="logNewAddrCity" placeholder="City"></div>
+              <div class="form-group"><label class="form-label" style="font-size:11px">State</label><input class="form-input" id="logNewAddrState" placeholder="FL" maxlength="2" style="width:60px"></div>
+              <div class="form-group"><label class="form-label" style="font-size:11px">ZIP</label><input class="form-input" id="logNewAddrZip" placeholder="ZIP"></div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="saveLogNewAddress()"><i class="fas fa-save"></i> Save</button>
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('logNewAddrForm').style.display='none';document.getElementById('logNewAddrToggle').querySelector('a').style.display=''" style="margin-left:4px">Cancel</button>
+          </div>
         </div>
       </div>
       <div class="form-row-3">
@@ -3784,7 +3799,37 @@ async function loadCustomerAddresses(custId) {
   if (!custId) return;
   const { data } = await API.get(`/customers/${custId}`);
   const sel = document.getElementById('newOrderAddress');
-  sel.innerHTML = data.addresses.map(a => `<option value="${a.id}">${a.label}: ${a.street}, ${a.city}</option>`).join('');
+  sel.innerHTML = '<option value="">Select address...</option>' +
+    data.addresses.map(a => {
+      var full = (a.label ? a.label + ': ' : '') + (a.street || '') + ', ' + (a.city || '') + (a.state ? ', ' + a.state : '') + (a.zip ? ' ' + a.zip : '') + (a.is_primary ? ' ★' : '');
+      return `<option value="${a.id}" ${a.is_primary ? 'selected' : ''}>${full}</option>`;
+    }).join('');
+  window._logCurrentCustId = custId;
+}
+
+async function saveLogNewAddress() {
+  var custId = window._logCurrentCustId || document.getElementById('newOrderCustomer')?.value;
+  if (!custId) { showToast('Select a customer first', 'warning'); return; }
+  var street = document.getElementById('logNewAddrStreet')?.value;
+  var city = document.getElementById('logNewAddrCity')?.value;
+  if (!street || !city) { showToast('Street and city are required', 'warning'); return; }
+  try {
+    const { data } = await API.post('/pos/customers/' + custId + '/addresses', {
+      label: document.getElementById('logNewAddrLabel')?.value || null,
+      street: street,
+      city: city,
+      state: document.getElementById('logNewAddrState')?.value || null,
+      zip: document.getElementById('logNewAddrZip')?.value || null
+    });
+    showToast('Address saved');
+    document.getElementById('logNewAddrForm').style.display = 'none';
+    document.getElementById('logNewAddrToggle').querySelector('a').style.display = '';
+    // Reload addresses
+    await loadCustomerAddresses(custId);
+    // Select the new address
+    var sel = document.getElementById('newOrderAddress');
+    if (sel && data.id) sel.value = data.id;
+  } catch(err) { showToast('Failed: ' + (err.response?.data?.error || err.message), 'error'); }
 }
 
 async function submitNewOrder() {

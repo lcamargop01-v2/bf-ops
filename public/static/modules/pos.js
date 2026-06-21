@@ -35,7 +35,10 @@ var _s = {
   appliedPromo: null, // { promo_id, discount, description, code }
   promoCode: '',
   mergeMode: false,
-  mergeTarget: null // first customer selected for merge
+  mergeTarget: null, // first customer selected for merge
+  fees: [], // loaded from /api/pos/fees
+  appliedFuelSurcharge: 0,
+  appliedCCFee: 0
 };
 
 // ==================== INIT ====================
@@ -51,10 +54,11 @@ window._posInit = function() {
   _s.deliveryReq = false;
   _s.productCache = {};
 
-  // Load locations first, then check session
+  // Load locations, categories, and fees, then check session
   Promise.all([
     API.get('/pos/locations').then(function(r) { _s.locations = r.data || []; }).catch(function() {}),
-    API.get('/pos/categories').then(function(r) { _s.categories = r.data || []; }).catch(function() {})
+    API.get('/pos/categories').then(function(r) { _s.categories = r.data || []; }).catch(function() {}),
+    API.get('/pos/fees').then(function(r) { _s.fees = r.data || []; }).catch(function() { _s.fees = []; })
   ]).then(function() {
     checkExistingSession();
   });
@@ -200,6 +204,8 @@ function renderRegisterView() {
         '<button class="pos-topbar-btn" id="posBtnCust"><i class="fas fa-address-book"></i> <span class="hide-mobile">Customers</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnInvReq"><i class="fas fa-boxes-stacked"></i> <span class="hide-mobile">Stock Req</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnStmts"><i class="fas fa-file-invoice-dollar"></i> <span class="hide-mobile">Statements</span></button>' +
+        '<button class="pos-topbar-btn" id="posBtnTaxReport"><i class="fas fa-receipt"></i> <span class="hide-mobile">Tax Report</span></button>' +
+        '<button class="pos-topbar-btn" id="posBtnFeeAdmin"><i class="fas fa-sliders"></i> <span class="hide-mobile">Fees</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnHeld"><i class="fas fa-pause-circle"></i> <span class="hide-mobile">Held</span> <span id="posHeldBadge" class="pos-held-badge" style="display:none">0</span></button>' +
         '<button class="pos-topbar-btn danger" id="posBtnClose"><i class="fas fa-power-off"></i> <span class="hide-mobile">Close</span></button>' +
       '</div>' +
@@ -217,6 +223,8 @@ function renderRegisterView() {
   on('posBtnCust', 'click', function() { switchView('customers'); });
   on('posBtnInvReq', 'click', function() { switchView('inventory-requests'); });
   on('posBtnStmts', 'click', function() { switchView('statements'); });
+  on('posBtnTaxReport', 'click', function() { switchView('tax-report'); });
+  on('posBtnFeeAdmin', 'click', function() { switchView('fee-admin'); });
   on('posBtnHeld', 'click', showHeld);
   on('posBtnClose', 'click', closeSession);
 
@@ -236,6 +244,8 @@ function switchView(view) {
   else if (view === 'customers') loadCustomerList();
   else if (view === 'inventory-requests') loadInventoryRequests();
   else if (view === 'statements') loadStatements();
+  else if (view === 'tax-report') loadTaxReport();
+  else if (view === 'fee-admin') loadFeeAdmin();
 }
 
 // ==================== REGISTER CONTENT ====================
@@ -517,6 +527,9 @@ function renderCartFooter() {
   } else {
     html += '<div class="pos-cart-total-row"><span>Tax</span><span>$' + totals.tax.toFixed(2) + '</span></div>';
   }
+  if (totals.fuelSurcharge > 0) {
+    html += '<div class="pos-cart-total-row"><span><i class="fas fa-gas-pump" style="color:var(--pos-orange)"></i> Fuel Surcharge</span><span>$' + totals.fuelSurcharge.toFixed(2) + '</span></div>';
+  }
   html += '<div class="pos-cart-total-row grand"><span>Total</span><span>$' + totals.total.toFixed(2) + '</span></div></div>';
 
   // === CROSS-LOCATION OPTIONS ===
@@ -550,10 +563,41 @@ function renderCartFooter() {
       if (_s.customerAddresses.length > 0) {
         var addrOpts = '<option value="">Select address...</option>';
         _s.customerAddresses.forEach(function(a) {
-          var label = (a.label || a.street || 'Address #' + a.id);
-          addrOpts += '<option value="' + a.id + '" ' + (a.is_primary ? 'selected' : '') + '>' + esc(label) + '</option>';
+          var full = (a.label ? a.label + ': ' : '') + (a.street || '') + ', ' + (a.city || '') + (a.state ? ', ' + a.state : '') + (a.zip ? ' ' + a.zip : '') + (a.is_primary ? ' ★' : '');
+          addrOpts += '<option value="' + a.id + '" ' + (a.is_primary ? 'selected' : '') + '>' + esc(full) + '</option>';
         });
+        addrOpts += '<option value="__new__">➕ Add New Address...</option>';
         html += '<div><label><i class="fas fa-map-marker-alt"></i> Address</label><select id="posDeliveryAddr">' + addrOpts + '</select></div>';
+        html += '<div id="posNewAddrForm" style="display:none;background:var(--pos-gray-50);border:1px solid var(--pos-gray-200);border-radius:8px;padding:10px;margin-top:6px">' +
+          '<div style="font-weight:600;font-size:12px;margin-bottom:6px"><i class="fas fa-plus"></i> New Address</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">' +
+          '<input type="text" id="posNewAddrLabel" placeholder="Label (e.g. Farm, Home)" style="padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '<input type="text" id="posNewAddrStreet" placeholder="Street *" style="padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '<input type="text" id="posNewAddrCity" placeholder="City *" style="padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '<div style="display:flex;gap:4px">' +
+          '<input type="text" id="posNewAddrState" placeholder="State" maxlength="2" style="width:50px;padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '<input type="text" id="posNewAddrZip" placeholder="ZIP" style="flex:1;padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '</div></div>' +
+          '<div style="margin-top:6px;display:flex;gap:6px">' +
+          '<button class="pos-btn pos-btn-sm" id="posNewAddrSave" style="background:var(--pos-green);color:white"><i class="fas fa-save"></i> Save</button>' +
+          '<button class="pos-btn pos-btn-sm" id="posNewAddrCancel" style="background:var(--pos-gray-200);color:var(--pos-gray-700)">Cancel</button>' +
+          '</div></div>';
+      } else {
+        html += '<div style="font-size:12px;color:var(--pos-gray-400);padding:8px 0"><i class="fas fa-map-marker-alt"></i> No addresses on file — <a href="javascript:void(0)" id="posAddFirstAddr" style="color:var(--pos-navy)">Add one</a></div>';
+        html += '<div id="posNewAddrForm" style="display:none;background:var(--pos-gray-50);border:1px solid var(--pos-gray-200);border-radius:8px;padding:10px;margin-top:6px">' +
+          '<div style="font-weight:600;font-size:12px;margin-bottom:6px"><i class="fas fa-plus"></i> New Address</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">' +
+          '<input type="text" id="posNewAddrLabel" placeholder="Label (e.g. Farm)" style="padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '<input type="text" id="posNewAddrStreet" placeholder="Street *" style="padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '<input type="text" id="posNewAddrCity" placeholder="City *" style="padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '<div style="display:flex;gap:4px">' +
+          '<input type="text" id="posNewAddrState" placeholder="State" maxlength="2" style="width:50px;padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '<input type="text" id="posNewAddrZip" placeholder="ZIP" style="flex:1;padding:6px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+          '</div></div>' +
+          '<div style="margin-top:6px;display:flex;gap:6px">' +
+          '<button class="pos-btn pos-btn-sm" id="posNewAddrSave" style="background:var(--pos-green);color:white"><i class="fas fa-save"></i> Save</button>' +
+          '<button class="pos-btn pos-btn-sm" id="posNewAddrCancel" style="background:var(--pos-gray-200);color:var(--pos-gray-700)">Cancel</button>' +
+          '</div></div>';
       }
     }
     if (_s.deliveryReq === 'dc_pickup') {
@@ -606,7 +650,49 @@ function renderCartFooter() {
 
   // Delivery date/addr change
   on('posDeliveryDate', 'change', function() { _s.deliveryDate = this.value; });
-  on('posDeliveryAddr', 'change', function() { _s.deliveryAddrId = this.value; });
+  on('posDeliveryAddr', 'change', function() {
+    if (this.value === '__new__') {
+      var form = document.getElementById('posNewAddrForm');
+      if (form) form.style.display = 'block';
+      this.value = '';
+    } else {
+      _s.deliveryAddrId = this.value;
+    }
+  });
+  on('posAddFirstAddr', 'click', function() {
+    var form = document.getElementById('posNewAddrForm');
+    if (form) form.style.display = 'block';
+  });
+  on('posNewAddrCancel', 'click', function() {
+    var form = document.getElementById('posNewAddrForm');
+    if (form) form.style.display = 'none';
+    var sel = document.getElementById('posDeliveryAddr');
+    if (sel) sel.value = '';
+  });
+  on('posNewAddrSave', 'click', function() {
+    var street = gv('posNewAddrStreet');
+    var city = gv('posNewAddrCity');
+    if (!street || !city) { toast('Street and city are required', 'error'); return; }
+    if (!_s.customer) { toast('No customer selected', 'error'); return; }
+    var btn = document.getElementById('posNewAddrSave');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+    API.post('/pos/customers/' + _s.customer.id + '/addresses', {
+      label: gv('posNewAddrLabel') || null,
+      street: street,
+      city: city,
+      state: gv('posNewAddrState') || null,
+      zip: gv('posNewAddrZip') || null
+    }).then(function(r) {
+      var newAddr = r.data;
+      _s.customerAddresses.push(newAddr);
+      _s.deliveryAddrId = newAddr.id;
+      toast('Address saved');
+      renderCartFooter();
+    }).catch(function(err) {
+      toast('Failed to save address: ' + errMsg(err), 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save'; }
+    });
+  });
 
   // Promo + discount buttons
   on('posApplyPromo', 'click', applyPromoCode);
@@ -1037,9 +1123,22 @@ function renderPayDetails() {
     calcChange();
 
   } else if (method === 'credit_card' || method === 'debit_card') {
+    var ccConfig = _s._ccFeeConfig;
+    var ccFeeAmt = 0;
+    var ccFeeHtml = '';
+    if (method === 'credit_card' && ccConfig && ccConfig.is_active) {
+      ccFeeAmt = totals.total * ((ccConfig.rate || 0) / 100);
+      ccFeeHtml = '<div style="background:#FEF3C7;border-radius:8px;padding:10px;margin-top:10px;font-size:12px;color:#92400E">' +
+        '<i class="fas fa-info-circle"></i> <strong>Credit Card Convenience Fee:</strong> ' + (ccConfig.rate || 0) + '% = $' + ccFeeAmt.toFixed(2) +
+        '<br><span style="font-size:11px;color:#B45309">Total with fee: <strong>$' + (totals.total + ccFeeAmt).toFixed(2) + '</strong></span>' +
+        '<br><span style="font-size:10px;color:#78716C">Per credit card convenience fee rules, this fee is disclosed before payment and applies only to credit card transactions.</span>' +
+        '</div>';
+    }
+    _s.appliedCCFee = ccFeeAmt;
     detailEl.innerHTML = '<div style="text-align:center;padding:16px;color:var(--pos-gray-500)">' +
       '<i class="fas fa-credit-card" style="font-size:24px;margin-bottom:8px;display:block"></i>' +
-      '<div>Process $' + totals.total.toFixed(2) + ' on card terminal</div>' +
+      '<div>Process <strong>$' + (totals.total + ccFeeAmt).toFixed(2) + '</strong> on card terminal</div>' +
+      ccFeeHtml +
       '<input type="text" placeholder="Last 4 digits (optional)" id="posCardLast4" maxlength="4" style="margin-top:12px;padding:8px;border:1px solid var(--pos-gray-200);border-radius:8px;text-align:center;font-size:16px;width:100px">' +
     '</div>';
 
@@ -1134,8 +1233,11 @@ function processPayment() {
     body.amount_paid = cashAmt;
     body.payments = [{ method: 'cash', amount: cashAmt }];
   } else if (_s.payMethod === 'credit_card' || _s.payMethod === 'debit_card') {
-    body.payments = [{ method: _s.payMethod, amount: totals.total, card_last4: gv('posCardLast4') || null }];
-    body.amount_paid = totals.total;
+    var ccFeeForPayment = _s.payMethod === 'credit_card' ? (_s.appliedCCFee || 0) : 0;
+    var cardTotal = totals.total + ccFeeForPayment;
+    body.payments = [{ method: _s.payMethod, amount: cardTotal, card_last4: gv('posCardLast4') || null }];
+    body.amount_paid = cardTotal;
+    if (ccFeeForPayment > 0) { body.cc_convenience_fee = ccFeeForPayment; }
   } else if (_s.payMethod === 'check') {
     body.payments = [{ method: 'check', amount: totals.total, check_number: gv('posCheckNumber') || null }];
     body.amount_paid = totals.total;
@@ -1193,7 +1295,8 @@ function buildSaleBody(status) {
     internal_notes: '',
     promo_id: _s.appliedPromo ? _s.appliedPromo.promo_id : null,
     promo_code: _s.appliedPromo ? _s.appliedPromo.code : null,
-    promo_discount: _s.appliedPromo ? _s.appliedPromo.discount : 0
+    promo_discount: _s.appliedPromo ? _s.appliedPromo.discount : 0,
+    fuel_surcharge: _s.appliedFuelSurcharge || 0
   };
 }
 
@@ -1217,7 +1320,20 @@ function calcTotals() {
       taxTotal += (ls - ls * promoRatio) * (tr / 100);
     });
   }
-  return { subtotal: subtotal, tax: taxTotal, discount: discountTotal, promoDiscount: promoDisc, total: subtotal - promoDisc + taxTotal };
+  // Calculate fees
+  var fuelSurcharge = 0;
+  var ccFee = 0;
+  var fuelConfig = _s.fees.find(function(f) { return f.fee_type === 'fuel_surcharge' && f.is_active; });
+  var ccConfig = _s.fees.find(function(f) { return f.fee_type === 'cc_convenience' && f.is_active; });
+  if (fuelConfig && (_s.deliveryReq === 'delivery')) {
+    fuelSurcharge = (subtotal - promoDisc) * ((fuelConfig.rate || 0) / 100);
+  }
+  // CC fee is calculated at payment time, not here — just expose config
+  _s.appliedFuelSurcharge = fuelSurcharge;
+  _s._ccFeeConfig = ccConfig;
+
+  var total = subtotal - promoDisc + taxTotal + fuelSurcharge;
+  return { subtotal: subtotal, tax: taxTotal, discount: discountTotal, promoDiscount: promoDisc, fuelSurcharge: fuelSurcharge, ccFeeConfig: ccConfig, total: total };
 }
 
 // ==================== RECEIPT ====================
@@ -3015,6 +3131,156 @@ function toast(msg, type) {
   setTimeout(function() { el.style.opacity = '0'; setTimeout(function() { el.remove(); }, 300); }, 3000);
 }
 
+// ==================== TAX REPORT ====================
+function loadTaxReport() {
+  var el = document.getElementById('posViewtax-report');
+  if (!el) return;
+  el.innerHTML = '<div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading tax report...</div>';
+
+  var now = new Date();
+  var month = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+
+  el.innerHTML = '<div class="pos-cust-view-header">' +
+    '<div class="pos-cust-view-title"><h2><i class="fas fa-receipt"></i> Sales Tax Report</h2></div>' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+    '<input type="month" id="posTaxMonth" value="' + month + '" style="padding:6px 10px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:13px">' +
+    '<button class="pos-btn pos-btn-sm" id="posTaxLoad" style="background:var(--pos-navy);color:white"><i class="fas fa-search"></i> Load</button>' +
+    '</div></div>' +
+    '<div id="posTaxContent"><div class="pos-loading" style="color:var(--pos-gray-400)">Select a month and click Load</div></div>';
+
+  on('posTaxLoad', 'click', function() { doLoadTaxReport(); });
+  doLoadTaxReport();
+}
+
+function doLoadTaxReport() {
+  var month = gv('posTaxMonth');
+  if (!month) return;
+  var contentEl = document.getElementById('posTaxContent');
+  if (!contentEl) return;
+  contentEl.innerHTML = '<div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+
+  API.get('/pos/tax-report?month=' + month + '&location_id=' + getLocationId()).then(function(r) {
+    var data = r.data;
+    var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin:16px 0">';
+    html += '<div style="padding:16px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px">' +
+      '<div style="font-size:12px;color:var(--pos-gray-500)">Total Sales</div>' +
+      '<div style="font-size:24px;font-weight:800;color:var(--pos-navy)">$' + ((data.summary || {}).total_sales || 0).toFixed(2) + '</div></div>';
+    html += '<div style="padding:16px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px">' +
+      '<div style="font-size:12px;color:var(--pos-gray-500)">Tax Collected</div>' +
+      '<div style="font-size:24px;font-weight:800;color:var(--pos-orange)">$' + ((data.summary || {}).total_tax || 0).toFixed(2) + '</div></div>';
+    html += '<div style="padding:16px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px">' +
+      '<div style="font-size:12px;color:var(--pos-gray-500)">Exempt Sales</div>' +
+      '<div style="font-size:24px;font-weight:800;color:var(--pos-green)">$' + ((data.summary || {}).exempt_sales || 0).toFixed(2) + '</div></div>';
+    html += '<div style="padding:16px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px">' +
+      '<div style="font-size:12px;color:var(--pos-gray-500)">Transactions</div>' +
+      '<div style="font-size:24px;font-weight:800;color:var(--pos-navy)">' + ((data.summary || {}).transaction_count || 0) + '</div></div>';
+    html += '</div>';
+
+    // By-category breakdown
+    var cats = data.by_category || [];
+    if (cats.length > 0) {
+      html += '<div style="background:white;border:1px solid var(--pos-gray-200);border-radius:10px;padding:16px;margin-bottom:16px">';
+      html += '<h3 style="margin:0 0 12px;font-size:15px"><i class="fas fa-layer-group" style="color:var(--pos-orange)"></i> By Category</h3>';
+      html += '<table class="pos-table"><thead><tr><th>Category</th><th class="right">Sales</th><th class="right">Tax</th><th class="right">Items</th></tr></thead><tbody>';
+      cats.forEach(function(c) {
+        html += '<tr><td style="text-transform:capitalize">' + esc(c.category || 'Other') + '</td>' +
+          '<td class="right">$' + (c.total_sales || 0).toFixed(2) + '</td>' +
+          '<td class="right">$' + (c.total_tax || 0).toFixed(2) + '</td>' +
+          '<td class="right">' + (c.item_count || 0) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    // Daily totals
+    var daily = data.daily_totals || [];
+    if (daily.length > 0) {
+      html += '<div style="background:white;border:1px solid var(--pos-gray-200);border-radius:10px;padding:16px">';
+      html += '<h3 style="margin:0 0 12px;font-size:15px"><i class="fas fa-calendar-day" style="color:var(--pos-navy)"></i> Daily Breakdown</h3>';
+      html += '<table class="pos-table"><thead><tr><th>Date</th><th class="right">Sales</th><th class="right">Tax</th><th class="right">Transactions</th></tr></thead><tbody>';
+      daily.forEach(function(d) {
+        html += '<tr><td>' + esc(d.sale_date) + '</td><td class="right">$' + (d.total_sales || 0).toFixed(2) + '</td>' +
+          '<td class="right">$' + (d.total_tax || 0).toFixed(2) + '</td>' +
+          '<td class="right">' + (d.transaction_count || 0) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    contentEl.innerHTML = html;
+  }).catch(function(err) {
+    contentEl.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)">Error: ' + errMsg(err) + '</div>';
+  });
+}
+
+// ==================== FEE ADMINISTRATION ====================
+function loadFeeAdmin() {
+  var el = document.getElementById('posViewfee-admin');
+  if (!el) return;
+  el.innerHTML = '<div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading fee settings...</div>';
+
+  API.get('/pos/fees').then(function(r) {
+    var fees = r.data || [];
+    _s.fees = fees;
+    var html = '<div class="pos-cust-view-header">' +
+      '<div class="pos-cust-view-title"><h2><i class="fas fa-sliders"></i> Fee & Surcharge Settings</h2></div></div>';
+
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;margin-top:16px">';
+
+    fees.forEach(function(fee) {
+      var icon = fee.fee_type === 'fuel_surcharge' ? 'fa-gas-pump' : 'fa-credit-card';
+      var label = fee.fee_type === 'fuel_surcharge' ? 'Fuel Surcharge' : 'CC Convenience Fee';
+      var desc = fee.fee_type === 'fuel_surcharge'
+        ? 'Automatically added to delivery orders'
+        : 'Applied to credit card payments. Must follow legal requirements: disclosed before payment, not applied to debit cards.';
+
+      html += '<div style="background:white;border:1px solid var(--pos-gray-200);border-radius:12px;padding:20px" id="posFeeCard_' + fee.id + '">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">' +
+        '<div style="width:40px;height:40px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:' + (fee.is_active ? '#FEF3C7' : '#F1F5F9') + ';color:' + (fee.is_active ? '#D97706' : '#94A3B8') + ';font-size:18px">' +
+        '<i class="fas ' + icon + '"></i></div>' +
+        '<div><div style="font-weight:700;font-size:15px">' + esc(label) + '</div>' +
+        '<div style="font-size:11px;color:var(--pos-gray-500)">' + esc(desc) + '</div></div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
+        '<div><label style="font-size:11px;font-weight:600;color:var(--pos-gray-500);text-transform:uppercase;display:block;margin-bottom:3px">Rate (%)</label>' +
+        '<input type="number" id="posFeeRate_' + fee.id + '" value="' + (fee.rate || 0) + '" min="0" max="100" step="0.1" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:14px"></div>' +
+        '<div><label style="font-size:11px;font-weight:600;color:var(--pos-gray-500);text-transform:uppercase;display:block;margin-bottom:3px">Status</label>' +
+        '<select id="posFeeActive_' + fee.id + '" style="width:100%;padding:8px;border:1px solid var(--pos-gray-200);border-radius:6px;font-size:14px">' +
+        '<option value="1"' + (fee.is_active ? ' selected' : '') + '>Active</option>' +
+        '<option value="0"' + (!fee.is_active ? ' selected' : '') + '>Disabled</option>' +
+        '</select></div>' +
+        '</div>' +
+        '<button class="pos-btn pos-btn-sm" data-save-fee="' + fee.id + '" style="background:var(--pos-navy);color:white;width:100%"><i class="fas fa-save"></i> Save Changes</button>' +
+        '</div>';
+    });
+
+    if (fees.length === 0) {
+      html += '<div style="text-align:center;padding:32px;color:var(--pos-gray-400)"><i class="fas fa-sliders" style="font-size:36px"></i><p>No fee configurations found</p></div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+
+    // Bind save buttons
+    el.querySelectorAll('[data-save-fee]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var fid = btn.dataset.saveFee;
+        var rate = parseFloat(document.getElementById('posFeeRate_' + fid).value) || 0;
+        var isActive = document.getElementById('posFeeActive_' + fid).value === '1';
+        btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        API.put('/pos/fees/' + fid, { rate: rate, is_active: isActive }).then(function() {
+          toast('Fee updated');
+          btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+          // Reload fees
+          API.get('/pos/fees').then(function(r2) { _s.fees = r2.data || []; });
+        }).catch(function(err) {
+          toast('Error: ' + errMsg(err), 'error');
+          btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+        });
+      });
+    });
+  }).catch(function(err) {
+    el.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)">Error: ' + errMsg(err) + '</div>';
+  });
+}
+
 // ==================== INVENTORY REQUESTS ====================
 
 function loadInventoryRequests() {
@@ -3083,6 +3349,14 @@ function openInvRequestForm(prefillItems) {
           '<div class="pos-cust-form-group">' +
             '<label>Reason</label>' +
             '<input type="text" id="posInvReqReason" placeholder="e.g. Running low, customer order">' +
+          '</div>' +
+          '<div class="pos-cust-form-group">' +
+            '<label>Tag Customer</label>' +
+            '<input type="text" id="posInvReqCustName" placeholder="Customer name (optional)" value="' + (_s.customer ? esc(_s.customer.business_name || _s.customer.contact_name || '') : '') + '">' +
+            '<input type="hidden" id="posInvReqCustId" value="' + (_s.customer ? _s.customer.id : '') + '">' +
+          '</div>' +
+          '<div class="pos-cust-form-group">' +
+            '<label><input type="checkbox" id="posInvReqNotify" ' + (_s.customer ? 'checked' : '') + ' style="margin-right:4px"> Notify customer when received</label>' +
           '</div>' +
           '<div class="pos-cust-form-group full">' +
             '<label>Notes</label>' +
@@ -3182,6 +3456,9 @@ function openInvRequestForm(prefillItems) {
   on('posInvReqCancelBtn', 'click', function() { document.getElementById('posInvReqOverlay').remove(); });
   on('posInvReqSubmitBtn', 'click', function() {
     if (_reqItems.length === 0) { toast('Add at least one item', 'error'); return; }
+    var custId = gv('posInvReqCustId');
+    var custName = gv('posInvReqCustName');
+    var notifyCheck = document.getElementById('posInvReqNotify');
     API.post('/pos/inventory-request', {
       location_id: getLocationId(),
       urgency: gv('posInvReqUrgency'),
@@ -3189,6 +3466,9 @@ function openInvRequestForm(prefillItems) {
       notes: gv('posInvReqNotes'),
       requested_by: user ? user.id : null,
       requested_by_name: user ? user.name : '',
+      customer_id: custId ? parseInt(custId) : null,
+      customer_name: custName || null,
+      notify_customer: notifyCheck && notifyCheck.checked ? 1 : 0,
       items: _reqItems
     }).then(function(r) {
       toast('Inventory request ' + r.data.request_number + ' submitted');

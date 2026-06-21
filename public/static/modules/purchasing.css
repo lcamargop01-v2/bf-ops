@@ -1345,3 +1345,89 @@
   background: #B91C1C;
   border-color: #B91C1C;
 }
+
+/* ==================== URGENCY BADGES ==================== */
+.po-urgency-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.po-urgency-critical { background: #FEE2E2; color: #991B1B; }
+.po-urgency-high { background: #FEF3C7; color: #92400E; }
+.po-urgency-normal { background: #DBEAFE; color: #1E40AF; }
+.po-urgency-low { background: #F1F5F9; color: #64748B; }
+
+/* Request status badges */
+.po-req-status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+.po-req-status-pending { background: #FEF3C7; color: #92400E; }
+.po-req-status-approved { background: #D1FAE5; color: #065F46; }
+.po-req-status-rejected { background: #FEE2E2; color: #991B1B; }
+.po-req-status-converted { background: #DBEAFE; color: #1E40AF; }
+.po-req-status-fulfilled { background: #D1FAE5; color: #065F46; }
+.po-req-status-cancelled { background: #F1F5F9; color: #64748B; }
+
+/* ==================== BAD ITEMS HANDLER ==================== */
+.po-bad-items-list { display: flex; flex-direction: column; gap: 10px; }
+.po-bad-item-card {
+  border: 1px solid #FECACA;
+  border-radius: 10px;
+  padding: 14px;
+  background: white;
+}
+.po-bad-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.po-recv-bad-badge {
+  background: #FEE2E2;
+  color: #991B1B;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.po-bad-item-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ==================== RECEIVING SPLIT LAYOUT ==================== */
+.po-recv-split {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.po-recv-good, .po-recv-bad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.po-recv-good label, .po-recv-bad label {
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.po-recv-total-label {
+  width: 100%;
+  text-align: center;
+  font-size: 12px;
+  margin-top: 4px;
+}

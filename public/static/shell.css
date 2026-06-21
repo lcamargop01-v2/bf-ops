@@ -267,3 +267,75 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   .shell-login-card { padding: 24px 16px; }
   .shell-quick-logins .grid { grid-template-columns: 1fr; }
 }
+
+/* ==================== NOTIFICATION BELL ==================== */
+.shell-notif-wrap { position: relative; }
+.shell-notif-btn {
+  background: none; border: 1px solid var(--shell-border); border-radius: 8px;
+  width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
+  color: var(--shell-text-muted); font-size: 15px; cursor: pointer; transition: all 0.15s; position: relative;
+}
+.shell-notif-btn:hover { border-color: var(--shell-accent); color: var(--shell-text); }
+.shell-notif-badge {
+  position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; border-radius: 8px;
+  background: var(--shell-danger); color: white; font-size: 9px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; padding: 0 4px;
+  line-height: 1; border: 2px solid var(--shell-bg);
+}
+.shell-notif-dropdown {
+  position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+  background: var(--shell-surface); border: 1px solid var(--shell-border); border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.4); z-index: 9999; overflow: hidden;
+  display: none;
+}
+.shell-notif-dropdown.open { display: block; }
+.shell-notif-header {
+  padding: 12px 16px; border-bottom: 1px solid var(--shell-border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.shell-notif-header h4 { font-size: 13px; font-weight: 700; color: var(--shell-text); }
+.shell-notif-header button {
+  background: none; border: none; color: var(--shell-accent); font-size: 11px;
+  font-weight: 600; cursor: pointer; padding: 0;
+}
+.shell-notif-header button:hover { text-decoration: underline; }
+.shell-notif-list { max-height: 320px; overflow-y: auto; }
+.shell-notif-item {
+  padding: 10px 16px; border-bottom: 1px solid rgba(51,65,85,0.4); cursor: pointer; transition: background 0.1s;
+  display: flex; gap: 10px; align-items: flex-start;
+}
+.shell-notif-item:hover { background: rgba(255,255,255,0.03); }
+.shell-notif-item.unread { background: rgba(59,130,246,0.06); }
+.shell-notif-item.unread:hover { background: rgba(59,130,246,0.1); }
+.shell-notif-icon {
+  width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+  font-size: 12px; flex-shrink: 0;
+}
+.shell-notif-icon.info { background: rgba(59,130,246,0.15); color: #3B82F6; }
+.shell-notif-icon.warning { background: rgba(245,158,11,0.15); color: #F59E0B; }
+.shell-notif-icon.success { background: rgba(16,185,129,0.15); color: #10B981; }
+.shell-notif-icon.danger { background: rgba(239,68,68,0.15); color: #EF4444; }
+.shell-notif-body { flex: 1; min-width: 0; }
+.shell-notif-body .title { font-size: 12px; font-weight: 600; color: var(--shell-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shell-notif-body .desc { font-size: 11px; color: var(--shell-text-muted); margin-top: 2px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.shell-notif-body .time { font-size: 10px; color: var(--shell-text-muted); margin-top: 3px; }
+.shell-notif-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--shell-accent); flex-shrink: 0; margin-top: 4px; }
+.shell-notif-footer {
+  padding: 10px 16px; border-top: 1px solid var(--shell-border); text-align: center;
+}
+.shell-notif-footer a {
+  font-size: 12px; font-weight: 600; color: var(--shell-accent); text-decoration: none; cursor: pointer;
+}
+.shell-notif-footer a:hover { text-decoration: underline; }
+.shell-notif-empty {
+  padding: 30px 16px; text-align: center; color: var(--shell-text-muted); font-size: 12px;
+}
+.shell-notif-empty i { font-size: 24px; display: block; margin-bottom: 8px; opacity: 0.4; }
+@media (max-width: 768px) {
+  .shell-notif-btn { width: 30px; height: 30px; font-size: 13px; }
+  .shell-notif-dropdown { width: 300px; right: -60px; }
+  .shell-notif-badge { min-width: 14px; height: 14px; font-size: 8px; top: -3px; right: -3px; }
+}
+@media (max-width: 480px) {
+  .shell-notif-dropdown { width: calc(100vw - 24px); right: -100px; }
+}

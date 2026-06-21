@@ -152,6 +152,14 @@ async function poRender() {
       var resp = await poAPI.get('/api/purchasing/requests/' + poCurrentOrder, { headers: poHeaders() });
       root = document.getElementById('purchasing-app'); if (!root) return;
       root.innerHTML = poRenderNav() + poRenderRequestDetail(resp.data);
+    } else if (poPage === 'pos_requests') {
+      var resp = await poAPI.get('/api/purchasing/pos-requests', { headers: poHeaders() });
+      root = document.getElementById('purchasing-app'); if (!root) return;
+      root.innerHTML = poRenderNav() + poRenderPosRequests(resp.data.requests || []);
+    } else if (poPage === 'pos_request_detail') {
+      var resp = await poAPI.get('/api/purchasing/pos-requests/' + poCurrentOrder, { headers: poHeaders() });
+      root = document.getElementById('purchasing-app'); if (!root) return;
+      root.innerHTML = poRenderNav() + poRenderPosRequestDetail(resp.data);
     }
   } catch(err) {
     console.error('[Purchasing] render error:', err);
@@ -177,6 +185,7 @@ function poRenderNav() {
     { id: 'dashboard', icon: 'fa-chart-line', label: 'Dashboard' },
     { id: 'orders', icon: 'fa-file-invoice', label: 'Orders' },
     { id: 'requests', icon: 'fa-hand', label: 'Requests' },
+    { id: 'pos_requests', icon: 'fa-cash-register', label: 'POS Requests' },
     { id: 'arriving', icon: 'fa-truck-moving', label: 'Arriving' },
     { id: 'bills', icon: 'fa-file-invoice-dollar', label: 'Bills' },
     { id: 'suppliers', icon: 'fa-building', label: 'Suppliers' }
@@ -896,6 +905,16 @@ function poRenderReceiving(data) {
   html += '<span><i class="fas fa-building"></i> ' + poEsc(po.supplier_name || 'No supplier') + '</span>';
   html += '<span><i class="fas fa-location-dot"></i> ' + poEsc(po.location_name) + '</span>';
   html += '</div>';
+
+  // Receiving guidance banner
+  html += '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#1E40AF">' +
+    '<div style="font-weight:700;margin-bottom:4px"><i class="fas fa-info-circle"></i> How Receiving Works</div>' +
+    '<div style="display:flex;gap:20px;flex-wrap:wrap">' +
+    '<div><i class="fas fa-check-circle" style="color:#059669"></i> <strong>Good</strong> \u2014 accepted into inventory</div>' +
+    '<div><i class="fas fa-exclamation-triangle" style="color:#DC2626"></i> <strong>Bad</strong> \u2014 damaged/defective items</div>' +
+    '</div>' +
+    '<div style="margin-top:6px;color:#64748B">After submitting, bad items give you options to: <strong>Report Loss</strong>, <strong>Create Batch</strong> (sell at reduced price), or <strong>Skip</strong> (handle later).</div>' +
+    '</div>';
 
   // Items to receive — good/bad qty split
   html += '<div class="po-receive-items">';
@@ -2398,6 +2417,144 @@ async function poDoSubmitRequest() {
     poToast('Request ' + resp.data.request_number + ' submitted');
     poCloseModal();
     poNav('requests');
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// ==================== POS REQUESTS (from POS inventory requests) ====================
+var poPosRequests = [];
+
+function poRenderPosRequests(requests) {
+  poPosRequests = requests;
+  var html = '<div class="po-orders-page">';
+  html += '<div class="po-section-header"><h2><i class="fas fa-cash-register" style="color:#D97706"></i> POS Inventory Requests</h2>';
+  html += '<p class="po-muted" style="margin:0">Requests submitted from POS terminals. You can fulfill by transferring existing stock or creating a purchase order.</p></div>';
+
+  if (requests.length === 0) {
+    html += '<div class="po-empty"><i class="fas fa-cash-register" style="font-size:48px;color:#CBD5E1"></i>';
+    html += '<h3>No POS Requests</h3><p>When POS staff submit inventory requests, they\'ll appear here.</p></div>';
+  } else {
+    // Desktop table
+    html += '<div class="po-table-wrap po-desktop-only"><table class="po-table po-table-hover">';
+    html += '<thead><tr><th>Request #</th><th>Urgency</th><th>Location</th><th>Items</th><th>Customer</th><th>Status</th><th>By</th><th>Date</th></tr></thead><tbody>';
+    requests.forEach(function(r) {
+      html += '<tr class="po-clickable" onclick="poNav(\'pos_request_detail\',' + r.id + ')">' +
+        '<td><strong>' + poEsc(r.request_number) + '</strong></td>' +
+        '<td><span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span></td>' +
+        '<td><span class="po-loc-badge">' + poEsc(r.location_code || '') + '</span></td>' +
+        '<td>' + (r.item_count || 0) + '</td>' +
+        '<td>' + (r.customer_name ? '<span style="color:#2563EB"><i class="fas fa-user"></i> ' + poEsc(r.customer_name) + '</span>' + (r.notify_customer ? ' <i class="fas fa-bell" style="color:#D97706;font-size:10px" title="Notify when received"></i>' : '') : '<span class="po-muted">—</span>') + '</td>' +
+        '<td><span class="po-req-status-badge po-req-status-' + r.status + '">' + poReqStatusLabel(r.status) + '</span></td>' +
+        '<td>' + poEsc(r.requested_by_name || '—') + '</td>' +
+        '<td>' + poFormatDateTime(r.created_at) + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table></div>';
+
+    // Mobile cards
+    html += '<div class="po-mobile-only po-order-cards">';
+    requests.forEach(function(r) {
+      html += '<div class="po-order-card" onclick="poNav(\'pos_request_detail\',' + r.id + ')">' +
+        '<div class="po-order-card-top">' +
+        '<div><strong>' + poEsc(r.request_number) + '</strong><br><span class="po-muted">' + poEsc(r.requested_by_name || '') + '</span></div>' +
+        '<span class="po-req-status-badge po-req-status-' + r.status + '">' + poReqStatusLabel(r.status) + '</span>' +
+        '</div>' +
+        '<div class="po-order-card-meta">' +
+        '<span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span>' +
+        '<span class="po-loc-badge">' + poEsc(r.location_code || '') + '</span>' +
+        (r.customer_name ? '<span style="color:#2563EB;font-size:12px"><i class="fas fa-user"></i> ' + poEsc(r.customer_name) + '</span>' : '') +
+        '</div>' +
+        '<div class="po-order-card-nums">' +
+        '<div><span class="po-muted">Items</span><strong>' + (r.item_count || 0) + '</strong></div>' +
+        '<div><span class="po-muted">Date</span><strong>' + poFormatDateTime(r.created_at) + '</strong></div>' +
+        '</div>' +
+        (r.reason ? '<div class="po-muted" style="padding:4px 12px 8px;font-size:13px"><i class="fas fa-comment"></i> ' + poEsc(r.reason) + '</div>' : '') +
+        '</div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function poRenderPosRequestDetail(data) {
+  var r = data.request;
+  var items = data.items || [];
+  var html = '<div class="po-detail-page">';
+  html += '<div class="po-section-header"><h2><i class="fas fa-cash-register"></i> POS Request ' + poEsc(r.request_number) + '</h2>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button class="po-btn po-btn-outline" onclick="poNav(\'pos_requests\')"><i class="fas fa-arrow-left"></i> Back</button>';
+  if (r.status === 'pending' || r.status === 'approved') {
+    html += '<button class="po-btn po-btn-success" onclick="poPosReqTransfer(' + r.id + ')"><i class="fas fa-arrows-left-right"></i> Transfer Stock</button>';
+    html += '<button class="po-btn po-btn-primary" onclick="poPosReqPurchase(' + r.id + ')"><i class="fas fa-file-invoice"></i> Create Purchase</button>';
+  }
+  html += '</div></div>';
+
+  // Info grid
+  html += '<div class="po-detail-grid">';
+  html += '<div class="po-detail-info-card">';
+  html += '<h4 style="margin:0 0 8px"><i class="fas fa-info-circle" style="color:#D97706"></i> Request Info</h4>';
+  html += '<div class="po-detail-row"><span>Status</span><span class="po-req-status-badge po-req-status-' + r.status + '">' + poReqStatusLabel(r.status) + '</span></div>';
+  html += '<div class="po-detail-row"><span>Urgency</span><span class="po-urgency-badge po-urgency-' + r.urgency + '">' + poUrgencyLabel(r.urgency) + '</span></div>';
+  html += '<div class="po-detail-row"><span>Location</span><span><span class="po-loc-badge">' + poEsc(r.location_code || '') + '</span> ' + poEsc(r.location_name || '') + '</span></div>';
+  html += '<div class="po-detail-row"><span>Requested By</span><span>' + poEsc(r.requested_by_name || '—') + '</span></div>';
+  html += '<div class="po-detail-row"><span>Date</span><span>' + poFormatDateTime(r.created_at) + '</span></div>';
+  if (r.reason) html += '<div class="po-detail-row"><span>Reason</span><span>' + poEsc(r.reason) + '</span></div>';
+  if (r.notes) html += '<div class="po-detail-row"><span>Notes</span><span>' + poEsc(r.notes) + '</span></div>';
+  html += '</div>';
+
+  // Customer info
+  html += '<div class="po-detail-info-card">';
+  html += '<h4 style="margin:0 0 8px"><i class="fas fa-user" style="color:#2563EB"></i> Customer / Fulfillment</h4>';
+  if (r.customer_name) {
+    html += '<div class="po-detail-row"><span>Customer</span><span><strong>' + poEsc(r.customer_name) + '</strong></span></div>';
+    html += '<div class="po-detail-row"><span>Notify on Receipt</span><span>' + (r.notify_customer ? '<span style="color:#059669"><i class="fas fa-bell"></i> Yes</span>' : 'No') + '</span></div>';
+  } else {
+    html += '<div style="padding:12px;text-align:center;color:#94A3B8"><i class="fas fa-user-slash"></i> No customer tagged</div>';
+  }
+  html += '<div class="po-detail-row"><span>Fulfillment</span><span>' + poEsc(r.fulfillment_type || 'purchase') + '</span></div>';
+  if (r.purchasing_request_id) html += '<div class="po-detail-row"><span>Linked PO Request</span><span><a href="javascript:void(0)" onclick="poNav(\'request_detail\',' + r.purchasing_request_id + ')" class="po-link">View PO Request →</a></span></div>';
+  if (r.transfer_id) html += '<div class="po-detail-row"><span>Transfer</span><span style="color:#059669"><i class="fas fa-check-circle"></i> Transfer #' + r.transfer_id + '</span></div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Items table
+  html += '<div class="po-section">';
+  html += '<h3 class="po-section-title"><i class="fas fa-list"></i> Requested Items (' + items.length + ')</h3>';
+  html += '<div class="po-table-wrap"><table class="po-table"><thead><tr><th>Product</th><th>SKU</th><th class="text-right">Qty Requested</th><th class="text-right">Current Stock</th><th class="text-right">Reorder Point</th><th>Notes</th></tr></thead><tbody>';
+  items.forEach(function(item) {
+    html += '<tr>' +
+      '<td><strong>' + poEsc(item.product_name || 'Product #' + item.product_id) + '</strong></td>' +
+      '<td class="po-muted">' + poEsc(item.sku || '—') + '</td>' +
+      '<td class="text-right" style="font-weight:700">' + item.qty_requested + '</td>' +
+      '<td class="text-right">' + (item.current_stock || 0) + '</td>' +
+      '<td class="text-right">' + (item.reorder_point || 0) + '</td>' +
+      '<td class="po-muted">' + poEsc(item.notes || '') + '</td>' +
+      '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  html += '</div>';
+  return html;
+}
+
+async function poPosReqTransfer(reqId) {
+  var sourceId = prompt('Enter source location ID to transfer from (check your locations):');
+  if (!sourceId) return;
+  try {
+    var resp = await poAPI.post('/api/purchasing/pos-requests/' + reqId + '/transfer', {
+      source_location_id: parseInt(sourceId)
+    }, { headers: poHeaders() });
+    poToast('Transfer #' + resp.data.transfer_id + ' created for ' + resp.data.items_count + ' items');
+    poNav('pos_request_detail', reqId);
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function poPosReqPurchase(reqId) {
+  if (!confirm('Create a purchasing order request from this POS request?')) return;
+  try {
+    var resp = await poAPI.post('/api/purchasing/pos-requests/' + reqId + '/purchase', {}, { headers: poHeaders() });
+    poToast('PO Request ' + resp.data.request_number + ' created');
+    poNav('request_detail', resp.data.request_id);
   } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
