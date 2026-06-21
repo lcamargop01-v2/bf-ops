@@ -401,7 +401,8 @@ function invRenderStockList() {
     html += '<tr class="' + (lowStock ? 'inv-row-warning' : '') + '">' +
       '<td class="inv-clickable" onclick="invShowProductDetail(' + s.product_id + ')"><strong>' + escH(s.product_name) + '</strong></td>' +
       '<td class="inv-muted">' + escH(s.sku || '—') + '</td>' +
-      '<td><span class="inv-cat-badge inv-cat-' + (s.category || 'shelf_goods') + '">' + escH((s.category || 'shelf_goods').replace(/_/g, ' ')) + '</span></td>' +
+      '<td><span class="inv-cat-badge inv-cat-' + (s.category || 'shelf_goods') + '">' + escH((s.category || 'shelf_goods').replace(/_/g, ' ')) + '</span>' +
+        (s.subcategory ? '<div style="font-size:10px;color:#64748B;margin-top:2px">' + invSubcatLabel(s.subcategory) + '</div>' : '') + '</td>' +
       '<td class="inv-muted" style="font-size:13px">' + escH(s.primary_vendor_name || '—') + '</td>' +
       '<td><span class="inv-loc-badge">' + escH(s.location_code) + '</span></td>' +
       '<td class="text-right"><span class="inv-num-click" onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'all\',\'' + pNameEsc + '\')"><strong>' + (s.qty_on_hand || 0).toLocaleString() + '</strong></span></td>' +
@@ -527,7 +528,8 @@ function invRenderQuickCount() {
     html += '<div class="inv-empty" style="padding:40px;text-align:center"><i class="fas fa-box-open" style="font-size:36px;color:#CBD5E1;margin-bottom:12px;display:block"></i><p>No products found for this location' + (invCountCategory ? ' and category' : '') + '.</p></div>';
   }
   invStockData.forEach(function(s, idx) {
-    var catLabel = (s.category || 'other').replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
+    var catLabel = (s.category || 'shelf_goods').replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
+    var subLabel = s.subcategory ? invSubcatLabel(s.subcategory) : '';
     var lastCountedInfo = '';
     if (s.last_counted_at) {
       lastCountedInfo = '<span class="inv-count-last"><i class="fas fa-user-check"></i> ' +
@@ -538,7 +540,7 @@ function invRenderQuickCount() {
     html += '<div class="inv-count-item" data-name="' + escH((s.product_name || '').toLowerCase()) + '" data-sku="' + escH((s.sku || '').toLowerCase()) + '">' +
       '<div class="inv-count-item-info">' +
       '<strong>' + escH(s.product_name) + '</strong>' +
-      '<span class="inv-muted">' + escH(s.sku || '') + ' \u00b7 ' + escH(s.unit_type || '') + ' \u00b7 <span class="inv-cat-badge">' + catLabel + '</span></span>' +
+      '<span class="inv-muted">' + escH(s.sku || '') + ' \u00b7 ' + escH(s.unit_type || '') + ' \u00b7 <span class="inv-cat-badge">' + catLabel + '</span>' + (subLabel ? ' \u00b7 ' + subLabel : '') + '</span>' +
       lastCountedInfo +
       '</div>' +
       '<div class="inv-count-item-input">' +
@@ -1005,7 +1007,7 @@ async function invRenderCategoriesPage() {
 
   // Products table
   html += '<div class="inv-table-wrap"><table class="inv-table inv-table-hover">';
-  html += '<thead><tr><th>Product</th><th>SKU</th><th>Current</th><th><i class="fas fa-arrow-right"></i></th><th>New Category</th><th>Override</th></tr></thead><tbody>';
+  html += '<thead><tr><th>Product</th><th>SKU</th><th>Current</th><th><i class="fas fa-arrow-right"></i></th><th>New Category</th><th>Subcategory</th><th>Override</th></tr></thead><tbody>';
 
   var maxShow = 200;
   var shown = filtered.slice(0, maxShow);
@@ -1014,13 +1016,15 @@ async function invRenderCategoriesPage() {
     var hasOverride = invRecatOverrides[p.id] ? true : false;
     var changed = effCat !== p.current_category;
     var rowClass = hasOverride ? 'style="background:#EFF6FF"' : changed ? 'style="background:#F0FDF4"' : '';
+    var subLabel = invSubcatLabel(p.suggested_subcategory);
     
     html += '<tr ' + rowClass + '>' +
       '<td><strong>' + escH(p.name) + '</strong></td>' +
       '<td class="inv-muted">' + escH(p.sku || '—') + '</td>' +
-      '<td><span class="inv-cat-badge inv-recat-old">' + escH(p.current_category) + '</span></td>' +
+      '<td><span class="inv-cat-badge inv-recat-old">' + escH(p.current_category || 'shelf_goods').replace(/_/g, ' ') + '</span></td>' +
       '<td style="text-align:center">' + (changed ? '<i class="fas fa-arrow-right" style="color:#059669"></i>' : '<i class="fas fa-equals" style="color:#CBD5E1"></i>') + '</td>' +
       '<td><span class="inv-cat-badge inv-recat-' + effCat + '">' + invCatLabel(effCat) + '</span></td>' +
+      '<td style="font-size:12px;color:#64748B">' + subLabel + '</td>' +
       '<td><select class="inv-select" style="padding:4px 8px;font-size:12px;min-width:110px" onchange="invRecatOverride(' + p.id + ',this.value)">' +
       '<option value=""' + (!hasOverride ? ' selected' : '') + '>AI: ' + invCatLabel(p.suggested_category) + '</option>' +
       '<option value="hay"' + (invRecatOverrides[p.id] === 'hay' ? ' selected' : '') + '>Hay</option>' +
@@ -1030,7 +1034,7 @@ async function invRenderCategoriesPage() {
   });
 
   if (filtered.length > maxShow) {
-    html += '<tr><td colspan="6" style="text-align:center;padding:16px;color:#64748B;font-style:italic">' +
+    html += '<tr><td colspan="7" style="text-align:center;padding:16px;color:#64748B;font-style:italic">' +
       'Showing ' + maxShow + ' of ' + filtered.length + ' — use search or filters to narrow results</td></tr>';
   }
 
@@ -1040,8 +1044,22 @@ async function invRenderCategoriesPage() {
 }
 
 function invCatLabel(cat) {
-  var labels = { hay: 'Hay', shavings: 'Shavings', grain: 'Grain', shelf_goods: 'Shelf Goods' };
-  return labels[cat] || (cat || 'other').replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
+  var labels = { hay: 'Hay', shavings: 'Shavings', shelf_goods: 'Shelf Goods' };
+  return labels[cat] || (cat || 'shelf_goods').replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
+}
+
+function invSubcatLabel(sub) {
+  if (!sub) return '—';
+  var labels = {
+    hay: 'Hay', bedding: 'Bedding', feed: 'Feed', supplement: 'Supplement',
+    dewormer: 'Dewormer', fly_control: 'Fly Control', grooming: 'Grooming',
+    hoof_care: 'Hoof Care', first_aid: 'First Aid', tack: 'Tack',
+    blankets: 'Blankets', treats: 'Treats', barn_equipment: 'Barn Equipment',
+    fencing: 'Fencing', riding_apparel: 'Riding Apparel', pet_supplies: 'Pet Supplies',
+    cleaning: 'Cleaning', poultry: 'Poultry', farm_supplies: 'Farm Supplies',
+    tools: 'Tools', gift: 'Gift', general: 'General'
+  };
+  return labels[sub] || sub.replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
 }
 
 function invRecatOverride(productId, value) {
@@ -1074,7 +1092,7 @@ async function invApplyRecategorize() {
 
   if (changed === 0) { invToast('No changes to apply', 'warning'); return; }
 
-  if (!confirm('Apply category consolidation?\n\n' + changed + ' products will be recategorized into:\n- Hay\n- Shavings\n- Grain\n- Shelf Goods\n\nThis action cannot be undone.')) return;
+  if (!confirm('Apply category consolidation?\n\n' + changed + ' products will be recategorized into:\n- Hay\n- Shavings\n- Shelf Goods\n\n(Subcategories like Feed, Supplement, First Aid will also be set.)\n\nThis action cannot be undone.')) return;
 
   try {
     var btn = document.querySelector('[onclick*="invApplyRecategorize"]');
@@ -2228,6 +2246,9 @@ async function invShowProductDetail(productId) {
       body += '<div class="inv-product-info-card">';
       body += '<div class="inv-product-info-row"><span class="inv-muted">SKU</span><strong>' + escH(product.sku || '—') + '</strong></div>';
       body += '<div class="inv-product-info-row"><span class="inv-muted">Category</span><span class="inv-cat-badge inv-cat-' + (product.category || 'shelf_goods') + '">' + escH((product.category || 'shelf_goods').replace(/_/g, ' ')) + '</span></div>';
+      if (product.subcategory) {
+        body += '<div class="inv-product-info-row"><span class="inv-muted">Subcategory</span><span>' + invSubcatLabel(product.subcategory) + '</span></div>';
+      }
       body += '<div class="inv-product-info-row"><span class="inv-muted">Unit</span><span>' + escH(product.unit_type || 'each') + '</span></div>';
       body += '<div class="inv-product-info-row"><span class="inv-muted">Primary Vendor</span><strong>' + escH(product.primary_vendor_name || '\u2014 None') + '</strong></div>';
       if (product.vendors && product.vendors.length > 0) {
@@ -2461,7 +2482,8 @@ async function invRenderProductsPage() {
     html += '<tr class="' + (!p.active ? 'inv-row-inactive' : '') + '">' +
       '<td class="inv-clickable" onclick="invShowProductDetail(' + p.id + ')"><strong>' + escH(p.name) + '</strong></td>' +
       '<td class="inv-muted">' + escH(p.sku || '—') + '</td>' +
-      '<td><span class="inv-cat-badge inv-cat-' + (p.category || 'shelf_goods') + '">' + escH((p.category || 'shelf_goods').replace(/_/g, ' ')) + '</span></td>' +
+      '<td><span class="inv-cat-badge inv-cat-' + (p.category || 'shelf_goods') + '">' + escH((p.category || 'shelf_goods').replace(/_/g, ' ')) + '</span>' +
+        (p.subcategory ? '<div style="font-size:10px;color:#64748B;margin-top:2px">' + invSubcatLabel(p.subcategory) + '</div>' : '') + '</td>' +
       '<td class="inv-muted" style="font-size:13px">' + escH(p.primary_vendor_name || '—') + '</td>' +
       '<td>' + escH(p.unit_type || 'each') + '</td>' +
       (_pf ? '<td class="text-right">$' + (p.price || 0).toFixed(2) + '</td>' +
@@ -2479,7 +2501,7 @@ async function invRenderProductsPage() {
     var margin = p.price && p.cost ? (((p.price - p.cost) / p.price) * 100).toFixed(1) + '%' : '—';
     html += '<div class="inv-stock-card' + (!p.active ? ' inv-card-inactive' : '') + '" onclick="invShowProductDetail(' + p.id + ')">' +
       '<div class="inv-stock-card-top">' +
-      '<div><strong>' + escH(p.name) + '</strong><br><span class="inv-muted">' + escH(p.sku || '') + ' · ' + escH(p.category || 'other') + '</span></div>' +
+      '<div><strong>' + escH(p.name) + '</strong><br><span class="inv-muted">' + escH(p.sku || '') + ' · ' + invCatLabel(p.category || 'shelf_goods') + (p.subcategory ? ' · ' + invSubcatLabel(p.subcategory) : '') + '</span></div>' +
       (p.active ? '' : '<span class="inv-cat-badge inv-cat-other">Inactive</span>') +
       '</div>' +
       '<div class="inv-stock-card-nums">' +
@@ -2538,8 +2560,15 @@ async function invShowEditProduct(productId) {
     body += '<div class="inv-form-group" style="flex:1"><label>SKU</label><input type="text" class="inv-input" id="invEditSku" value="' + escH(p.sku || '') + '"></div>';
     body += '</div>';
 
+    var subcatOpts = '<option value="">— None —</option>';
+    var subcatList = ['feed','supplement','dewormer','fly_control','grooming','hoof_care','first_aid','tack','blankets','treats','barn_equipment','fencing','riding_apparel','pet_supplies','cleaning','poultry','farm_supplies','tools','gift','general'];
+    subcatList.forEach(function(sc) {
+      subcatOpts += '<option value="' + sc + '"' + (p.subcategory === sc ? ' selected' : '') + '>' + invSubcatLabel(sc) + '</option>';
+    });
+
     body += '<div class="inv-form-row">';
     body += '<div class="inv-form-group"><label>Category</label><select class="inv-select" id="invEditCategory">' + catOpts + '</select></div>';
+    body += '<div class="inv-form-group"><label>Subcategory</label><select class="inv-select" id="invEditSubcategory">' + subcatOpts + '</select></div>';
     body += '<div class="inv-form-group"><label>Unit Type</label><select class="inv-select" id="invEditUnit">' + unitOpts + '</select></div>';
     body += '<div class="inv-form-group"><label>Status</label><select class="inv-select" id="invEditActive"><option value="1"' + (p.active ? ' selected' : '') + '>Active</option><option value="0"' + (!p.active ? ' selected' : '') + '>Inactive</option></select></div>';
     body += '</div>';
@@ -2638,6 +2667,7 @@ async function invSaveProduct(productId) {
     name: document.getElementById('invEditName').value.trim(),
     sku: document.getElementById('invEditSku').value.trim() || null,
     category: document.getElementById('invEditCategory').value,
+    subcategory: document.getElementById('invEditSubcategory') ? document.getElementById('invEditSubcategory').value || null : null,
     unit_type: document.getElementById('invEditUnit').value,
     active: parseInt(document.getElementById('invEditActive').value),
     price: parseFloat(document.getElementById('invEditPrice').value) || 0,
@@ -2721,8 +2751,15 @@ function invShowNewProduct() {
   body += '<div class="inv-form-group" style="flex:2"><label>Product Name *</label><input type="text" class="inv-input" id="invNewName" placeholder="Enter product name"></div>';
   body += '<div class="inv-form-group" style="flex:1"><label>SKU</label><input type="text" class="inv-input" id="invNewSku" placeholder="Optional"></div>';
   body += '</div>';
+  var newSubcatOpts = '<option value="">— None —</option>';
+  var newSubcatList = ['feed','supplement','dewormer','fly_control','grooming','hoof_care','first_aid','tack','blankets','treats','barn_equipment','fencing','riding_apparel','pet_supplies','cleaning','poultry','farm_supplies','tools','gift','general'];
+  newSubcatList.forEach(function(sc) {
+    newSubcatOpts += '<option value="' + sc + '">' + invSubcatLabel(sc) + '</option>';
+  });
+
   body += '<div class="inv-form-row">';
   body += '<div class="inv-form-group"><label>Category</label><select class="inv-select" id="invNewCategory">' + catOpts + '</select></div>';
+  body += '<div class="inv-form-group"><label>Subcategory</label><select class="inv-select" id="invNewSubcategory">' + newSubcatOpts + '</select></div>';
   body += '<div class="inv-form-group"><label>Unit Type</label><select class="inv-select" id="invNewUnit">' + unitOpts + '</select></div>';
   body += '</div>';
   if (invCanViewFin()) {
@@ -2760,6 +2797,7 @@ async function invCreateProduct() {
     name: document.getElementById('invNewName').value.trim(),
     sku: document.getElementById('invNewSku').value.trim() || null,
     category: document.getElementById('invNewCategory').value,
+    subcategory: document.getElementById('invNewSubcategory') ? document.getElementById('invNewSubcategory').value || null : null,
     unit_type: document.getElementById('invNewUnit').value,
     price: parseFloat(document.getElementById('invNewPrice').value) || 0,
     cost: parseFloat(document.getElementById('invNewCost').value) || 0,

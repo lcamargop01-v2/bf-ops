@@ -57,7 +57,7 @@ app.get('/api/inventory/dashboard', async (c) => {
   const db = c.env.DB
   const locationId = c.req.query('location_id')
 
-  let stockQuery = `SELECT s.*, p.name as product_name, p.sku, p.category, p.unit_type, p.price, p.cost, p.weight_per_unit,
+  let stockQuery = `SELECT s.*, p.name as product_name, p.sku, p.category, p.subcategory, p.unit_type, p.price, p.cost, p.weight_per_unit,
     l.name as location_name, l.code as location_code,
     u_count.name as last_counted_by_name
     FROM inventory_stock s
@@ -123,7 +123,7 @@ app.get('/api/inventory/stock', async (c) => {
   const lowStockOnly = c.req.query('low_stock') === '1'
   const sort = c.req.query('sort') // name, category, sku, qty, last_counted
 
-  let query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
+  let query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.subcategory, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
     p.primary_vendor_id, sv.name as primary_vendor_name,
     l.name as location_name, l.code as location_code,
     u_count.name as last_counted_by_name
@@ -1341,7 +1341,7 @@ app.get('/api/inventory/products', async (c) => {
   const limit = parseInt(c.req.query('limit') || '500')
   const offset = parseInt(c.req.query('offset') || '0')
 
-  let query = `SELECT p.id, p.name, p.sku, p.category, p.unit_type, p.price, p.cost, p.weight_per_unit, p.active, p.tax_rate, p.pallet_qty, p.stock_quantity, p.primary_vendor_id, sv.name as primary_vendor_name
+  let query = `SELECT p.id, p.name, p.sku, p.category, p.subcategory, p.unit_type, p.price, p.cost, p.weight_per_unit, p.active, p.tax_rate, p.pallet_qty, p.stock_quantity, p.primary_vendor_id, sv.name as primary_vendor_name
     FROM products p LEFT JOIN suppliers sv ON p.primary_vendor_id = sv.id`
   const conditions: string[] = []
   const binds: any[] = []
@@ -1389,7 +1389,7 @@ app.get('/api/inventory/products/recategorize-preview', async (c) => {
   const batchSize = 500
   while (true) {
     const batch = await db.prepare(
-      'SELECT id, name, sku, category, active FROM products ORDER BY name ASC LIMIT ? OFFSET ?'
+      'SELECT id, name, sku, category, subcategory, active FROM products ORDER BY name ASC LIMIT ? OFFSET ?'
     ).bind(batchSize, offset).all()
     const rows = batch.results || []
     allProducts.push(...rows)
@@ -1399,19 +1399,28 @@ app.get('/api/inventory/products/recategorize-preview', async (c) => {
 
   // Classify each product
   const results = allProducts.map((p: any) => {
-    const suggested = classifyProduct(p.name, p.category)
+    const { category: suggested, subcategory } = classifyProduct(p.name, p.category)
     return {
       id: p.id,
       name: p.name,
       sku: p.sku,
       current_category: p.category,
+      current_subcategory: p.subcategory || null,
       suggested_category: suggested,
+      suggested_subcategory: subcategory,
       changed: p.category !== suggested,
       active: p.active
     }
   })
 
   // Summary stats
+  // Collect subcategory counts
+  const subCounts: Record<string, number> = {}
+  results.forEach(r => {
+    const sub = r.suggested_subcategory || 'general'
+    subCounts[sub] = (subCounts[sub] || 0) + 1
+  })
+
   const summary = {
     total: results.length,
     changed: results.filter(r => r.changed).length,
@@ -1419,9 +1428,9 @@ app.get('/api/inventory/products/recategorize-preview', async (c) => {
     by_suggested: {
       hay: results.filter(r => r.suggested_category === 'hay').length,
       shavings: results.filter(r => r.suggested_category === 'shavings').length,
-      grain: results.filter(r => r.suggested_category === 'grain').length,
       shelf_goods: results.filter(r => r.suggested_category === 'shelf_goods').length
     },
+    by_subcategory: subCounts,
     by_current: {} as Record<string, number>
   }
   results.forEach(r => {
@@ -1450,7 +1459,7 @@ app.post('/api/inventory/products/recategorize-apply', async (c) => {
   const batchSize = 500
   while (true) {
     const batch = await db.prepare(
-      'SELECT id, name, category FROM products ORDER BY id ASC LIMIT ? OFFSET ?'
+      'SELECT id, name, category, subcategory FROM products ORDER BY id ASC LIMIT ? OFFSET ?'
     ).bind(batchSize, offset).all()
     const rows = batch.results || []
     allProducts.push(...rows)
@@ -1465,12 +1474,15 @@ app.post('/api/inventory/products/recategorize-apply', async (c) => {
   // Build batch of UPDATE statements for changed products
   const batchStmts: D1PreparedStatement[] = []
   for (const p of allProducts) {
-    let newCat = overrides[p.id] || classifyProduct(p.name, p.category)
+    const overrideCat = overrides[p.id]
+    const classified = classifyProduct(p.name, p.category)
+    let newCat = overrideCat || classified.category
+    let newSub = overrideCat ? null : classified.subcategory  // subcategory from AI only
     if (!validCategories.includes(newCat)) newCat = 'shelf_goods'
 
-    if (newCat !== p.category) {
+    if (newCat !== p.category || (newSub && newSub !== p.subcategory)) {
       batchStmts.push(
-        db.prepare('UPDATE products SET category = ? WHERE id = ?').bind(newCat, p.id)
+        db.prepare('UPDATE products SET category = ?, subcategory = COALESCE(?, subcategory) WHERE id = ?').bind(newCat, newSub ?? null, p.id)
       )
       updated++
     } else {
@@ -1531,7 +1543,7 @@ app.put('/api/inventory/products/:id', async (c) => {
   if (!product) return c.json({ error: 'Product not found' }, 404)
 
   // Fields that can be updated
-  const allowedFields = ['name', 'sku', 'category', 'unit_type', 'price', 'cost', 'weight_per_unit',
+  const allowedFields = ['name', 'sku', 'category', 'subcategory', 'unit_type', 'price', 'cost', 'weight_per_unit',
     'active', 'tax_rate', 'pallet_qty', 'pallet_weight', 'length_in', 'width_in', 'height_in',
     'stackable', 'max_stack', 'bag_length_in', 'bag_width_in', 'bag_height_in', 'primary_vendor_id']
 
@@ -1578,10 +1590,11 @@ app.post('/api/inventory/products', async (c) => {
   if (!body.name) return c.json({ error: 'Product name is required' }, 400)
 
   const result = await db.prepare(
-    `INSERT INTO products (name, sku, category, unit_type, price, cost, weight_per_unit, active, tax_rate, pallet_qty, primary_vendor_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO products (name, sku, category, subcategory, unit_type, price, cost, weight_per_unit, active, tax_rate, pallet_qty, primary_vendor_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    body.name, body.sku || null, body.category || 'shelf_goods', body.unit_type || 'each',
+    body.name, body.sku || null, body.category || 'shelf_goods', body.subcategory || null,
+    body.unit_type || 'each',
     body.price || 0, body.cost || 0, body.weight_per_unit || 0,
     body.active !== undefined ? body.active : 1, body.tax_rate || 0, body.pallet_qty || 0,
     body.primary_vendor_id || null
@@ -1660,12 +1673,12 @@ app.delete('/api/inventory/products/:id/vendors/:vendorId', async (c) => {
 // ==================== CATEGORY CONSOLIDATION HELPER ====================
 
 // Classify a product into 3 consolidated categories: hay, shavings, shelf_goods
-function classifyProduct(name: string, currentCategory: string): string {
+function classifyProduct(name: string, currentCategory: string): { category: string, subcategory: string } {
   const n = (name || '').toLowerCase()
   const cat = (currentCategory || '').toLowerCase()
 
-  // If already one of the 3 valid categories, keep it
-  if (['hay', 'shavings', 'shelf_goods'].includes(cat)) return cat
+  // Helper: all detailed subcategories map to one of 3 main categories
+  function result(mainCat: string, sub: string) { return { category: mainCat, subcategory: sub } }
 
   // === KEYWORD-BASED CLASSIFICATION ===
 
@@ -1676,84 +1689,89 @@ function classifyProduct(name: string, currentCategory: string): string {
   const hayAccessory = /\b(hay\s*net|haynet|hay\s*bag|hay\s*ring|hay\s*rack|hay\s*hook)\b/.test(n)
     || (n.includes('hay') && /\b(net|feeder|ring|hook|rack|tote|carrier)\b/.test(n))
   if (!hayAccessory) {
-    for (const kw of hayKeywords) { if (n.includes(kw)) return 'hay' }
+    for (const kw of hayKeywords) { if (n.includes(kw)) return result('hay', 'hay') }
   }
-  if (hayAccessory) return 'barn_equipment'
 
   // --- SHAVINGS / BEDDING ---
   const shavingsKeywords = ['shaving', 'bedding', 'shavings', 'pine flake', 'wood pellet bed',
     'stall dry', 'stall-dry', 'stalldry', 'sweet pdz', 'pdz', 'pelleted bedding']
-  if (/\bshaving\s*fork\b/.test(n)) return 'tools'
-  for (const kw of shavingsKeywords) { if (n.includes(kw)) return 'shavings' }
+  if (!/\bshaving\s*fork\b/.test(n)) {
+    for (const kw of shavingsKeywords) { if (n.includes(kw)) return result('shavings', 'bedding') }
+  }
 
-  // --- SUPPLEMENT ---
-  if (/\b(supplement|electrolyte|probiotic|vitamin|mineral mix|joint|glucosamine|msm|omega|biotin|amino|digest|gut health)\b/.test(n)) return 'supplement'
-  if (n.includes('cavalor') && /\b(derma|electroliq|gastro|hepato|oilmega|resist|vitaflora|vitamino|nutri|arti|bronchix)\b/.test(n)) return 'supplement'
+  // === Everything below is shelf_goods with a subcategory ===
 
-  // --- DEWORMER ---
-  if (/\b(dewormer|deworm|ivermectin|fenbendazole|panacur|safeguard|anthelmintic|pyrantel|strongid|quest|moxidectin)\b/.test(n)) return 'dewormer'
-
-  // --- FLY CONTROL / INSECT ---
-  if (/\b(fly\s*(spray|mask|sheet|trap|repel|control)|insect|bug\s*spray|mosquito|permethrin|pyrethrin)\b/.test(n)) return 'fly_control'
-
-  // --- GROOMING ---
-  if (/\b(shampoo|conditioner|brush|comb|mane|tail.*spray|coat.*polish|grooming|curry|shedding|clipper|blade)\b/.test(n)) return 'grooming'
-
-  // --- HOOF CARE ---
-  if (/\b(hoof|farrier|hoof.*pick|hoof.*dressing|hoof.*oil|thrush|shoe.*pull|rasp)\b/.test(n)) return 'hoof_care'
-
-  // --- FIRST AID / HEALTH ---
-  if (/\b(wound|bandage|wrap|liniment|poultice|antiseptic|iodine|betadine|vetericyn|first\s*aid|bute|phenylbutazone|dmso|vetrx|vet.*spray)\b/.test(n)) return 'first_aid'
-
-  // --- TACK ---
-  if (/\b(halter|lead\s*rope|bridle|saddle|girth|bit\s|martingale|breast\s*collar|reins|cinch|pad|noseband|browband)\b/.test(n)) return 'tack'
-
-  // --- BLANKETS ---
-  if (/\b(blanket|sheet|turnout|stable\s*sheet|fly\s*sheet|cooler|neck\s*cover)\b/.test(n)) return 'blankets'
-
-  // --- TREATS ---
-  if (/\b(treat|cookie|snack|crunchies|fruities|sweeties|apple.*wafer|carrot.*nugget)\b/.test(n)) return 'treats'
-
-  // --- BARN EQUIPMENT ---
-  if (/\b(bucket|feeder|water.*trough|muck.*tub|muck.*bucket|stall\s*guard|hay\s*feeder|salt.*holder|waterer|tank.*heater|heated.*bucket)\b/.test(n)) return 'barn_equipment'
-  const feedAccessory = (n.includes('feed') && /\b(scoop|bucket|pan|tub|bin)\b/.test(n))
-    || /\b(corner\s*feeder|hook\s*over\s*feeder|hang\s*feeder|greedy\s*feeder|slow\s*feed\s*net)\b/.test(n)
-  if (feedAccessory) return 'barn_equipment'
-
-  // --- FENCING ---
-  if (/\b(fence|fencing|electric.*tape|t-post|insulator|gate|poly.*rope|charger.*fence)\b/.test(n)) return 'fencing'
-
-  // --- RIDING APPAREL ---
-  if (/\b(boot|helmet|glove|breeches|riding.*pant|spur|crop|whip|chap)\b/.test(n)) return 'riding_apparel'
-
-  // --- PET SUPPLIES ---
-  if (/\b(dog\s*(food|treat|toy|collar|leash|bed)|cat\s*(food|treat|toy|litter))\b/.test(n)) return 'pet_supplies'
-
-  // --- CLEANING ---
-  if (/\b(cleaner|disinfect|sanitize|lime|barn.*fresh|odor|deodor)\b/.test(n)) return 'cleaning'
-
-  // --- POULTRY ---
-  if (/\b(chicken|poultry|layer|chick\s*starter|gamebird|game\s*bird|rooster|hen|egg.*carton|coop)\b/.test(n)) return 'poultry'
-
-  // --- GRAIN / FEED ---
-  const grainKeywords = ['feed', 'grain', ' oat', 'oats ', 'beet pulp', ' mash', 'mash ',
+  // --- FEED ---
+  const feedKeywords = ['feed', 'grain', ' oat', 'oats ', 'beet pulp', ' mash', 'mash ',
     'cavalor', 'buckeye', 'nutrena', 'purina', 'tribute', 'calf-manna', 'sweet feed',
     'pelleted feed', 'complete feed', 'equine senior', 'horse feed', 'ration balancer',
     'mineral block', 'salt block', 'salt lick', 'omolene', 'ultium', 'safechoice',
     'strategy ', 'enrich', 'impact ']
-  for (const kw of grainKeywords) { if (n.includes(kw)) return 'feed' }
+  const feedAccessory = (n.includes('feed') && /\b(scoop|bucket|pan|tub|bin)\b/.test(n))
+    || /\b(corner\s*feeder|hook\s*over\s*feeder|hang\s*feeder|greedy\s*feeder|slow\s*feed\s*net)\b/.test(n)
+  if (!feedAccessory) {
+    for (const kw of feedKeywords) { if (n.includes(kw)) return result('shelf_goods', 'feed') }
+  }
+
+  // --- SUPPLEMENT ---
+  if (/\b(supplement|electrolyte|probiotic|vitamin|mineral mix|joint|glucosamine|msm|omega|biotin|amino|digest|gut health)\b/.test(n)) return result('shelf_goods', 'supplement')
+  if (n.includes('cavalor') && /\b(derma|electroliq|gastro|hepato|oilmega|resist|vitaflora|vitamino|nutri|arti|bronchix)\b/.test(n)) return result('shelf_goods', 'supplement')
+
+  // --- DEWORMER ---
+  if (/\b(dewormer|deworm|ivermectin|fenbendazole|panacur|safeguard|anthelmintic|pyrantel|strongid|quest|moxidectin)\b/.test(n)) return result('shelf_goods', 'dewormer')
+
+  // --- FLY CONTROL / INSECT ---
+  if (/\b(fly\s*(spray|mask|sheet|trap|repel|control)|insect|bug\s*spray|mosquito|permethrin|pyrethrin)\b/.test(n)) return result('shelf_goods', 'fly_control')
+
+  // --- GROOMING ---
+  if (/\b(shampoo|conditioner|brush|comb|mane|tail.*spray|coat.*polish|grooming|curry|shedding|clipper|blade)\b/.test(n)) return result('shelf_goods', 'grooming')
+
+  // --- HOOF CARE ---
+  if (/\b(hoof|farrier|hoof.*pick|hoof.*dressing|hoof.*oil|thrush|shoe.*pull|rasp)\b/.test(n)) return result('shelf_goods', 'hoof_care')
+
+  // --- FIRST AID / HEALTH ---
+  if (/\b(wound|bandage|wrap|liniment|poultice|antiseptic|iodine|betadine|vetericyn|first\s*aid|bute|phenylbutazone|dmso|vetrx|vet.*spray)\b/.test(n)) return result('shelf_goods', 'first_aid')
+
+  // --- TACK ---
+  if (/\b(halter|lead\s*rope|bridle|saddle|girth|bit\s|martingale|breast\s*collar|reins|cinch|pad|noseband|browband)\b/.test(n)) return result('shelf_goods', 'tack')
+
+  // --- BLANKETS ---
+  if (/\b(blanket|sheet|turnout|stable\s*sheet|fly\s*sheet|cooler|neck\s*cover)\b/.test(n)) return result('shelf_goods', 'blankets')
+
+  // --- TREATS ---
+  if (/\b(treat|cookie|snack|crunchies|fruities|sweeties|apple.*wafer|carrot.*nugget)\b/.test(n)) return result('shelf_goods', 'treats')
+
+  // --- BARN EQUIPMENT ---
+  if (/\b(bucket|feeder|water.*trough|muck.*tub|muck.*bucket|stall\s*guard|hay\s*feeder|salt.*holder|waterer|tank.*heater|heated.*bucket)\b/.test(n)) return result('shelf_goods', 'barn_equipment')
+  if (hayAccessory || feedAccessory) return result('shelf_goods', 'barn_equipment')
+
+  // --- FENCING ---
+  if (/\b(fence|fencing|electric.*tape|t-post|insulator|gate|poly.*rope|charger.*fence)\b/.test(n)) return result('shelf_goods', 'fencing')
+
+  // --- RIDING APPAREL ---
+  if (/\b(boot|helmet|glove|breeches|riding.*pant|spur|crop|whip|chap)\b/.test(n)) return result('shelf_goods', 'riding_apparel')
+
+  // --- PET SUPPLIES ---
+  if (/\b(dog\s*(food|treat|toy|collar|leash|bed)|cat\s*(food|treat|toy|litter))\b/.test(n)) return result('shelf_goods', 'pet_supplies')
+
+  // --- CLEANING ---
+  if (/\b(cleaner|disinfect|sanitize|lime|barn.*fresh|odor|deodor)\b/.test(n)) return result('shelf_goods', 'cleaning')
+
+  // --- POULTRY ---
+  if (/\b(chicken|poultry|layer|chick\s*starter|gamebird|game\s*bird|rooster|hen|egg.*carton|coop)\b/.test(n)) return result('shelf_goods', 'poultry')
 
   // --- FARM SUPPLIES ---
-  if (/\b(wheelbarrow|shovel|fork|rake|cart|trailer|tractor|barn|storage|tarp)\b/.test(n)) return 'farm_supplies'
+  if (/\b(wheelbarrow|shovel|fork|rake|cart|trailer|tractor|barn|storage|tarp)\b/.test(n)) return result('shelf_goods', 'farm_supplies')
+  if (/\bshaving\s*fork\b/.test(n)) return result('shelf_goods', 'farm_supplies')
 
   // --- TOOLS ---
-  if (/\b(tool|knife|plier|wire.*cutter|bolt.*cutter|wrench|screwdriver)\b/.test(n)) return 'tools'
+  if (/\b(tool|knife|plier|wire.*cutter|bolt.*cutter|wrench|screwdriver)\b/.test(n)) return result('shelf_goods', 'tools')
 
   // --- GIFT ---
-  if (/\b(gift\s*card|gift\s*certificate|gift\s*basket)\b/.test(n)) return 'gift'
+  if (/\b(gift\s*card|gift\s*certificate|gift\s*basket)\b/.test(n)) return result('shelf_goods', 'gift')
 
   // --- DEFAULT ---
-  return 'shelf_goods'
+  return result('shelf_goods', 'general')
 }
 
 // ==================== INVENTORY SNAPSHOTS ====================

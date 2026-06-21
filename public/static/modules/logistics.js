@@ -8042,7 +8042,7 @@ async function showEditProductModal(id) {
         <div class="form-group"><label class="form-label">SKU</label><input class="form-input" id="editProdSku" value="${p.sku||''}"></div></div>
       <div class="form-row-3">
         <div class="form-group"><label class="form-label">Category</label>
-          <select class="form-select" id="editProdCat">${['horse','cattle','poultry','goat','swine','supplement','other'].map(c=>`<option value="${c}" ${p.category===c?'selected':''}>${c}</option>`).join('')}</select>
+          <select class="form-select" id="editProdCat">${['hay','shavings','shelf_goods'].map(c=>`<option value="${c}" ${p.category===c?'selected':''}>${c.replace(/_/g,' ')}</option>`).join('')}</select>
         </div>
         <div class="form-group"><label class="form-label">Weight/Unit (lbs)</label><input class="form-input" type="number" id="editProdWeight" value="${p.weight_per_unit}"></div>
         <div class="form-group"><label class="form-label">Unit Type</label><input class="form-input" id="editProdUnit" value="${p.unit_type||'bag'}"></div>
