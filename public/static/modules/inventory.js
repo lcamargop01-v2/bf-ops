@@ -1776,6 +1776,206 @@ async function invDeleteBatchImage(imageId, batchId) {
   } catch(e) { invToast('Delete failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
+// ==================== SECOND-LAYER MODAL (for order detail from drilldown) ====================
+
+function invShowModal2(title, body, footer) {
+  var existing = document.getElementById('invModal2');
+  if (existing) existing.remove();
+  var modal = document.createElement('div');
+  modal.id = 'invModal2';
+  modal.className = 'inv-modal-overlay';
+  modal.style.zIndex = '10001';
+  modal.innerHTML = '<div class="inv-modal" style="max-width:700px">' +
+    '<div class="inv-modal-header"><h3>' + title + '</h3><button onclick="invCloseModal2()" class="inv-modal-close"><i class="fas fa-times"></i></button></div>' +
+    '<div class="inv-modal-body">' + body + '</div>' +
+    (footer ? '<div class="inv-modal-footer">' + footer + '</div>' : '') +
+    '</div>';
+  modal.onclick = function(e) { if (e.target === modal) invCloseModal2(); };
+  document.body.appendChild(modal);
+  setTimeout(function() { modal.classList.add('inv-modal-show'); }, 10);
+}
+
+function invCloseModal2() {
+  var modal = document.getElementById('invModal2');
+  if (modal) { modal.classList.remove('inv-modal-show'); setTimeout(function() { modal.remove(); }, 200); }
+}
+
+// ==================== ORDER / SALE DETAIL VIEWER ====================
+
+function invViewOrder(id, type) {
+  type = type || 'order';
+  invShowModal2(
+    '<i class="fas fa-spinner fa-spin"></i> Loading...',
+    '<div style="text-align:center;padding:40px"><i class="fas fa-spinner fa-spin fa-2x" style="color:#94A3B8"></i></div>',
+    ''
+  );
+
+  if (type === 'sale') {
+    invAPI.get('/api/pos/order-detail/' + id + '?type=sale', { headers: invHeaders() }).then(function(r) {
+      var d = r.data;
+      var s = d.sale || {};
+      var html = '<div style="margin-bottom:16px">';
+
+      // Header
+      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;gap:8px">' +
+        '<div><h3 style="margin:0;font-size:18px;font-weight:700">' + escH(s.sale_number || '#' + s.id) + '</h3>' +
+        (d.customer ? '<div style="color:#64748B;font-size:13px;margin-top:2px"><i class="fas fa-user"></i> ' + escH(d.customer.business_name || d.customer.contact_name || '') + '</div>' : '') +
+        '</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+        '<span class="inv-drill-status inv-drill-status-' + (s.status || 'new') + '">' + escH(s.status || 'unknown') + '</span>' +
+        (s.fulfillment_type ? '<span style="background:#EFF6FF;color:#1E40AF;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600">' + escH(s.fulfillment_type) + '</span>' : '') +
+        '</div></div>';
+
+      // Meta info
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:16px;padding:12px;background:#F8FAFC;border-radius:8px">';
+      if (s.cashier_name) html += '<div><span class="inv-muted" style="font-size:11px;display:block">Cashier</span><strong style="font-size:13px">' + escH(s.cashier_name) + '</strong></div>';
+      if (s.location_name || s.location_id) html += '<div><span class="inv-muted" style="font-size:11px;display:block">Location</span><strong style="font-size:13px">' + escH(s.location_name || 'Location #' + s.location_id) + '</strong></div>';
+      if (s.created_at) html += '<div><span class="inv-muted" style="font-size:11px;display:block">Created</span><strong style="font-size:13px">' + invFormatDate(s.created_at) + '</strong></div>';
+      if (s.order_id) html += '<div><span class="inv-muted" style="font-size:11px;display:block">Linked Order</span><span class="inv-drill-order" style="cursor:pointer" onclick="invViewOrder(' + s.order_id + ',\'order\')">' + (s.order_number || 'Order #' + s.order_id) + '</span></div>';
+      html += '</div>';
+
+      // Line items
+      if (d.items && d.items.length > 0) {
+        html += '<h4 class="inv-drill-section"><i class="fas fa-list" style="color:#2563EB"></i> Line Items</h4>';
+        html += '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:2px solid #E2E8F0"><th style="text-align:left;padding:6px 8px">Product</th><th style="text-align:right;padding:6px 8px">Qty</th><th style="text-align:right;padding:6px 8px">Price</th><th style="text-align:right;padding:6px 8px">Total</th></tr></thead><tbody>';
+        d.items.forEach(function(it) {
+          var lineTotal = (it.unit_price || 0) * (it.quantity || 0);
+          html += '<tr style="border-bottom:1px solid #F1F5F9"><td style="padding:6px 8px">' + escH(it.product_name || 'Product #' + it.product_id) + '</td>' +
+            '<td style="text-align:right;padding:6px 8px">' + (it.quantity || 0) + '</td>' +
+            '<td style="text-align:right;padding:6px 8px">$' + (it.unit_price || 0).toFixed(2) + '</td>' +
+            '<td style="text-align:right;padding:6px 8px;font-weight:600">$' + lineTotal.toFixed(2) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+      }
+
+      // Totals
+      html += '<div style="margin-top:12px;padding:12px;background:#F0FDF4;border-radius:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-end">';
+      if (s.subtotal != null) html += '<div style="font-size:13px"><span class="inv-muted">Subtotal:</span> $' + (s.subtotal || 0).toFixed(2) + '</div>';
+      if (s.discount > 0) html += '<div style="font-size:13px;color:#DC2626"><span class="inv-muted">Discount:</span> -$' + s.discount.toFixed(2) + '</div>';
+      if (s.tax > 0) html += '<div style="font-size:13px"><span class="inv-muted">Tax:</span> $' + s.tax.toFixed(2) + '</div>';
+      html += '<div style="font-size:16px;font-weight:700;color:#059669"><span>Total: $' + (s.total || 0).toFixed(2) + '</span></div>';
+      html += '</div>';
+
+      // Payments
+      if (d.payments && d.payments.length > 0) {
+        html += '<h4 class="inv-drill-section" style="margin-top:16px"><i class="fas fa-credit-card" style="color:#059669"></i> Payments</h4>';
+        d.payments.forEach(function(p) {
+          var method = (p.method || '').replace(/_/g, ' ');
+          html += '<div class="inv-drill-row">' +
+            '<div class="inv-drill-qty"><span style="background:#DCFCE7;color:#166534;padding:3px 8px;border-radius:10px;font-size:12px;font-weight:600">$' + (p.amount || 0).toFixed(2) + '</span></div>' +
+            '<div class="inv-drill-info"><strong style="text-transform:capitalize">' + escH(method) + '</strong>' +
+            (p.gateway_ref || p.reference_number ? ' <span class="inv-muted">#' + escH(p.gateway_ref || p.reference_number) + '</span>' : '') +
+            '<br><span class="inv-muted">' + invFormatDate(p.created_at) + '</span></div></div>';
+        });
+      }
+
+      // Refunds
+      if (d.refunds && d.refunds.length > 0) {
+        html += '<h4 class="inv-drill-section" style="margin-top:16px"><i class="fas fa-undo" style="color:#DC2626"></i> Refunds</h4>';
+        d.refunds.forEach(function(ref) {
+          html += '<div class="inv-drill-row">' +
+            '<div class="inv-drill-qty"><span style="background:#FEE2E2;color:#991B1B;padding:3px 8px;border-radius:10px;font-size:12px;font-weight:600">-$' + (ref.amount || 0).toFixed(2) + '</span></div>' +
+            '<div class="inv-drill-info"><strong>' + escH(ref.reason || 'Refund') + '</strong>' +
+            (ref.refund_items ? '<br><span class="inv-muted">' + escH(ref.refund_items) + '</span>' : '') +
+            '<br><span class="inv-muted">' + invFormatDate(ref.created_at) + '</span></div></div>';
+        });
+      }
+
+      html += '</div>';
+
+      // Footer with navigation to logistics if there's a linked order
+      var footer = '';
+      if (s.order_id) {
+        footer = '<button class="inv-btn inv-btn-primary" onclick="invViewOrder(' + s.order_id + ',\'order\')"><i class="fas fa-truck"></i> View Delivery Order</button>';
+      }
+
+      invShowModal2('<i class="fas fa-receipt" style="color:#059669"></i> ' + escH(s.sale_number || 'Sale #' + s.id), html, footer);
+    }).catch(function(e) {
+      invShowModal2('<i class="fas fa-exclamation-triangle" style="color:#DC2626"></i> Error',
+        '<div style="text-align:center;padding:20px;color:#DC2626">' + escH(e.response?.data?.error || e.message) + '</div>', '');
+    });
+  } else {
+    // Order type — use logistics API
+    invAPI.get('/api/orders/' + id, { headers: invHeaders() }).then(function(r) {
+      var o = r.data.order || {};
+      var items = r.data.items || [];
+      var html = '<div style="margin-bottom:16px">';
+
+      // Header
+      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;gap:8px">' +
+        '<div><h3 style="margin:0;font-size:18px;font-weight:700">' + escH(o.order_number || 'Order #' + o.id) + '</h3>' +
+        (o.business_name ? '<div style="color:#64748B;font-size:13px;margin-top:2px"><i class="fas fa-building"></i> ' + escH(o.business_name) + '</div>' : '') +
+        '</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+        '<span class="inv-drill-status inv-drill-status-' + (o.status || 'new') + '">' + escH(o.status || 'unknown') + '</span>' +
+        (o.priority && o.priority !== 'normal' ? '<span style="background:#FEF2F2;color:#991B1B;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;text-transform:uppercase">' + escH(o.priority) + '</span>' : '') +
+        '</div></div>';
+
+      // Meta info
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:16px;padding:12px;background:#F8FAFC;border-radius:8px">';
+      if (o.contact_name) html += '<div><span class="inv-muted" style="font-size:11px;display:block">Contact</span><strong style="font-size:13px">' + escH(o.contact_name) + '</strong></div>';
+      if (o.customer_phone) html += '<div><span class="inv-muted" style="font-size:11px;display:block">Phone</span><strong style="font-size:13px">' + escH(o.customer_phone) + '</strong></div>';
+      if (o.scheduled_date) html += '<div><span class="inv-muted" style="font-size:11px;display:block">Scheduled</span><strong style="font-size:13px">' + o.scheduled_date + '</strong></div>';
+      if (o.created_at) html += '<div><span class="inv-muted" style="font-size:11px;display:block">Created</span><strong style="font-size:13px">' + invFormatDate(o.created_at) + '</strong></div>';
+      html += '</div>';
+
+      // Delivery address
+      if (o.street) {
+        html += '<div style="padding:10px 14px;background:#EFF6FF;border-radius:8px;border-left:3px solid #2563EB;margin-bottom:16px">' +
+          '<div style="font-size:11px;color:#1D4ED8;font-weight:600;margin-bottom:4px"><i class="fas fa-map-marker-alt"></i> Delivery Address</div>' +
+          '<div style="font-size:13px">' + escH(o.street) + ', ' + escH(o.city || '') + ' ' + escH(o.state || '') + ' ' + escH(o.zip || '') + '</div>' +
+          (o.gate_code ? '<div style="font-size:12px;color:#D97706;margin-top:4px"><i class="fas fa-key"></i> Gate: ' + escH(o.gate_code) + '</div>' : '') +
+          (o.address_notes ? '<div style="font-size:12px;color:#64748B;margin-top:2px"><i class="fas fa-sticky-note"></i> ' + escH(o.address_notes) + '</div>' : '') +
+          '</div>';
+      }
+
+      // Route info
+      if (o.route_number) {
+        html += '<div style="padding:10px 14px;background:#F5F3FF;border-radius:8px;border-left:3px solid #7C3AED;margin-bottom:16px">' +
+          '<div style="font-size:11px;color:#7C3AED;font-weight:600;margin-bottom:4px"><i class="fas fa-route"></i> Assigned Route</div>' +
+          '<div style="font-size:13px">' + escH(o.route_number) + (o.route_date ? ' &middot; ' + o.route_date : '') +
+          (o.route_status ? ' &middot; <span class="inv-drill-status inv-drill-status-' + o.route_status + '">' + escH(o.route_status) + '</span>' : '') + '</div></div>';
+      }
+
+      // Special instructions
+      if (o.special_instructions) {
+        html += '<div style="padding:10px 14px;background:#FFF7ED;border-radius:8px;border-left:3px solid #D97706;margin-bottom:16px">' +
+          '<div style="font-size:11px;color:#D97706;font-weight:600;margin-bottom:4px"><i class="fas fa-exclamation-circle"></i> Special Instructions</div>' +
+          '<div style="font-size:13px">' + escH(o.special_instructions) + '</div></div>';
+      }
+
+      // Line items
+      if (items.length > 0) {
+        html += '<h4 class="inv-drill-section"><i class="fas fa-list" style="color:#2563EB"></i> Order Items</h4>';
+        html += '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:2px solid #E2E8F0"><th style="text-align:left;padding:6px 8px">Product</th><th style="text-align:left;padding:6px 8px">SKU</th><th style="text-align:right;padding:6px 8px">Qty</th><th style="text-align:right;padding:6px 8px">Weight</th></tr></thead><tbody>';
+        var totalWeight = 0;
+        items.forEach(function(it) {
+          var w = it.weight_subtotal || ((it.weight_per_unit || 0) * (it.quantity || 0));
+          totalWeight += w;
+          html += '<tr style="border-bottom:1px solid #F1F5F9"><td style="padding:6px 8px">' + escH(it.product_name || '') + '</td>' +
+            '<td style="padding:6px 8px;color:#64748B;font-size:12px">' + escH(it.sku || '—') + '</td>' +
+            '<td style="text-align:right;padding:6px 8px;font-weight:600">' + (it.quantity || 0) + '</td>' +
+            '<td style="text-align:right;padding:6px 8px">' + (w > 0 ? w.toLocaleString() + ' lbs' : '—') + '</td></tr>';
+        });
+        if (totalWeight > 0) {
+          html += '<tr style="border-top:2px solid #E2E8F0"><td colspan="3" style="text-align:right;padding:6px 8px;font-weight:600">Total Weight</td><td style="text-align:right;padding:6px 8px;font-weight:700">' + totalWeight.toLocaleString() + ' lbs</td></tr>';
+        }
+        html += '</tbody></table>';
+      }
+
+      html += '</div>';
+
+      // Footer — open in logistics module
+      var footer = '<button class="inv-btn inv-btn-outline" onclick="invCloseModal2();invCloseModal();launchModule(\'logistics\',\'orders\');setTimeout(function(){if(typeof navigate===\'function\')navigate(\'orders\',{viewId:' + o.id + '})},800)"><i class="fas fa-external-link-alt"></i> Open in Logistics</button>';
+
+      invShowModal2('<i class="fas fa-truck" style="color:#2563EB"></i> ' + escH(o.order_number || 'Order #' + o.id), html, footer);
+    }).catch(function(e) {
+      invShowModal2('<i class="fas fa-exclamation-triangle" style="color:#DC2626"></i> Error',
+        '<div style="text-align:center;padding:20px;color:#DC2626">' + escH(e.response?.data?.error || e.message) + '</div>', '');
+    });
+  }
+}
+
 // ==================== STOCK DRILLDOWN POPUPS ====================
 
 // Drill into a stock number — shows WHO is holding/reserving/ordering inventory
@@ -1800,7 +2000,7 @@ async function invStockDrilldown(productId, locationId, field, productName) {
           body += '<div class="inv-drill-row">' +
             '<div class="inv-drill-qty"><span class="inv-hold-badge">' + h.quantity + '</span></div>' +
             '<div class="inv-drill-info">' +
-            '<strong>' + escH(h.sale_number) + '</strong>' +
+            '<span class="inv-drill-order" style="cursor:pointer" onclick="invViewOrder(' + h.sale_id + ',\'sale\')">' + escH(h.sale_number) + '</span>' +
             (h.customer_name ? ' — ' + escH(h.customer_name) : ' — Walk-in') +
             '<br><span class="inv-muted"><i class="fas fa-user"></i> ' + escH(h.cashier_name || 'Unknown') +
             ' &middot; ' + invFormatDate(h.created_at) + '</span>' +
@@ -1817,8 +2017,8 @@ async function invStockDrilldown(productId, locationId, field, productName) {
           body += '<div class="inv-drill-row">' +
             '<div class="inv-drill-qty"><span class="inv-hold-badge">' + h.quantity + '</span></div>' +
             '<div class="inv-drill-info">' +
-            '<strong>' + escH(h.sale_number) + '</strong>' +
-            (h.order_number ? ' → <span class="inv-drill-order">' + escH(h.order_number) + '</span>' : '') +
+            '<span class="inv-drill-order" style="cursor:pointer" onclick="invViewOrder(' + h.sale_id + ',\'sale\')">' + escH(h.sale_number) + '</span>' +
+            (h.order_number ? ' → <span class="inv-drill-order" style="cursor:pointer" onclick="invViewOrder(' + (h.order_id || 0) + ',\'order\')">' + escH(h.order_number) + '</span>' : '') +
             (h.customer_name ? ' — ' + escH(h.customer_name) : '') +
             '<br><span class="inv-muted"><i class="fas fa-route"></i> ' + escH(h.fulfillment_type) +
             ' &middot; <span class="inv-drill-status inv-drill-status-' + (h.order_status || 'new') + '">' + statusLabel + '</span>' +
@@ -1834,7 +2034,7 @@ async function invStockDrilldown(productId, locationId, field, productName) {
           body += '<div class="inv-drill-row">' +
             '<div class="inv-drill-qty"><span class="inv-hold-badge">' + h.quantity + '</span></div>' +
             '<div class="inv-drill-info">' +
-            '<strong>' + escH(h.order_number) + '</strong>' +
+            '<span class="inv-drill-order" style="cursor:pointer" onclick="invViewOrder(' + h.order_id + ',\'order\')">' + escH(h.order_number) + '</span>' +
             (h.customer_name ? ' — ' + escH(h.customer_name) : '') +
             '<br><span class="inv-muted"><span class="inv-drill-status inv-drill-status-' + h.order_status + '">' + escH(h.order_status) + '</span>' +
             (h.scheduled_date ? ' &middot; <i class="fas fa-calendar"></i> ' + h.scheduled_date : '') +
@@ -1870,7 +2070,7 @@ async function invStockDrilldown(productId, locationId, field, productName) {
             '<div class="inv-drill-qty"><span class="inv-res-badge">' + r.qty + '</span></div>' +
             '<div class="inv-drill-info">' +
             (r.customer_name ? '<strong>' + escH(r.customer_name) + '</strong>' : '<strong>No customer</strong>') +
-            (r.order_number ? ' — Order ' + escH(r.order_number) : '') +
+            (r.order_number ? ' — Order <span class="inv-drill-order" style="cursor:pointer" onclick="invViewOrder(' + (r.order_id || 0) + ',\'order\')">' + escH(r.order_number) + '</span>' : '') +
             '<br><span class="inv-muted">' + escH(r.created_by_name || 'System') + ' &middot; ' + invFormatDate(r.created_at) +
             (r.notes ? ' &middot; ' + escH(r.notes) : '') + '</span>' +
             '</div></div>';
@@ -2061,7 +2261,7 @@ async function invShowProductDetail(productId) {
     if (reservations.length > 0) {
       body += '<h4 style="margin-top:16px">Active Reservations</h4>';
       reservations.forEach(function(r) {
-        body += '<div class="inv-detail-item"><span class="inv-res-badge">' + r.qty + ' reserved</span> at ' + escH(r.location_name) + (r.customer_name ? ' for ' + escH(r.customer_name) : '') + (r.order_number ? ' (Order ' + escH(r.order_number) + ')' : '') + '</div>';
+        body += '<div class="inv-detail-item"><span class="inv-res-badge">' + r.qty + ' reserved</span> at ' + escH(r.location_name) + (r.customer_name ? ' for ' + escH(r.customer_name) : '') + (r.order_number ? ' (Order <span class="inv-drill-order" style="cursor:pointer" onclick="invViewOrder(' + (r.order_id || 0) + ',\'order\')">' + escH(r.order_number) + '</span>)' : '') + '</div>';
       });
     }
 

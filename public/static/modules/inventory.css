@@ -676,6 +676,14 @@
   border-radius: 4px;
   font-size: 11px;
   font-weight: 600;
+  transition: all 0.15s;
+}
+.inv-drill-order[style*="cursor:pointer"]:hover,
+.inv-drill-order[onclick]:hover {
+  background: #DBEAFE;
+  color: #1E3A8A;
+  text-decoration: underline;
+  box-shadow: 0 1px 3px rgba(37,99,235,0.2);
 }
 .inv-drill-status {
   display: inline-block;
@@ -689,6 +697,15 @@
 .inv-drill-status-confirmed { background: #D1FAE5; color: #065F46; }
 .inv-drill-status-scheduled { background: #E0E7FF; color: #3730A3; }
 .inv-drill-status-loaded { background: #FEF3C7; color: #92400E; }
+.inv-drill-status-in_transit { background: #FEF3C7; color: #92400E; }
+.inv-drill-status-delivered { background: #D1FAE5; color: #065F46; }
+.inv-drill-status-completed { background: #D1FAE5; color: #065F46; }
+.inv-drill-status-cancelled { background: #FEE2E2; color: #991B1B; }
+.inv-drill-status-hold { background: #FDF4FF; color: #7C3AED; }
+.inv-drill-status-draft { background: #F1F5F9; color: #475569; }
+.inv-drill-status-voided { background: #FEE2E2; color: #991B1B; text-decoration: line-through; }
+.inv-drill-status-active { background: #DBEAFE; color: #1E40AF; }
+.inv-drill-status-planning { background: #E0E7FF; color: #3730A3; }
 
 /* Audit trail mini-log */
 .inv-drill-audit {

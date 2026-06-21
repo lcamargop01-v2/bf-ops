@@ -1252,9 +1252,20 @@ app.get('/api/pos/order-detail/:id', async (c) => {
   const type = c.req.query('type') || 'order' // 'order' or 'sale'
 
   if (type === 'sale') {
-    const sale = await db.prepare('SELECT * FROM pos_sales WHERE id = ?').bind(id).first()
+    const sale = await db.prepare(`
+      SELECT ps.*, l.name as location_name, o.order_number
+      FROM pos_sales ps
+      LEFT JOIN locations l ON ps.location_id = l.id
+      LEFT JOIN orders o ON ps.order_id = o.id
+      WHERE ps.id = ?
+    `).bind(id).first()
     if (!sale) return c.json({ error: 'Sale not found' }, 404)
-    const items = await db.prepare('SELECT * FROM pos_sale_items WHERE sale_id = ? ORDER BY id').bind(id).all()
+    const items = await db.prepare(`
+      SELECT psi.*, p.name as product_name
+      FROM pos_sale_items psi
+      LEFT JOIN products p ON p.id = psi.product_id
+      WHERE psi.sale_id = ? ORDER BY psi.id
+    `).bind(id).all()
     const payments = await db.prepare('SELECT * FROM pos_payments WHERE sale_id = ? ORDER BY id').bind(id).all()
     const customer = (sale as any).customer_id
       ? await db.prepare('SELECT id, business_name, contact_name, phone, email FROM customers WHERE id = ?').bind((sale as any).customer_id).first()
