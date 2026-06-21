@@ -243,9 +243,14 @@
   text-transform: capitalize;
 }
 .po-bill-pending { background: #FEF3C7; color: #92400E; }
+.po-bill-approved { background: #DBEAFE; color: #1E40AF; }
 .po-bill-paid { background: #D1FAE5; color: #065F46; }
+.po-bill-disputed { background: #FEE2E2; color: #991B1B; }
 .po-bill-overdue { background: #FEE2E2; color: #991B1B; }
 .po-bill-cancelled { background: #F1F5F9; color: #64748B; }
+.po-link { color: #2563EB; cursor: pointer; text-decoration: underline; }
+.po-link:hover { color: #1D4ED8; }
+.po-danger { color: #DC2626; font-weight: 600; }
 
 /* ==================== COLORS ==================== */
 .po-positive { color: #059669; }

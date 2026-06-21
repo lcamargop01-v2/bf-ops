@@ -727,23 +727,32 @@ function poRenderOrderDetail(data) {
   }
 
   // Bills
-  if (bills.length > 0) {
-    html += '<div class="po-section">';
-    html += '<h3 class="po-section-title"><i class="fas fa-file-invoice-dollar"></i> Bills</h3>';
-    html += '<div class="po-table-wrap"><table class="po-table"><thead><tr><th>Bill #</th><th>Invoice #</th><th>Amount</th><th>Tax</th><th>Total</th><th>Status</th><th>Due</th></tr></thead><tbody>';
+  html += '<div class="po-section">';
+  html += '<div class="po-section-header">';
+  html += '<h3 class="po-section-title" style="margin:0"><i class="fas fa-file-invoice-dollar"></i> Bills / Supplier Invoices</h3>';
+  html += '<button class="po-btn po-btn-sm po-btn-outline" onclick="poShowCreateBill(' + po.id + ')"><i class="fas fa-plus"></i> Create Bill</button>';
+  html += '</div>';
+  if (bills.length === 0) {
+    html += '<div style="padding:24px;text-align:center;color:#94A3B8"><i class="fas fa-file-invoice-dollar" style="font-size:32px;margin-bottom:8px;display:block"></i>No bills yet. Create a bill to record the supplier\'s invoice costs.</div>';
+  } else {
+    html += '<div class="po-table-wrap"><table class="po-table po-table-hover"><thead><tr><th>Bill #</th><th>Invoice #</th><th class="text-right">Subtotal</th><th class="text-right">Tax</th><th class="text-right">Total</th><th>Status</th><th>Due</th><th></th></tr></thead><tbody>';
     bills.forEach(function(b) {
-      html += '<tr>' +
+      html += '<tr class="po-clickable" onclick="poShowBillDetail(' + b.id + ')">' +
         '<td><strong>' + poEsc(b.bill_number) + '</strong></td>' +
         '<td>' + poEsc(b.supplier_invoice_number || '—') + '</td>' +
         '<td class="text-right">$' + (b.amount || 0).toFixed(2) + '</td>' +
         '<td class="text-right">$' + (b.tax || 0).toFixed(2) + '</td>' +
         '<td class="text-right"><strong>$' + ((b.amount || 0) + (b.tax || 0)).toFixed(2) + '</strong></td>' +
-        '<td><span class="po-bill-status po-bill-' + b.status + '">' + (b.status || 'pending') + '</span></td>' +
+        '<td><span class="po-bill-status po-bill-' + b.status + '">' + poBillStatusLabel(b.status) + '</span></td>' +
         '<td>' + poFormatDate(b.due_date) + '</td>' +
-        '</tr>';
+        '<td onclick="event.stopPropagation()">' +
+        (b.status === 'pending' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poApproveBill(' + b.id + ')" title="Approve & update costs"><i class="fas fa-check"></i></button>' : '') +
+        (b.status === 'approved' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poMarkBillPaid(' + b.id + ')" title="Mark paid"><i class="fas fa-dollar-sign"></i></button>' : '') +
+        '</td></tr>';
     });
-    html += '</tbody></table></div></div>';
+    html += '</tbody></table></div>';
   }
+  html += '</div>';
 
   html += '</div>';
   return html;
@@ -940,27 +949,44 @@ function poRenderArriving(arriving) {
 // ==================== BILLS ====================
 function poRenderBills() {
   var html = '<div class="po-bills-page">';
-  html += '<div class="po-section-header"><h2><i class="fas fa-file-invoice-dollar"></i> Bills / Invoices</h2></div>';
+  html += '<div class="po-section-header"><h2><i class="fas fa-file-invoice-dollar"></i> Bills / Invoices</h2>';
+  html += '<div style="display:flex;gap:8px;align-items:center">' +
+    '<select id="poBillStatusFilter" onchange="poLoadAndRenderBills()" class="po-select po-select-sm">' +
+    '<option value="">All Statuses</option>' +
+    '<option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option><option value="disputed">Disputed</option></select>' +
+    '</div></div>';
 
   if (poBills.length === 0) {
     html += '<div class="po-empty"><i class="fas fa-file-invoice-dollar" style="font-size:48px;color:#CBD5E1"></i>';
-    html += '<h3>No Bills Yet</h3><p>Bills are created from purchase orders.</p></div>';
+    html += '<h3>No Bills Yet</h3><p>Bills are created from purchase orders when you enter the supplier\'s invoice costs.</p></div>';
   } else {
-    html += '<div class="po-table-wrap"><table class="po-table po-table-hover"><thead><tr><th>Bill #</th><th>PO #</th><th>Type</th><th>Supplier</th><th>Invoice #</th><th class="text-right">Amount</th><th class="text-right">Tax</th><th class="text-right">Total</th><th>Status</th><th>Due</th><th></th></tr></thead><tbody>';
+    // Summary bar
+    var pending = poBills.filter(function(b) { return b.status === 'pending'; });
+    var approved = poBills.filter(function(b) { return b.status === 'approved'; });
+    var paid = poBills.filter(function(b) { return b.status === 'paid'; });
+    var pendingTotal = pending.reduce(function(s, b) { return s + (b.amount || 0) + (b.tax || 0); }, 0);
+    html += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">' +
+      '<div style="background:#FEF3C7;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600"><i class="fas fa-clock" style="color:#D97706"></i> ' + pending.length + ' Pending — $' + pendingTotal.toFixed(2) + '</div>' +
+      '<div style="background:#DBEAFE;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600"><i class="fas fa-check" style="color:#2563EB"></i> ' + approved.length + ' Approved</div>' +
+      '<div style="background:#D1FAE5;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600"><i class="fas fa-check-double" style="color:#059669"></i> ' + paid.length + ' Paid</div>' +
+      '</div>';
+
+    html += '<div class="po-table-wrap"><table class="po-table po-table-hover"><thead><tr><th>Bill #</th><th>PO #</th><th>Supplier</th><th>Invoice #</th><th>Items</th><th class="text-right">Subtotal</th><th class="text-right">Tax</th><th class="text-right">Total</th><th>Status</th><th>Due</th><th></th></tr></thead><tbody>';
     poBills.forEach(function(b) {
-      html += '<tr>' +
+      html += '<tr class="po-clickable" onclick="poShowBillDetail(' + b.id + ')">' +
         '<td><strong>' + poEsc(b.bill_number) + '</strong></td>' +
-        '<td class="po-clickable" onclick="poNav(\'detail\',0)"><strong>' + poEsc(b.po_number) + '</strong></td>' +
-        '<td><span class="po-type-badge po-type-' + b.order_type + '">' + poTypeLabel(b.order_type) + '</span></td>' +
+        '<td><span class="po-link" onclick="event.stopPropagation();poNav(\'detail\',' + b.po_id + ')">' + poEsc(b.po_number) + '</span></td>' +
         '<td>' + poEsc(b.supplier_name || '—') + '</td>' +
         '<td>' + poEsc(b.supplier_invoice_number || '—') + '</td>' +
+        '<td>' + (b.item_count || 0) + '</td>' +
         '<td class="text-right">$' + (b.amount || 0).toFixed(2) + '</td>' +
         '<td class="text-right">$' + (b.tax || 0).toFixed(2) + '</td>' +
         '<td class="text-right"><strong>$' + ((b.amount || 0) + (b.tax || 0)).toFixed(2) + '</strong></td>' +
-        '<td><span class="po-bill-status po-bill-' + b.status + '">' + (b.status || 'pending') + '</span></td>' +
+        '<td><span class="po-bill-status po-bill-' + b.status + '">' + poBillStatusLabel(b.status) + '</span></td>' +
         '<td>' + poFormatDate(b.due_date) + '</td>' +
-        '<td>' +
-        (b.status === 'pending' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poMarkBillPaid(' + b.id + ')"><i class="fas fa-check"></i> Paid</button>' : '') +
+        '<td onclick="event.stopPropagation()">' +
+        (b.status === 'pending' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poApproveBill(' + b.id + ')" title="Approve & update costs"><i class="fas fa-check"></i></button> ' : '') +
+        (b.status === 'approved' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poMarkBillPaid(' + b.id + ')" title="Mark paid"><i class="fas fa-dollar-sign"></i></button> ' : '') +
         '</td></tr>';
     });
     html += '</tbody></table></div>';
@@ -968,6 +994,93 @@ function poRenderBills() {
 
   html += '</div>';
   return html;
+}
+
+function poBillStatusLabel(s) {
+  var labels = { pending: 'Pending Review', approved: 'Approved', paid: 'Paid', disputed: 'Disputed' };
+  return labels[s] || s || '—';
+}
+
+async function poLoadAndRenderBills() {
+  var statusFilter = document.getElementById('poBillStatusFilter');
+  var url = '/api/purchasing/bills';
+  if (statusFilter && statusFilter.value) url += '?status=' + statusFilter.value;
+  var resp = await poAPI.get(url, { headers: poHeaders() });
+  poBills = resp.data.bills || [];
+  var root = document.getElementById('purchasing-app');
+  if (root) root.innerHTML = poRenderNav() + poRenderBills();
+}
+
+// Bill detail modal — shows line items, cost comparison, approval action
+async function poShowBillDetail(billId) {
+  try {
+    var resp = await poAPI.get('/api/purchasing/bills/' + billId, { headers: poHeaders() });
+    var bill = resp.data.bill;
+    var items = resp.data.items || [];
+
+    var body = '<div class="po-detail-grid" style="margin-bottom:16px">' +
+      '<div class="po-detail-info-card">' +
+      '<div class="po-detail-row"><span>Bill Number</span><strong>' + poEsc(bill.bill_number) + '</strong></div>' +
+      '<div class="po-detail-row"><span>PO Number</span><strong><span class="po-link" onclick="poCloseModal();poNav(\'detail\',' + bill.po_id + ')">' + poEsc(bill.po_number) + '</span></strong></div>' +
+      '<div class="po-detail-row"><span>Supplier</span><strong>' + poEsc(bill.supplier_name || '—') + '</strong></div>' +
+      '<div class="po-detail-row"><span>Invoice #</span><strong>' + poEsc(bill.supplier_invoice_number || '—') + '</strong></div>' +
+      '<div class="po-detail-row"><span>Status</span><span class="po-bill-status po-bill-' + bill.status + '">' + poBillStatusLabel(bill.status) + '</span></div>' +
+      '<div class="po-detail-row"><span>Due Date</span><strong>' + poFormatDate(bill.due_date) + '</strong></div>' +
+      (bill.paid_date ? '<div class="po-detail-row"><span>Paid Date</span><strong>' + poFormatDate(bill.paid_date) + '</strong></div>' : '') +
+      (bill.notes ? '<div class="po-detail-row"><span>Notes</span><strong>' + poEsc(bill.notes) + '</strong></div>' : '') +
+      '</div>' +
+      '<div class="po-detail-progress-card">' +
+      '<div style="text-align:center">' +
+      '<div class="po-muted">Subtotal</div><div style="font-size:24px;font-weight:800;color:#059669">$' + (bill.amount || 0).toFixed(2) + '</div>' +
+      '<div class="po-muted" style="margin-top:4px">Tax: $' + (bill.tax || 0).toFixed(2) + '</div>' +
+      '<div style="font-size:28px;font-weight:800;color:#1E40AF;margin-top:8px;border-top:2px solid #E2E8F0;padding-top:8px">$' + ((bill.amount || 0) + (bill.tax || 0)).toFixed(2) + '</div>' +
+      '</div></div></div>';
+
+    // Line items with cost comparison
+    if (items.length > 0) {
+      body += '<h4 style="margin-bottom:8px"><i class="fas fa-list"></i> Line Items</h4>';
+      body += '<div class="po-table-wrap"><table class="po-table"><thead><tr><th>Product</th><th class="text-right">Qty</th><th>Unit</th><th class="text-right">Bill Cost</th><th class="text-right">Current Cost</th><th class="text-right">Diff</th><th class="text-right">Line Total</th></tr></thead><tbody>';
+      items.forEach(function(item) {
+        var diff = (item.unit_cost || 0) - (item.current_product_cost || 0);
+        var diffClass = diff > 0 ? 'po-danger' : diff < 0 ? 'po-positive' : 'po-muted';
+        body += '<tr>' +
+          '<td><strong>' + poEsc(item.product_name || item.description || '—') + '</strong>' + (item.sku ? '<br><span class="po-muted">' + poEsc(item.sku) + '</span>' : '') + '</td>' +
+          '<td class="text-right">' + (item.qty || 0) + '</td>' +
+          '<td>' + poEsc(item.unit || 'each') + '</td>' +
+          '<td class="text-right" style="font-weight:600">$' + (item.unit_cost || 0).toFixed(2) + '</td>' +
+          '<td class="text-right po-muted">$' + (item.current_product_cost || 0).toFixed(2) + '</td>' +
+          '<td class="text-right ' + diffClass + '">' + (diff !== 0 ? (diff > 0 ? '+' : '') + '$' + diff.toFixed(2) : '—') + '</td>' +
+          '<td class="text-right"><strong>$' + ((item.qty || 0) * (item.unit_cost || 0)).toFixed(2) + '</strong></td>' +
+          '</tr>';
+      });
+      body += '</tbody></table></div>';
+    }
+
+    // QBO sync status
+    if (bill.qbo_sync_status && bill.qbo_sync_status !== 'not_synced') {
+      body += '<div style="margin-top:12px;padding:8px 12px;background:#F0FDF4;border-radius:6px;font-size:13px"><i class="fas fa-cloud" style="color:#059669"></i> QBO: ' + bill.qbo_sync_status + (bill.qbo_bill_id ? ' (ID: ' + bill.qbo_bill_id + ')' : '') + '</div>';
+    }
+
+    var footer = '';
+    if (bill.status === 'pending') {
+      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poApproveBill(' + bill.id + ')"><i class="fas fa-check-circle"></i> Approve & Update Costs</button> ';
+      footer += '<button class="po-btn po-btn-outline" onclick="poCloseModal();poDisputeBill(' + bill.id + ')"><i class="fas fa-exclamation-triangle"></i> Dispute</button>';
+    } else if (bill.status === 'approved') {
+      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poMarkBillPaid(' + bill.id + ')"><i class="fas fa-dollar-sign"></i> Mark Paid</button>';
+    }
+
+    poShowModal('<i class="fas fa-file-invoice-dollar"></i> Bill Detail — ' + poEsc(bill.bill_number), body, footer);
+  } catch(e) { poToast('Failed to load bill: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+// Approve bill — this updates product costs from the bill's line item costs
+async function poApproveBill(billId) {
+  if (!confirm('Approve this bill?\n\nThis will update product costs to the supplier\'s invoice prices.\nThe new costs will be used for COGS calculations going forward.')) return;
+  try {
+    await poAPI.put('/api/purchasing/bills/' + billId, { status: 'approved' }, { headers: poHeaders() });
+    poToast('Bill approved — product costs updated to latest supplier prices');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
 async function poMarkBillPaid(billId) {
@@ -978,7 +1091,20 @@ async function poMarkBillPaid(billId) {
       paid_date: new Date().toISOString().slice(0,10)
     }, { headers: poHeaders() });
     poToast('Bill marked as paid');
-    poNav('bills');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+
+async function poDisputeBill(billId) {
+  var reason = prompt('Enter dispute reason:');
+  if (!reason) return;
+  try {
+    await poAPI.put('/api/purchasing/bills/' + billId, {
+      status: 'disputed',
+      notes: reason
+    }, { headers: poHeaders() });
+    poToast('Bill disputed');
+    poRender();
   } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
@@ -1065,36 +1191,132 @@ async function poDoStatusChange(poId) {
   } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
-// Create bill modal
-function poShowCreateBill(poId) {
-  var body = '<div class="po-form-group"><label>Supplier Invoice #</label><input id="poBillInvoice" type="text" class="po-input" placeholder="Invoice number from supplier"></div>' +
-    '<div class="po-form-row">' +
-    '<div class="po-form-group"><label>Amount</label><input id="poBillAmount" type="number" step="0.01" class="po-input" placeholder="0.00"></div>' +
-    '<div class="po-form-group"><label>Tax</label><input id="poBillTax" type="number" step="0.01" class="po-input" placeholder="0.00" value="0"></div>' +
-    '</div>' +
-    '<div class="po-form-group"><label>Due Date</label><input id="poBillDue" type="date" class="po-input"></div>' +
-    '<div class="po-form-group"><label>Notes</label><textarea id="poBillNotes" class="po-input" rows="2" placeholder="Bill notes..."></textarea></div>';
+// Create bill modal — pre-populated with PO items and actual costs
+var poBillItems = [];
 
-  var footer = '<button class="po-btn po-btn-primary" onclick="poDoCreateBill(' + poId + ')"><i class="fas fa-file-invoice-dollar"></i> Create Bill</button>';
-  poShowModal('<i class="fas fa-file-invoice-dollar"></i> Create Bill', body, footer);
+async function poShowCreateBill(poId) {
+  try {
+    var resp = await poAPI.get('/api/purchasing/orders/' + poId + '/bill-preview', { headers: poHeaders() });
+    var preview = resp.data;
+    poBillItems = (preview.items || []).filter(function(item) { return item.qty_received > 0; });
+
+    // If no items received yet, show all items with ordered qty
+    if (poBillItems.length === 0) {
+      poBillItems = (preview.items || []).map(function(item) {
+        return Object.assign({}, item, { qty_received: item.qty_ordered });
+      });
+    }
+
+    var body = '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;padding:12px;margin-bottom:16px">' +
+      '<div style="font-weight:600;color:#1E40AF;margin-bottom:4px"><i class="fas fa-info-circle"></i> Enter Supplier Invoice Costs</div>' +
+      '<div style="font-size:13px;color:#3B82F6">Enter the actual costs from the supplier\'s invoice below. These costs will update your product COGS when the bill is approved.</div>' +
+      '</div>';
+
+    body += '<div class="po-form-row">' +
+      '<div class="po-form-group" style="flex:2"><label>Supplier Invoice #</label><input id="poBillInvoice" type="text" class="po-input" placeholder="Invoice number from supplier"></div>' +
+      '<div class="po-form-group"><label>Due Date</label><input id="poBillDue" type="date" class="po-input" value="' + (preview.suggested_due_date || '') + '"></div>' +
+      '</div>';
+
+    // Line items with editable costs
+    body += '<div class="po-bill-items-section" style="margin-top:16px">';
+    body += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<label style="font-weight:600"><i class="fas fa-list"></i> Line Items (from supplier invoice)</label>' +
+      '<span id="poBillSubtotal" style="font-weight:700;color:#059669">$0.00</span></div>';
+
+    body += '<div class="po-table-wrap"><table class="po-table"><thead><tr>' +
+      '<th>Product</th><th class="text-right">Qty Received</th><th>Unit</th>' +
+      '<th class="text-right" style="color:#D97706">PO Est. Cost</th>' +
+      '<th class="text-right" style="color:#059669">Actual Cost *</th>' +
+      '<th class="text-right">Line Total</th></tr></thead><tbody>';
+
+    poBillItems.forEach(function(item, idx) {
+      var costVal = item.po_unit_cost || item.current_product_cost || 0;
+      body += '<tr>' +
+        '<td><strong>' + poEsc(item.product_name || item.description || 'Item') + '</strong>' +
+        (item.sku ? '<br><span class="po-muted">' + poEsc(item.sku) + '</span>' : '') +
+        '<input type="hidden" id="poBillItemProd_' + idx + '" value="' + (item.product_id || '') + '">' +
+        '<input type="hidden" id="poBillItemPoItem_' + idx + '" value="' + (item.po_item_id || '') + '">' +
+        '<input type="hidden" id="poBillItemDesc_' + idx + '" value="' + poEsc(item.description || item.product_name || '') + '">' +
+        '<input type="hidden" id="poBillItemUnit_' + idx + '" value="' + poEsc(item.unit || 'each') + '">' +
+        '</td>' +
+        '<td class="text-right"><input type="number" step="0.01" class="po-input po-input-sm" style="width:80px;text-align:right" id="poBillItemQty_' + idx + '" value="' + (item.qty_received || 0) + '" oninput="poCalcBillTotals()" inputmode="decimal"></td>' +
+        '<td>' + poEsc(item.unit || 'each') + '</td>' +
+        '<td class="text-right po-muted">$' + (item.po_unit_cost || 0).toFixed(2) + '</td>' +
+        '<td class="text-right"><div style="position:relative"><span style="position:absolute;left:4px;top:50%;transform:translateY(-50%);color:#94A3B8;font-size:12px">$</span>' +
+        '<input type="number" step="0.01" class="po-input po-input-sm" style="width:100px;text-align:right;padding-left:16px;font-weight:600;border-color:#059669" id="poBillItemCost_' + idx + '" value="' + costVal.toFixed(2) + '" oninput="poCalcBillTotals()" inputmode="decimal"></div></td>' +
+        '<td class="text-right" id="poBillItemTotal_' + idx + '" style="font-weight:600">$' + ((item.qty_received || 0) * costVal).toFixed(2) + '</td>' +
+        '</tr>';
+    });
+    body += '</tbody></table></div></div>';
+
+    // Tax & notes
+    body += '<div class="po-form-row" style="margin-top:12px">' +
+      '<div class="po-form-group"><label>Tax</label><input id="poBillTax" type="number" step="0.01" class="po-input" placeholder="0.00" value="0" oninput="poCalcBillTotals()"></div>' +
+      '<div class="po-form-group" id="poBillGrandTotalWrap" style="display:flex;flex-direction:column;justify-content:flex-end">' +
+      '<div style="text-align:right"><span class="po-muted">Grand Total: </span><span id="poBillGrandTotal" style="font-size:20px;font-weight:800;color:#059669">$0.00</span></div></div>' +
+      '</div>';
+    body += '<div class="po-form-group"><label>Notes</label><textarea id="poBillNotes" class="po-input" rows="2" placeholder="Bill notes..."></textarea></div>';
+
+    var footer = '<button class="po-btn po-btn-primary po-btn-lg" onclick="poDoCreateBill(' + poId + ')"><i class="fas fa-file-invoice-dollar"></i> Create Bill</button>';
+    poShowModal('<i class="fas fa-file-invoice-dollar"></i> Create Bill — ' + poEsc(preview.po.po_number), body, footer);
+
+    // Trigger initial calculation
+    setTimeout(function() { poCalcBillTotals(); }, 50);
+  } catch(e) {
+    poToast('Failed to load bill preview: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+
+function poCalcBillTotals() {
+  var subtotal = 0;
+  poBillItems.forEach(function(item, idx) {
+    var qty = parseFloat(document.getElementById('poBillItemQty_' + idx)?.value) || 0;
+    var cost = parseFloat(document.getElementById('poBillItemCost_' + idx)?.value) || 0;
+    var lineTotal = qty * cost;
+    subtotal += lineTotal;
+    var td = document.getElementById('poBillItemTotal_' + idx);
+    if (td) td.textContent = '$' + lineTotal.toFixed(2);
+  });
+  var sub = document.getElementById('poBillSubtotal');
+  if (sub) sub.textContent = '$' + subtotal.toFixed(2);
+  var tax = parseFloat(document.getElementById('poBillTax')?.value) || 0;
+  var grand = document.getElementById('poBillGrandTotal');
+  if (grand) grand.textContent = '$' + (subtotal + tax).toFixed(2);
 }
 
 async function poDoCreateBill(poId) {
-  var amount = parseFloat(document.getElementById('poBillAmount').value) || 0;
-  var tax = parseFloat(document.getElementById('poBillTax').value) || 0;
   var invoice = document.getElementById('poBillInvoice').value;
   var due = document.getElementById('poBillDue').value;
+  var tax = parseFloat(document.getElementById('poBillTax').value) || 0;
   var notes = document.getElementById('poBillNotes').value;
+
+  var items = [];
+  poBillItems.forEach(function(item, idx) {
+    var qty = parseFloat(document.getElementById('poBillItemQty_' + idx)?.value) || 0;
+    var cost = parseFloat(document.getElementById('poBillItemCost_' + idx)?.value) || 0;
+    if (qty > 0 && cost > 0) {
+      items.push({
+        po_item_id: parseInt(document.getElementById('poBillItemPoItem_' + idx)?.value) || null,
+        product_id: parseInt(document.getElementById('poBillItemProd_' + idx)?.value) || null,
+        description: document.getElementById('poBillItemDesc_' + idx)?.value || '',
+        qty: qty,
+        unit: document.getElementById('poBillItemUnit_' + idx)?.value || 'each',
+        unit_cost: cost
+      });
+    }
+  });
+
+  if (items.length === 0) { poToast('Add at least one item with qty and cost', 'warning'); return; }
 
   try {
     var resp = await poAPI.post('/api/purchasing/orders/' + poId + '/bills', {
       supplier_invoice_number: invoice,
-      amount: amount,
       tax: tax,
       due_date: due || null,
-      notes: notes
+      notes: notes,
+      items: items
     }, { headers: poHeaders() });
-    poToast('Bill ' + resp.data.bill_number + ' created');
+    poToast('Bill ' + resp.data.bill_number + ' created — $' + (resp.data.amount || 0).toFixed(2));
     poCloseModal();
     poNav('detail', poId);
   } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }

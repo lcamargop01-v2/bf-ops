@@ -369,47 +369,227 @@ app.delete('/api/purchasing/images/:id', async (c) => {
 
 // ==================== BILLS ====================
 
+// Create bill WITH line items (enhanced — supports variable cost per product)
 app.post('/api/purchasing/orders/:id/bills', async (c) => {
   const db = c.env.DB
   const poId = parseInt(c.req.param('id'))
   const user = getUserFromHeader(c)
-  const { supplier_invoice_number, amount, tax, due_date, notes } = await c.req.json()
+  const body = await c.req.json()
+  const { supplier_invoice_number, tax, due_date, notes, items, receiving_id } = body
+
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return c.json({ error: 'Bill line items required' }, 400)
+  }
+
+  // Calculate amount from line items
+  let amount = 0
+  for (const item of items) {
+    amount += (item.qty || 0) * (item.unit_cost || 0)
+  }
 
   const bill_number = generateBillNumber()
   const result = await db.prepare(
-    `INSERT INTO po_bills (po_id, bill_number, supplier_invoice_number, amount, tax, status, due_date, notes, created_by)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
-  ).bind(poId, bill_number, supplier_invoice_number || null, amount || 0, tax || 0, due_date || null, notes || null, user?.id || null).run()
+    `INSERT INTO po_bills (po_id, bill_number, supplier_invoice_number, amount, tax, status, due_date, notes, receiving_id, created_by)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`
+  ).bind(poId, bill_number, supplier_invoice_number || null, amount, tax || 0,
+    due_date || null, notes || null, receiving_id || null, user?.id || null).run()
 
-  return c.json({ id: result.meta.last_row_id, bill_number, success: true })
+  const billId = result.meta.last_row_id
+
+  // Insert bill line items
+  for (const item of items) {
+    await db.prepare(
+      `INSERT INTO po_bill_items (bill_id, po_item_id, product_id, description, qty, unit, unit_cost, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(billId, item.po_item_id || null, item.product_id || null,
+      item.description || '', item.qty || 0, item.unit || 'each',
+      item.unit_cost || 0, item.notes || null).run()
+  }
+
+  return c.json({ id: billId, bill_number, amount, success: true })
 })
 
+// Get single bill with items
+app.get('/api/purchasing/bills/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+
+  const bill = await db.prepare(
+    `SELECT b.*, po.po_number, po.order_type, po.supplier_id, s.name as supplier_name, s.payment_terms,
+      l.name as location_name, l.code as location_code
+     FROM po_bills b
+     JOIN purchase_orders po ON b.po_id = po.id
+     LEFT JOIN suppliers s ON po.supplier_id = s.id
+     JOIN locations l ON po.location_id = l.id
+     WHERE b.id = ?`
+  ).bind(id).first()
+  if (!bill) return c.json({ error: 'Bill not found' }, 404)
+
+  const items = await db.prepare(
+    `SELECT bi.*, p.name as product_name, p.sku, p.cost as current_product_cost
+     FROM po_bill_items bi
+     LEFT JOIN products p ON bi.product_id = p.id
+     WHERE bi.bill_id = ? ORDER BY bi.id`
+  ).bind(id).all()
+
+  return c.json({ bill, items: items.results || [] })
+})
+
+// Update bill (header-level edits or status changes)
 app.put('/api/purchasing/bills/:id', async (c) => {
   const db = c.env.DB
   const id = parseInt(c.req.param('id'))
-  const { status, supplier_invoice_number, amount, tax, due_date, paid_date, notes } = await c.req.json()
+  const user = getUserFromHeader(c)
+  const body = await c.req.json()
+  const { status, supplier_invoice_number, amount, tax, due_date, paid_date, notes, items } = body
 
+  // If items are provided, update them and recalculate amount
+  if (items && Array.isArray(items) && items.length > 0) {
+    // Delete existing items and re-insert
+    await db.prepare('DELETE FROM po_bill_items WHERE bill_id = ?').bind(id).run()
+    let calcAmount = 0
+    for (const item of items) {
+      await db.prepare(
+        `INSERT INTO po_bill_items (bill_id, po_item_id, product_id, description, qty, unit, unit_cost, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, item.po_item_id || null, item.product_id || null,
+        item.description || '', item.qty || 0, item.unit || 'each',
+        item.unit_cost || 0, item.notes || null).run()
+      calcAmount += (item.qty || 0) * (item.unit_cost || 0)
+    }
+    await db.prepare('UPDATE po_bills SET amount = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .bind(calcAmount, id).run()
+  }
+
+  // Update header fields
   await db.prepare(
     `UPDATE po_bills SET status=COALESCE(?,status), supplier_invoice_number=COALESCE(?,supplier_invoice_number),
-     amount=COALESCE(?,amount), tax=COALESCE(?,tax), due_date=?, paid_date=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
-  ).bind(status, supplier_invoice_number, amount, tax, due_date || null, paid_date || null, notes ?? null, id).run()
+     tax=COALESCE(?,tax), due_date=?, paid_date=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+  ).bind(status, supplier_invoice_number, tax, due_date || null, paid_date || null, notes ?? null, id).run()
+
+  // If status is being set to 'approved', update product costs from bill line items
+  if (status === 'approved') {
+    const bill = await db.prepare('SELECT * FROM po_bills WHERE id = ?').bind(id).first() as any
+    const billItems = await db.prepare(
+      'SELECT bi.*, p.cost as old_cost FROM po_bill_items bi LEFT JOIN products p ON bi.product_id = p.id WHERE bi.bill_id = ?'
+    ).bind(id).all()
+
+    for (const bi of (billItems.results || []) as any[]) {
+      if (!bi.product_id || !bi.unit_cost) continue
+      const oldCost = bi.old_cost || 0
+
+      // Update product cost to latest bill unit_cost
+      if (bi.unit_cost !== oldCost) {
+        await db.prepare('UPDATE products SET cost = ? WHERE id = ?')
+          .bind(bi.unit_cost, bi.product_id).run()
+
+        // Record cost history
+        await db.prepare(
+          `INSERT INTO product_cost_history (product_id, old_cost, new_cost, source, reference_type, reference_id, bill_id, po_id, supplier_id, changed_by, changed_by_name, notes)
+           VALUES (?, ?, ?, 'bill', 'bill', ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(bi.product_id, oldCost, bi.unit_cost, id, bill?.po_id, bill?.supplier_id || null,
+          user?.id || null, user?.email || 'system',
+          'Cost updated from bill ' + (bill?.bill_number || id)).run()
+      }
+    }
+  }
+
   return c.json({ success: true })
 })
 
+// List all bills (with enriched data)
 app.get('/api/purchasing/bills', async (c) => {
   const db = c.env.DB
   const status = c.req.query('status')
-  let q = `SELECT b.*, po.po_number, po.order_type, s.name as supplier_name
+  const poId = c.req.query('po_id')
+  let q = `SELECT b.*, po.po_number, po.order_type, s.name as supplier_name,
+    l.code as location_code,
+    (SELECT COUNT(*) FROM po_bill_items WHERE bill_id = b.id) as item_count
     FROM po_bills b
     JOIN purchase_orders po ON b.po_id = po.id
     LEFT JOIN suppliers s ON po.supplier_id = s.id
+    JOIN locations l ON po.location_id = l.id
     WHERE 1=1`
   const binds: any[] = []
-  if (status) { q += ' AND b.status = ?'; binds.push(status) }
+  if (status && status !== 'all') { q += ' AND b.status = ?'; binds.push(status) }
+  if (poId) { q += ' AND b.po_id = ?'; binds.push(parseInt(poId)) }
   q += ' ORDER BY b.created_at DESC'
 
   const result = await db.prepare(q).bind(...binds).all()
   return c.json({ bills: result.results || [] })
+})
+
+// Pre-populate bill from PO items (for "Create Bill" workflow)
+// Returns PO items with received quantities ready to fill in supplier costs
+app.get('/api/purchasing/orders/:id/bill-preview', async (c) => {
+  const db = c.env.DB
+  const poId = parseInt(c.req.param('id'))
+
+  const po = await db.prepare(
+    `SELECT po.*, s.name as supplier_name, s.payment_terms, l.code as location_code
+     FROM purchase_orders po
+     LEFT JOIN suppliers s ON po.supplier_id = s.id
+     JOIN locations l ON po.location_id = l.id
+     WHERE po.id = ?`
+  ).bind(poId).first() as any
+  if (!po) return c.json({ error: 'PO not found' }, 404)
+
+  // Get PO items with product info
+  const items = await db.prepare(
+    `SELECT pi.*, p.name as product_name, p.sku, p.cost as current_product_cost, p.unit_type as product_unit_type
+     FROM po_items pi
+     LEFT JOIN products p ON pi.product_id = p.id
+     WHERE pi.po_id = ? ORDER BY pi.id`
+  ).bind(poId).all()
+
+  // Calculate suggested due date from supplier payment terms
+  let suggestedDueDate = null
+  if (po.payment_terms) {
+    const match = po.payment_terms.match(/Net\s*(\d+)/i)
+    if (match) {
+      const days = parseInt(match[1])
+      const due = new Date()
+      due.setDate(due.getDate() + days)
+      suggestedDueDate = due.toISOString().slice(0, 10)
+    }
+  }
+
+  return c.json({
+    po,
+    items: (items.results || []).map((item: any) => ({
+      po_item_id: item.id,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      sku: item.sku,
+      description: item.description,
+      qty_ordered: item.qty_ordered,
+      qty_received: item.qty_received,
+      unit: item.unit,
+      po_unit_cost: item.unit_cost,
+      current_product_cost: item.current_product_cost || 0,
+      product_unit_type: item.product_unit_type
+    })),
+    suggested_due_date: suggestedDueDate
+  })
+})
+
+// Product cost history
+app.get('/api/purchasing/cost-history/:productId', async (c) => {
+  const db = c.env.DB
+  const productId = parseInt(c.req.param('productId'))
+  const limit = parseInt(c.req.query('limit') || '20')
+
+  const history = await db.prepare(
+    `SELECT h.*, po.po_number, s.name as supplier_name, b.bill_number, b.supplier_invoice_number
+     FROM product_cost_history h
+     LEFT JOIN po_bills b ON h.bill_id = b.id
+     LEFT JOIN purchase_orders po ON h.po_id = po.id
+     LEFT JOIN suppliers s ON h.supplier_id = s.id
+     WHERE h.product_id = ?
+     ORDER BY h.created_at DESC LIMIT ?`
+  ).bind(productId, limit).all()
+
+  return c.json({ history: history.results || [] })
 })
 
 // ==================== DASHBOARD / SUMMARY ====================
