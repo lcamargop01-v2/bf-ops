@@ -26,7 +26,7 @@ var MOBILE_NAV_PAGES = {
     { id: 'routes', icon: 'fa-route', label: 'Routes' }
   ],
   logistics_more: [
-    { id: 'ticket_review', icon: 'fa-rectangle-list', label: 'Ticket Review', adminOnly: true },
+    { id: 'ticket_review', icon: 'fa-rectangle-list', label: 'Ticket Review' },
     { id: 'driver', icon: 'fa-steering-wheel', label: 'Driving' },
     { id: 'route_builder', icon: 'fa-map-location-dot', label: 'Route Builder' },
     { id: 'customers', icon: 'fa-users', label: 'Customers' },

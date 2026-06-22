@@ -1789,7 +1789,7 @@ function renderSidebarContent() {
   const items = [
     { section: t('nav_operations') },
     { id: 'dashboard', icon: 'fa-tachometer-alt', label: t('nav_dashboard') },
-    { id: 'ticket_review', icon: 'fa-rectangle-list', label: 'Ticket Review', dynamicBadge: 'sqReadyCount', adminOnly: true },
+    { id: 'ticket_review', icon: 'fa-rectangle-list', label: 'Ticket Review', dynamicBadge: 'sqReadyCount' },
     { id: 'schedule', icon: 'fa-calendar-alt', label: t('nav_schedule') },
     { id: 'routes', icon: 'fa-route', label: t('nav_routes') },
     { id: 'route_builder', icon: 'fa-map-location-dot', label: 'Route Builder' },
