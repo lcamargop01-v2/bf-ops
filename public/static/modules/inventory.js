@@ -21,6 +21,7 @@ var invRecatOverrides = {}; // User overrides { product_id: category }
 var invRecatFilter = ''; // Filter: '', 'changed', 'hay', 'shavings', 'shelf_goods'
 var invRecatSearch = '';
 var invSuppliersList = []; // Cached suppliers for vendor picker
+var invBatchSummaryMap = {}; // batch summary per product_id for count page
 
 // Permission helper for edit access (view-only enforcement)
 function invCanEdit(feature) {
@@ -177,6 +178,13 @@ async function invRender() {
     root.innerHTML = invRenderNav() + html;
   } else if (invPage === 'count') {
     await invLoadStock();
+    // Load batch summary for current location
+    if (invSelectedLocation) {
+      try {
+        var bsResp = await invAPI.get('/api/inventory/batch-summary?location_id=' + invSelectedLocation, { headers: invHeaders() });
+        invBatchSummaryMap = bsResp.data.summary || {};
+      } catch(e) { invBatchSummaryMap = {}; }
+    }
     root.innerHTML = invRenderNav() + invRenderQuickCount();
   } else if (invPage === 'transfers') {
     root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
@@ -537,12 +545,25 @@ function invRenderQuickCount() {
     // Subcategory options for this product's category
     var subOptsForCat = invSubcatOptionsFor(s.category || 'shelf_goods');
 
+    // Batch info for this product
+    var bs = invBatchSummaryMap[s.product_id];
+    var batchBadge = '';
+    if (bs && bs.batch_count > 0) {
+      var unbatched = (s.qty_on_hand || 0) - (bs.batched_qty || 0);
+      batchBadge = '<span class="inv-batch-indicator" onclick="event.stopPropagation();invCountViewBatches(' + s.product_id + ')" title="' + escH(bs.batch_detail) + '">' +
+        '<i class="fas fa-layer-group"></i> ' + bs.batch_count + ' batch' + (bs.batch_count > 1 ? 'es' : '') + ' (' + bs.batched_qty + ')' +
+        (unbatched > 0 ? ' · <span style="color:#D97706">' + unbatched + ' unbatched</span>' : '') + '</span>';
+    } else if (s.qty_on_hand > 0) {
+      batchBadge = '<span class="inv-batch-indicator inv-batch-none" onclick="event.stopPropagation();invCountViewBatches(' + s.product_id + ')" title="No batches — click to add">' +
+        '<i class="fas fa-layer-group"></i> No batches</span>';
+    }
+
     html += '<div class="inv-count-item" data-name="' + escH((s.product_name || '').toLowerCase()) + '" data-sku="' + escH((s.sku || '').toLowerCase()) + '" data-pid="' + s.product_id + '">' +
       '<div class="inv-count-item-row">' +
       '<div class="inv-count-item-info">' +
       '<strong id="invCntName_' + idx + '">' + escH(s.product_name) + '</strong>' +
       '<span class="inv-muted">' + escH(s.sku || '') + ' · ' + escH(s.unit_type || '') + ' · <span class="inv-cat-badge">' + catLabel + '</span>' + (subLabel ? ' · ' + subLabel : '') + '</span>' +
-      lastCountedInfo +
+      lastCountedInfo + batchBadge +
       '</div>' +
       '<div class="inv-count-item-input">' +
       '<span class="inv-count-current">was: ' + (s.qty_on_hand || 0) + '</span>' +
@@ -730,19 +751,81 @@ async function invCountSaveEdit(idx) {
 }
 window.invCountSaveEdit = invCountSaveEdit;
 
-function invCountViewBatches(productId) {
-  // Navigate to batches page — the batches page has search, they can filter by product
-  invNav('batches');
-  // After render, try to set search to product name
-  setTimeout(function() {
-    var searchInput = document.getElementById('invBatchSearch');
-    if (searchInput) {
-      var item = document.querySelector('.inv-count-item[data-pid="' + productId + '"]');
-      // We stored it, but page has re-rendered. Just navigate.
+// Inline batch management for quick count — stays on the count page
+async function invCountViewBatches(productId) {
+  try {
+    var locId = invSelectedLocation;
+    var resp = await invAPI.get('/api/inventory/batches?product_id=' + productId + '&location_id=' + locId, { headers: invHeaders() });
+    var batches = resp.data.batches || [];
+
+    // Find product info from stock data
+    var prod = invStockData.find(function(s) { return s.product_id == productId; });
+    var pName = prod ? prod.product_name : 'Product #' + productId;
+    var totalOnHand = prod ? (prod.qty_on_hand || 0) : 0;
+    var batchedQty = batches.reduce(function(s, b) { return s + (b.qty || 0); }, 0);
+    var unbatched = totalOnHand - batchedQty;
+
+    var body = '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;padding:12px;margin-bottom:16px">' +
+      '<div style="font-weight:600;color:#1E40AF;margin-bottom:4px"><i class="fas fa-layer-group"></i> ' + escH(pName) + '</div>' +
+      '<div style="display:flex;gap:16px;font-size:13px;flex-wrap:wrap">' +
+      '<span><strong>' + totalOnHand + '</strong> total on hand</span>' +
+      '<span><strong>' + batchedQty + '</strong> in batches</span>' +
+      (unbatched > 0 ? '<span style="color:#D97706"><strong>' + unbatched + '</strong> unbatched</span>' : '<span style="color:#059669"><i class="fas fa-check"></i> All batched</span>') +
+      '</div></div>';
+
+    // Existing batches
+    if (batches.length > 0) {
+      body += '<h4 style="margin-bottom:8px"><i class="fas fa-layer-group"></i> Existing Batches</h4>';
+      body += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">';
+      batches.forEach(function(b) {
+        var condClass = b.condition === 'good' ? '#059669' : b.condition === 'fair' ? '#D97706' : '#DC2626';
+        body += '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:white;border:1px solid #E2E8F0;border-radius:8px;border-left:3px solid ' + condClass + '">' +
+          '<div style="flex:1"><strong style="font-size:13px">' + escH(b.batch_number) + '</strong>' +
+          '<div style="font-size:12px;color:#64748B">' + escH(b.condition) + (b.notes ? ' · ' + escH(b.notes) : '') + '</div></div>' +
+          '<div style="text-align:right"><strong style="font-size:16px">' + b.qty + '</strong><div style="font-size:11px;color:#64748B">' + escH(b.unit_type || 'units') + '</div></div></div>';
+      });
+      body += '</div>';
     }
-  }, 500);
+
+    // Quick add batch form (inline, no navigation)
+    if (unbatched > 0 || batches.length === 0) {
+      body += '<h4 style="margin-bottom:8px"><i class="fas fa-plus"></i> Add Batch</h4>' +
+        '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:12px">' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+        '<div class="inv-form-group"><label style="font-size:12px;font-weight:600">Qty</label><input id="invInlineBatchQty" type="number" class="inv-input" value="' + Math.max(unbatched, 0) + '" min="1" inputmode="numeric" style="font-size:16px;font-weight:700"></div>' +
+        '<div class="inv-form-group"><label style="font-size:12px;font-weight:600">Condition</label><select id="invInlineBatchCond" class="inv-select">' +
+        '<option value="good">Good</option><option value="fair">Fair</option><option value="poor">Poor</option><option value="damaged">Damaged</option></select></div></div>' +
+        '<div class="inv-form-group" style="margin-top:8px"><label style="font-size:12px;font-weight:600">Notes <span style="color:#94A3B8;font-weight:400">(optional)</span></label>' +
+        '<input id="invInlineBatchNotes" type="text" class="inv-input" placeholder="e.g. Back of warehouse, top shelf..."></div>' +
+        '<button class="inv-btn inv-btn-primary inv-btn-sm" style="margin-top:8px;width:100%" onclick="invDoInlineBatch(' + productId + ',' + locId + ')"><i class="fas fa-layer-group"></i> Create Batch</button></div>';
+    }
+
+    var footer = '<button class="po-btn po-btn-outline" onclick="invCloseModal()">Close</button>';
+    invShowModal('<i class="fas fa-layer-group"></i> Batches — ' + escH(pName), body, footer);
+  } catch(e) {
+    invToast('Failed to load batches: ' + (e.response?.data?.error || e.message), 'error');
+  }
 }
 window.invCountViewBatches = invCountViewBatches;
+
+async function invDoInlineBatch(productId, locationId) {
+  var qty = parseInt(document.getElementById('invInlineBatchQty').value);
+  var condition = document.getElementById('invInlineBatchCond').value;
+  var notes = document.getElementById('invInlineBatchNotes').value;
+
+  if (!qty || qty <= 0) { invToast('Enter a valid quantity', 'warning'); return; }
+
+  try {
+    var resp = await invAPI.post('/api/inventory/batches', {
+      product_id: productId, location_id: locationId,
+      qty: qty, condition: condition, notes: notes || null
+    }, { headers: invHeaders() });
+    invToast('Batch ' + (resp.data.batch_number || '') + ' created (' + qty + ' ' + condition + ')');
+    // Re-open the same panel to show updated list
+    invCountViewBatches(productId);
+  } catch(e) { invToast('Batch failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.invDoInlineBatch = invDoInlineBatch;
 
 function invCountRequestDelete(productId, productName) {
   var reasons = [

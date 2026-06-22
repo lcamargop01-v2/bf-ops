@@ -1264,10 +1264,12 @@ function poRenderArriving(arriving) {
 function poRenderBills() {
   var html = '<div class="po-bills-page">';
   html += '<div class="po-section-header"><h2><i class="fas fa-file-invoice-dollar"></i> Bills / Invoices</h2>';
-  html += '<div style="display:flex;gap:8px;align-items:center">' +
+  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
     '<select id="poBillStatusFilter" onchange="poLoadAndRenderBills()" class="po-select po-select-sm">' +
     '<option value="">All Statuses</option>' +
     '<option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option><option value="disputed">Disputed</option></select>' +
+    '<button class="po-btn po-btn-sm po-btn-outline" style="color:#7C3AED;border-color:#7C3AED" onclick="poShowCreateCredit(0,0,0)"><i class="fas fa-receipt"></i> New Credit/Refund</button>' +
+    '<button class="po-btn po-btn-sm po-btn-outline" onclick="poShowCreditsPanel()"><i class="fas fa-list"></i> View Credits</button>' +
     '</div></div>';
 
   if (poBills.length === 0) {
@@ -1285,8 +1287,10 @@ function poRenderBills() {
       '<div style="background:#D1FAE5;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600"><i class="fas fa-check-double" style="color:#059669"></i> ' + paid.length + ' Paid</div>' +
       '</div>';
 
-    html += '<div class="po-table-wrap"><table class="po-table po-table-hover"><thead><tr><th>Bill #</th><th>PO #</th><th>Supplier</th><th>Invoice #</th><th>Items</th><th class="text-right">Subtotal</th><th class="text-right">Tax</th><th class="text-right">Total</th><th>Status</th><th>Due</th><th></th></tr></thead><tbody>';
+    html += '<div class="po-table-wrap"><table class="po-table po-table-hover"><thead><tr><th>Bill #</th><th>PO #</th><th>Supplier</th><th>Invoice #</th><th>Items</th><th class="text-right">Subtotal</th><th class="text-right">Credits</th><th class="text-right">Total</th><th>Status</th><th>Due</th><th></th></tr></thead><tbody>';
     poBills.forEach(function(b) {
+      var creditAmt = b.credit_total || 0;
+      var netTotal = (b.amount || 0) + (b.tax || 0) - creditAmt;
       html += '<tr class="po-clickable" onclick="poShowBillDetail(' + b.id + ')">' +
         '<td><strong>' + poEsc(b.bill_number) + '</strong></td>' +
         '<td><span class="po-link" onclick="event.stopPropagation();poNav(\'detail\',' + b.po_id + ')">' + poEsc(b.po_number) + '</span></td>' +
@@ -1294,13 +1298,15 @@ function poRenderBills() {
         '<td>' + poEsc(b.supplier_invoice_number || '—') + '</td>' +
         '<td>' + (b.item_count || 0) + '</td>' +
         '<td class="text-right">$' + (b.amount || 0).toFixed(2) + '</td>' +
-        '<td class="text-right">$' + (b.tax || 0).toFixed(2) + '</td>' +
-        '<td class="text-right"><strong>$' + ((b.amount || 0) + (b.tax || 0)).toFixed(2) + '</strong></td>' +
+        '<td class="text-right">' + (creditAmt > 0 ? '<span style="color:#059669">-$' + creditAmt.toFixed(2) + '</span>' : '<span class="po-muted">—</span>') + '</td>' +
+        '<td class="text-right"><strong>$' + netTotal.toFixed(2) + '</strong></td>' +
         '<td><span class="po-bill-status po-bill-' + b.status + '">' + poBillStatusLabel(b.status) + '</span></td>' +
         '<td>' + poFormatDate(b.due_date) + '</td>' +
-        '<td onclick="event.stopPropagation()">' +
-        (b.status === 'pending' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poApproveBill(' + b.id + ')" title="Approve & update costs"><i class="fas fa-check"></i></button> ' : '') +
+        '<td onclick="event.stopPropagation()" style="white-space:nowrap">' +
+        (b.status === 'pending' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poApproveBill(' + b.id + ')" title="Approve"><i class="fas fa-check"></i></button> ' : '') +
         (b.status === 'approved' ? '<button class="po-btn po-btn-xs po-btn-success" onclick="poMarkBillPaid(' + b.id + ')" title="Mark paid"><i class="fas fa-dollar-sign"></i></button> ' : '') +
+        '<button class="po-btn po-btn-xs po-btn-outline" onclick="poEditBill(' + b.id + ')" title="Edit"><i class="fas fa-pen"></i></button> ' +
+        (b.status !== 'paid' ? '<button class="po-btn po-btn-xs" style="color:#DC2626" onclick="poDeleteBill(' + b.id + ',\'' + poEsc(b.bill_number).replace(/'/g, "\\'") + '\')" title="Delete"><i class="fas fa-trash"></i></button>' : '') +
         '</td></tr>';
     });
     html += '</tbody></table></div>';
@@ -1370,17 +1376,45 @@ async function poShowBillDetail(billId) {
       body += '</tbody></table></div>';
     }
 
+    // Credits/Refunds associated with this bill
+    var credits = resp.data.credits || [];
+    if (credits.length > 0) {
+      body += '<h4 style="margin:16px 0 8px"><i class="fas fa-receipt" style="color:#7C3AED"></i> Credits & Refunds</h4>';
+      var creditTotal = credits.reduce(function(s,c) { return s + (c.amount || 0); }, 0);
+      body += '<div class="po-table-wrap"><table class="po-table"><thead><tr><th>Credit #</th><th>Type</th><th class="text-right">Amount</th><th>Reason</th><th>Status</th></tr></thead><tbody>';
+      credits.forEach(function(cr) {
+        body += '<tr onclick="poCloseModal();poShowCreditDetail(' + cr.id + ')" class="po-clickable">' +
+          '<td><strong>' + poEsc(cr.credit_number || '—') + '</strong></td>' +
+          '<td>' + (cr.credit_type === 'refund' ? '<span style="color:#059669"><i class="fas fa-money-bill-wave"></i> Refund</span>' : '<span style="color:#7C3AED"><i class="fas fa-receipt"></i> Credit</span>') + '</td>' +
+          '<td class="text-right" style="color:#059669;font-weight:600">$' + (cr.amount || 0).toFixed(2) + '</td>' +
+          '<td>' + poEsc(cr.reason || '—') + '</td>' +
+          '<td><span class="po-bill-status po-bill-' + cr.status + '">' + poCreditStatusLabel(cr.status) + '</span></td></tr>';
+      });
+      body += '</tbody></table></div>';
+      body += '<div style="text-align:right;font-size:13px;font-weight:700;color:#059669;margin-top:4px">Credit Total: $' + creditTotal.toFixed(2) + ' → Net: $' + ((bill.amount || 0) + (bill.tax || 0) - creditTotal).toFixed(2) + '</div>';
+    }
+
     // QBO sync status
     if (bill.qbo_sync_status && bill.qbo_sync_status !== 'not_synced') {
       body += '<div style="margin-top:12px;padding:8px 12px;background:#F0FDF4;border-radius:6px;font-size:13px"><i class="fas fa-cloud" style="color:#059669"></i> QBO: ' + bill.qbo_sync_status + (bill.qbo_bill_id ? ' (ID: ' + bill.qbo_bill_id + ')' : '') + '</div>';
     }
 
     var footer = '';
+    // Action buttons based on status
     if (bill.status === 'pending') {
-      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poApproveBill(' + bill.id + ')"><i class="fas fa-check-circle"></i> Approve & Update Costs</button> ';
-      footer += '<button class="po-btn po-btn-outline" onclick="poCloseModal();poDisputeBill(' + bill.id + ')"><i class="fas fa-exclamation-triangle"></i> Dispute</button>';
+      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poApproveBill(' + bill.id + ')"><i class="fas fa-check-circle"></i> Approve</button> ';
+      footer += '<button class="po-btn po-btn-outline" onclick="poCloseModal();poEditBill(' + bill.id + ')"><i class="fas fa-pen"></i> Edit</button> ';
+      footer += '<button class="po-btn po-btn-outline" onclick="poCloseModal();poDisputeBill(' + bill.id + ')"><i class="fas fa-exclamation-triangle"></i> Dispute</button> ';
     } else if (bill.status === 'approved') {
-      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poMarkBillPaid(' + bill.id + ')"><i class="fas fa-dollar-sign"></i> Mark Paid</button>';
+      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poMarkBillPaid(' + bill.id + ')"><i class="fas fa-dollar-sign"></i> Mark Paid</button> ';
+      footer += '<button class="po-btn po-btn-outline" onclick="poCloseModal();poEditBill(' + bill.id + ')"><i class="fas fa-pen"></i> Edit</button> ';
+    } else if (bill.status === 'disputed') {
+      footer += '<button class="po-btn po-btn-outline" onclick="poCloseModal();poEditBill(' + bill.id + ')"><i class="fas fa-pen"></i> Edit</button> ';
+    }
+    // Credit/Refund & Delete always available (except paid bills for delete)
+    footer += '<button class="po-btn po-btn-outline" style="color:#7C3AED;border-color:#7C3AED" onclick="poCloseModal();poShowCreateCredit(' + (bill.supplier_id || 0) + ',' + bill.id + ',' + (bill.po_id || 0) + ')"><i class="fas fa-receipt"></i> Credit/Refund</button> ';
+    if (bill.status !== 'paid') {
+      footer += '<button class="po-btn po-btn-outline" style="color:#DC2626;border-color:#DC2626" onclick="poCloseModal();poDeleteBill(' + bill.id + ',\'' + poEsc(bill.bill_number) + '\')"><i class="fas fa-trash"></i> Delete</button>';
     }
 
     poShowModal('<i class="fas fa-file-invoice-dollar"></i> Bill Detail — ' + poEsc(bill.bill_number), body, footer);
@@ -1421,6 +1455,356 @@ async function poDisputeBill(billId) {
     poRender();
   } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
+
+// Delete bill
+async function poDeleteBill(billId, billNumber) {
+  if (!confirm('Delete bill ' + billNumber + '?\n\nIf the bill was approved, product costs will be reverted to their previous values.\n\nThis cannot be undone.')) return;
+  try {
+    await poAPI.delete('/api/purchasing/bills/' + billId, { headers: poHeaders() });
+    poToast('Bill deleted');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poDeleteBill = poDeleteBill;
+
+// Edit bill — opens editable modal similar to create bill
+async function poEditBill(billId) {
+  try {
+    var resp = await poAPI.get('/api/purchasing/bills/' + billId, { headers: poHeaders() });
+    var bill = resp.data.bill;
+    var items = resp.data.items || [];
+    poBillItems = items;
+
+    var body = '<div style="background:#FEF3C7;border:1px solid #FDE68A;border-radius:8px;padding:12px;margin-bottom:16px">' +
+      '<div style="font-weight:600;color:#92400E"><i class="fas fa-pen"></i> Editing Bill ' + poEsc(bill.bill_number) + '</div></div>';
+
+    body += '<div class="po-form-row">' +
+      '<div class="po-form-group" style="flex:2"><label>Supplier Invoice #</label><input id="poEditBillInvoice" type="text" class="po-input" value="' + poEsc(bill.supplier_invoice_number || '') + '"></div>' +
+      '<div class="po-form-group"><label>Due Date</label><input id="poEditBillDue" type="date" class="po-input" value="' + (bill.due_date || '') + '"></div></div>';
+
+    // Line items
+    body += '<div class="po-bill-items-section" style="margin-top:16px">';
+    body += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<label style="font-weight:600"><i class="fas fa-list"></i> Line Items</label>' +
+      '<span id="poEditBillSubtotal" style="font-weight:700;color:#059669">$0.00</span></div>';
+
+    body += '<div class="po-table-wrap"><table class="po-table"><thead><tr><th>Product</th><th class="text-right">Qty</th><th>Unit</th><th class="text-right">Unit Cost</th><th class="text-right">Total</th><th style="width:40px"></th></tr></thead><tbody id="poEditBillItemsBody">';
+    items.forEach(function(item, idx) {
+      body += poEditBillItemRow(item, idx);
+    });
+    body += '</tbody></table></div>';
+    body += '<button class="po-btn po-btn-xs po-btn-outline" style="margin-top:8px" onclick="poEditBillAddItem()"><i class="fas fa-plus"></i> Add Line Item</button>';
+    body += '</div>';
+
+    body += '<div class="po-form-row" style="margin-top:12px">' +
+      '<div class="po-form-group"><label>Tax</label><input id="poEditBillTax" type="number" step="0.01" class="po-input" value="' + (bill.tax || 0).toFixed(2) + '" oninput="poCalcEditBillTotals()"></div>' +
+      '<div class="po-form-group" style="display:flex;flex-direction:column;justify-content:flex-end"><div style="text-align:right"><span class="po-muted">Grand Total: </span><span id="poEditBillGrand" style="font-size:20px;font-weight:800;color:#059669">$0.00</span></div></div></div>';
+    body += '<div class="po-form-group"><label>Notes</label><textarea id="poEditBillNotes" class="po-input" rows="2">' + poEsc(bill.notes || '') + '</textarea></div>';
+
+    var footer = '<button class="po-btn po-btn-primary po-btn-lg" onclick="poDoEditBill(' + billId + ')"><i class="fas fa-save"></i> Save Changes</button>';
+    poShowModal('<i class="fas fa-pen"></i> Edit Bill — ' + poEsc(bill.bill_number), body, footer);
+    setTimeout(function() { poCalcEditBillTotals(); }, 50);
+  } catch(e) { poToast('Failed to load bill: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poEditBill = poEditBill;
+
+var _poEditBillIdx = 0;
+function poEditBillItemRow(item, idx) {
+  _poEditBillIdx = Math.max(_poEditBillIdx, idx + 1);
+  return '<tr id="poEditBillRow_' + idx + '">' +
+    '<td><input type="text" class="po-input po-input-sm" id="poEditBillDesc_' + idx + '" value="' + poEsc(item.product_name || item.description || '') + '" style="min-width:120px">' +
+    '<input type="hidden" id="poEditBillProd_' + idx + '" value="' + (item.product_id || '') + '">' +
+    '<input type="hidden" id="poEditBillPoItem_' + idx + '" value="' + (item.po_item_id || '') + '"></td>' +
+    '<td class="text-right"><input type="number" step="0.01" class="po-input po-input-sm" style="width:80px;text-align:right" id="poEditBillQty_' + idx + '" value="' + (item.qty || 0) + '" oninput="poCalcEditBillTotals()" inputmode="decimal"></td>' +
+    '<td><input type="text" class="po-input po-input-sm" id="poEditBillUnit_' + idx + '" value="' + poEsc(item.unit || 'each') + '" style="width:60px"></td>' +
+    '<td class="text-right"><input type="number" step="0.01" class="po-input po-input-sm" style="width:100px;text-align:right;font-weight:600" id="poEditBillCost_' + idx + '" value="' + (item.unit_cost || 0).toFixed(2) + '" oninput="poCalcEditBillTotals()" inputmode="decimal"></td>' +
+    '<td class="text-right" id="poEditBillLineTotal_' + idx + '" style="font-weight:600">$' + ((item.qty || 0) * (item.unit_cost || 0)).toFixed(2) + '</td>' +
+    '<td><button class="po-btn po-btn-xs" style="color:#DC2626" onclick="poEditBillRemoveItem(' + idx + ')" title="Remove"><i class="fas fa-times"></i></button></td></tr>';
+}
+window.poEditBillItemRow = poEditBillItemRow;
+
+function poEditBillAddItem() {
+  var tbody = document.getElementById('poEditBillItemsBody');
+  if (!tbody) return;
+  var idx = _poEditBillIdx++;
+  var tr = document.createElement('tr');
+  tr.id = 'poEditBillRow_' + idx;
+  tr.innerHTML = '<td><input type="text" class="po-input po-input-sm" id="poEditBillDesc_' + idx + '" placeholder="Product name" style="min-width:120px">' +
+    '<input type="hidden" id="poEditBillProd_' + idx + '" value=""><input type="hidden" id="poEditBillPoItem_' + idx + '" value=""></td>' +
+    '<td class="text-right"><input type="number" step="0.01" class="po-input po-input-sm" style="width:80px;text-align:right" id="poEditBillQty_' + idx + '" value="0" oninput="poCalcEditBillTotals()" inputmode="decimal"></td>' +
+    '<td><input type="text" class="po-input po-input-sm" id="poEditBillUnit_' + idx + '" value="each" style="width:60px"></td>' +
+    '<td class="text-right"><input type="number" step="0.01" class="po-input po-input-sm" style="width:100px;text-align:right;font-weight:600" id="poEditBillCost_' + idx + '" value="0.00" oninput="poCalcEditBillTotals()" inputmode="decimal"></td>' +
+    '<td class="text-right" id="poEditBillLineTotal_' + idx + '" style="font-weight:600">$0.00</td>' +
+    '<td><button class="po-btn po-btn-xs" style="color:#DC2626" onclick="poEditBillRemoveItem(' + idx + ')" title="Remove"><i class="fas fa-times"></i></button></td>';
+  tbody.appendChild(tr);
+  poBillItems.push({});
+}
+window.poEditBillAddItem = poEditBillAddItem;
+
+function poEditBillRemoveItem(idx) {
+  var row = document.getElementById('poEditBillRow_' + idx);
+  if (row) row.remove();
+  poCalcEditBillTotals();
+}
+window.poEditBillRemoveItem = poEditBillRemoveItem;
+
+function poCalcEditBillTotals() {
+  var subtotal = 0;
+  var rows = document.querySelectorAll('[id^="poEditBillRow_"]');
+  rows.forEach(function(row) {
+    var idx = row.id.replace('poEditBillRow_', '');
+    var qty = parseFloat(document.getElementById('poEditBillQty_' + idx)?.value) || 0;
+    var cost = parseFloat(document.getElementById('poEditBillCost_' + idx)?.value) || 0;
+    var lineTotal = qty * cost;
+    subtotal += lineTotal;
+    var td = document.getElementById('poEditBillLineTotal_' + idx);
+    if (td) td.textContent = '$' + lineTotal.toFixed(2);
+  });
+  var sub = document.getElementById('poEditBillSubtotal');
+  if (sub) sub.textContent = '$' + subtotal.toFixed(2);
+  var tax = parseFloat(document.getElementById('poEditBillTax')?.value) || 0;
+  var grand = document.getElementById('poEditBillGrand');
+  if (grand) grand.textContent = '$' + (subtotal + tax).toFixed(2);
+}
+window.poCalcEditBillTotals = poCalcEditBillTotals;
+
+async function poDoEditBill(billId) {
+  var items = [];
+  var rows = document.querySelectorAll('[id^="poEditBillRow_"]');
+  rows.forEach(function(row) {
+    var idx = row.id.replace('poEditBillRow_', '');
+    var qty = parseFloat(document.getElementById('poEditBillQty_' + idx)?.value) || 0;
+    var cost = parseFloat(document.getElementById('poEditBillCost_' + idx)?.value) || 0;
+    if (qty > 0) {
+      items.push({
+        po_item_id: parseInt(document.getElementById('poEditBillPoItem_' + idx)?.value) || null,
+        product_id: parseInt(document.getElementById('poEditBillProd_' + idx)?.value) || null,
+        description: document.getElementById('poEditBillDesc_' + idx)?.value || '',
+        qty: qty,
+        unit: document.getElementById('poEditBillUnit_' + idx)?.value || 'each',
+        unit_cost: cost
+      });
+    }
+  });
+
+  if (items.length === 0) { poToast('Bill must have at least one line item', 'warning'); return; }
+
+  try {
+    await poAPI.put('/api/purchasing/bills/' + billId, {
+      supplier_invoice_number: document.getElementById('poEditBillInvoice').value || null,
+      due_date: document.getElementById('poEditBillDue').value || null,
+      tax: parseFloat(document.getElementById('poEditBillTax').value) || 0,
+      notes: document.getElementById('poEditBillNotes').value || null,
+      items: items
+    }, { headers: poHeaders() });
+    poToast('Bill updated');
+    poCloseModal();
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poDoEditBill = poDoEditBill;
+
+// ==================== VENDOR CREDITS & REFUNDS ====================
+
+function poCreditStatusLabel(s) {
+  var labels = { pending: 'Pending', approved: 'Approved', applied: 'Applied', voided: 'Voided' };
+  return labels[s] || s || '—';
+}
+window.poCreditStatusLabel = poCreditStatusLabel;
+
+async function poShowCreateCredit(supplierId, billId, poId) {
+  // Load suppliers for picker
+  var supResp = await poAPI.get('/api/purchasing/suppliers?active=1', { headers: poHeaders() });
+  var suppliers = supResp.data.suppliers || [];
+
+  var supOpts = '<option value="">— Select Vendor —</option>';
+  suppliers.forEach(function(s) {
+    supOpts += '<option value="' + s.id + '"' + (s.id == supplierId ? ' selected' : '') + '>' + poEsc(s.name) + '</option>';
+  });
+
+  var body = '<div class="po-form">' +
+    '<div class="po-form-row">' +
+    '<div class="po-form-group" style="flex:2"><label>Vendor *</label><select id="poCreditSupplier" class="po-input">' + supOpts + '</select></div>' +
+    '<div class="po-form-group"><label>Type *</label><select id="poCreditType" class="po-input" onchange="poToggleCreditRefundFields()">' +
+    '<option value="credit">Credit (money owed to us)</option><option value="refund">Refund (money returned)</option></select></div></div>' +
+    '<div class="po-form-row">' +
+    '<div class="po-form-group"><label>Amount *</label><input id="poCreditAmount" type="number" step="0.01" min="0" class="po-input" placeholder="0.00" inputmode="decimal"></div>' +
+    '<div class="po-form-group" id="poCreditRefundMethodWrap" style="display:none"><label>Refund Method</label><select id="poCreditRefundMethod" class="po-input">' +
+    '<option value="">—</option><option value="check">Check</option><option value="ach">ACH / Bank Transfer</option><option value="credit_memo">Credit Memo</option><option value="offset_next_bill">Offset Next Bill</option></select></div></div>' +
+    '<div class="po-form-group"><label>Reason *</label><select id="poCreditReason" class="po-input" onchange="var o=document.getElementById(\'poCreditReasonOther\');o.style.display=this.value===\'other\'?\'block\':\'none\'">' +
+    '<option value="overcharge">Overcharge on invoice</option>' +
+    '<option value="damaged_goods">Damaged / defective goods</option>' +
+    '<option value="short_shipment">Short shipment</option>' +
+    '<option value="wrong_product">Wrong product shipped</option>' +
+    '<option value="return">Product return</option>' +
+    '<option value="price_adjustment">Price adjustment</option>' +
+    '<option value="other">Other</option></select></div>' +
+    '<div class="po-form-group" id="poCreditReasonOther" style="display:none"><label>Specify Reason</label><input id="poCreditReasonText" type="text" class="po-input" placeholder="Describe the reason..."></div>' +
+    '<div class="po-form-group"><label>Notes</label><textarea id="poCreditNotes" class="po-input" rows="2" placeholder="Additional details..."></textarea></div>';
+
+  if (billId) body += '<input type="hidden" id="poCreditBillId" value="' + billId + '">';
+  if (poId) body += '<input type="hidden" id="poCreditPoId" value="' + poId + '">';
+  body += '</div>';
+
+  var footer = '<button class="po-btn po-btn-primary" onclick="poDoCreateCredit()"><i class="fas fa-receipt"></i> Create Credit / Refund</button>';
+  poShowModal('<i class="fas fa-receipt" style="color:#7C3AED"></i> New Vendor Credit / Refund', body, footer);
+}
+window.poShowCreateCredit = poShowCreateCredit;
+
+function poToggleCreditRefundFields() {
+  var type = document.getElementById('poCreditType').value;
+  var methodWrap = document.getElementById('poCreditRefundMethodWrap');
+  if (methodWrap) methodWrap.style.display = type === 'refund' ? '' : 'none';
+}
+window.poToggleCreditRefundFields = poToggleCreditRefundFields;
+
+async function poDoCreateCredit() {
+  var supplierId = parseInt(document.getElementById('poCreditSupplier').value);
+  var creditType = document.getElementById('poCreditType').value;
+  var amount = parseFloat(document.getElementById('poCreditAmount').value);
+  var reasonSel = document.getElementById('poCreditReason').value;
+  var reasonText = document.getElementById('poCreditReasonText')?.value || '';
+  var reason = reasonSel === 'other' ? reasonText : reasonSel.replace(/_/g, ' ');
+  var notes = document.getElementById('poCreditNotes').value;
+  var refundMethod = document.getElementById('poCreditRefundMethod')?.value || null;
+  var billIdEl = document.getElementById('poCreditBillId');
+  var poIdEl = document.getElementById('poCreditPoId');
+
+  if (!supplierId) { poToast('Select a vendor', 'warning'); return; }
+  if (!amount || amount <= 0) { poToast('Enter a valid amount', 'warning'); return; }
+  if (!reason) { poToast('Enter a reason', 'warning'); return; }
+
+  try {
+    var resp = await poAPI.post('/api/purchasing/credits', {
+      supplier_id: supplierId,
+      bill_id: billIdEl ? parseInt(billIdEl.value) || null : null,
+      po_id: poIdEl ? parseInt(poIdEl.value) || null : null,
+      credit_type: creditType,
+      amount: amount,
+      reason: reason,
+      notes: notes || null,
+      refund_method: refundMethod
+    }, { headers: poHeaders() });
+    poToast((creditType === 'refund' ? 'Refund' : 'Credit') + ' ' + resp.data.credit_number + ' created — $' + amount.toFixed(2));
+    poCloseModal();
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poDoCreateCredit = poDoCreateCredit;
+
+async function poShowCreditDetail(creditId) {
+  try {
+    var resp = await poAPI.get('/api/purchasing/credits/' + creditId, { headers: poHeaders() });
+    var cr = resp.data.credit;
+
+    var body = '<div class="po-detail-grid" style="margin-bottom:16px"><div class="po-detail-info-card">' +
+      '<div class="po-detail-row"><span>Credit #</span><strong>' + poEsc(cr.credit_number || '—') + '</strong></div>' +
+      '<div class="po-detail-row"><span>Type</span><strong>' + (cr.credit_type === 'refund' ? '<i class="fas fa-money-bill-wave" style="color:#059669"></i> Refund' : '<i class="fas fa-receipt" style="color:#7C3AED"></i> Credit') + '</strong></div>' +
+      '<div class="po-detail-row"><span>Vendor</span><strong>' + poEsc(cr.supplier_name || '—') + '</strong></div>' +
+      '<div class="po-detail-row"><span>Reason</span><strong>' + poEsc(cr.reason || '—') + '</strong></div>' +
+      '<div class="po-detail-row"><span>Status</span><span class="po-bill-status po-bill-' + cr.status + '">' + poCreditStatusLabel(cr.status) + '</span></div>' +
+      (cr.source_bill_number ? '<div class="po-detail-row"><span>Source Bill</span><strong>' + poEsc(cr.source_bill_number) + '</strong></div>' : '') +
+      (cr.po_number ? '<div class="po-detail-row"><span>PO</span><strong>' + poEsc(cr.po_number) + '</strong></div>' : '') +
+      (cr.refund_method ? '<div class="po-detail-row"><span>Refund Method</span><strong>' + poEsc(cr.refund_method.replace(/_/g, ' ')) + '</strong></div>' : '') +
+      (cr.refund_date ? '<div class="po-detail-row"><span>Refund Date</span><strong>' + poFormatDate(cr.refund_date) + '</strong></div>' : '') +
+      (cr.applied_bill_number ? '<div class="po-detail-row"><span>Applied To</span><strong>' + poEsc(cr.applied_bill_number) + '</strong></div>' : '') +
+      (cr.notes ? '<div class="po-detail-row"><span>Notes</span><strong>' + poEsc(cr.notes) + '</strong></div>' : '') +
+      '<div class="po-detail-row"><span>Created</span><strong>' + poFormatDate(cr.created_at) + ' by ' + poEsc(cr.created_by_name || '—') + '</strong></div>' +
+      (cr.approved_by_name ? '<div class="po-detail-row"><span>Approved</span><strong>' + poFormatDate(cr.approved_at) + ' by ' + poEsc(cr.approved_by_name) + '</strong></div>' : '') +
+      '</div><div class="po-detail-progress-card"><div style="text-align:center">' +
+      '<div class="po-muted">' + (cr.credit_type === 'refund' ? 'Refund' : 'Credit') + ' Amount</div>' +
+      '<div style="font-size:28px;font-weight:800;color:#059669">$' + (cr.amount || 0).toFixed(2) + '</div></div></div></div>';
+
+    var footer = '';
+    if (cr.status === 'pending') {
+      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poApproveCreditAction(' + cr.id + ')"><i class="fas fa-check"></i> Approve</button> ';
+      footer += '<button class="po-btn po-btn-outline" style="color:#DC2626;border-color:#DC2626" onclick="poCloseModal();poVoidCredit(' + cr.id + ')"><i class="fas fa-ban"></i> Void</button>';
+    } else if (cr.status === 'approved' && cr.credit_type === 'refund') {
+      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poMarkCreditApplied(' + cr.id + ')"><i class="fas fa-check-double"></i> Mark Received</button> ';
+    } else if (cr.status === 'approved' && cr.credit_type === 'credit') {
+      footer += '<button class="po-btn po-btn-success" onclick="poCloseModal();poMarkCreditApplied(' + cr.id + ')"><i class="fas fa-check-double"></i> Mark Applied</button> ';
+    }
+
+    poShowModal('<i class="fas fa-receipt" style="color:#7C3AED"></i> Credit Detail — ' + poEsc(cr.credit_number || ''), body, footer);
+  } catch(e) { poToast('Failed to load credit: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poShowCreditDetail = poShowCreditDetail;
+
+async function poApproveCreditAction(creditId) {
+  if (!confirm('Approve this credit/refund?')) return;
+  try {
+    await poAPI.put('/api/purchasing/credits/' + creditId, { status: 'approved' }, { headers: poHeaders() });
+    poToast('Credit approved');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poApproveCreditAction = poApproveCreditAction;
+
+async function poMarkCreditApplied(creditId) {
+  if (!confirm('Mark this credit/refund as applied/received?')) return;
+  try {
+    await poAPI.put('/api/purchasing/credits/' + creditId, {
+      status: 'applied',
+      refund_date: new Date().toISOString().slice(0,10)
+    }, { headers: poHeaders() });
+    poToast('Credit marked as applied');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poMarkCreditApplied = poMarkCreditApplied;
+
+async function poVoidCredit(creditId) {
+  if (!confirm('Void this credit/refund? This cannot be undone.')) return;
+  try {
+    await poAPI.put('/api/purchasing/credits/' + creditId, { status: 'voided' }, { headers: poHeaders() });
+    poToast('Credit voided');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poVoidCredit = poVoidCredit;
+
+// Credits panel (shows all credits/refunds in a modal)
+async function poShowCreditsPanel() {
+  try {
+    var resp = await poAPI.get('/api/purchasing/credits', { headers: poHeaders() });
+    var credits = resp.data.credits || [];
+
+    var body = '';
+    if (credits.length === 0) {
+      body = '<div class="po-empty"><i class="fas fa-receipt" style="font-size:48px;color:#CBD5E1"></i>' +
+        '<h3>No Credits or Refunds</h3><p>Create a credit or refund from a bill detail or the button above.</p></div>';
+    } else {
+      // Summary
+      var pending = credits.filter(function(c) { return c.status === 'pending'; });
+      var approved = credits.filter(function(c) { return c.status === 'approved'; });
+      var applied = credits.filter(function(c) { return c.status === 'applied'; });
+      var pendingTotal = pending.reduce(function(s,c) { return s + (c.amount || 0); }, 0);
+      var approvedTotal = approved.reduce(function(s,c) { return s + (c.amount || 0); }, 0);
+      body += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">' +
+        '<div style="background:#FEF3C7;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600"><i class="fas fa-clock" style="color:#D97706"></i> ' + pending.length + ' Pending — $' + pendingTotal.toFixed(2) + '</div>' +
+        '<div style="background:#DBEAFE;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600"><i class="fas fa-check" style="color:#2563EB"></i> ' + approved.length + ' Approved — $' + approvedTotal.toFixed(2) + '</div>' +
+        '<div style="background:#D1FAE5;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600"><i class="fas fa-check-double" style="color:#059669"></i> ' + applied.length + ' Applied</div></div>';
+
+      body += '<div class="po-table-wrap"><table class="po-table po-table-hover"><thead><tr><th>Credit #</th><th>Type</th><th>Vendor</th><th>Bill</th><th class="text-right">Amount</th><th>Reason</th><th>Status</th><th>Date</th></tr></thead><tbody>';
+      credits.forEach(function(cr) {
+        body += '<tr class="po-clickable" onclick="poCloseModal();poShowCreditDetail(' + cr.id + ')">' +
+          '<td><strong>' + poEsc(cr.credit_number || '—') + '</strong></td>' +
+          '<td>' + (cr.credit_type === 'refund' ? '<span style="color:#059669"><i class="fas fa-money-bill-wave"></i> Refund</span>' : '<span style="color:#7C3AED"><i class="fas fa-receipt"></i> Credit</span>') + '</td>' +
+          '<td>' + poEsc(cr.supplier_name || '—') + '</td>' +
+          '<td>' + poEsc(cr.source_bill_number || '—') + '</td>' +
+          '<td class="text-right" style="color:#059669;font-weight:600">$' + (cr.amount || 0).toFixed(2) + '</td>' +
+          '<td>' + poEsc(cr.reason || '—') + '</td>' +
+          '<td><span class="po-bill-status po-bill-' + cr.status + '">' + poCreditStatusLabel(cr.status) + '</span></td>' +
+          '<td>' + poFormatDate(cr.created_at) + '</td></tr>';
+      });
+      body += '</tbody></table></div>';
+    }
+
+    var footer = '<button class="po-btn po-btn-primary" onclick="poCloseModal();poShowCreateCredit(0,0,0)"><i class="fas fa-plus"></i> New Credit / Refund</button>';
+    poShowModal('<i class="fas fa-receipt" style="color:#7C3AED"></i> Vendor Credits & Refunds', body, footer);
+  } catch(e) { poToast('Failed to load credits: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poShowCreditsPanel = poShowCreditsPanel;
 
 // ==================== FREIGHT CHARGES ====================
 

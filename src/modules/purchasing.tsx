@@ -614,7 +614,12 @@ app.get('/api/purchasing/bills/:id', async (c) => {
      WHERE bi.bill_id = ? ORDER BY bi.id`
   ).bind(id).all()
 
-  return c.json({ bill, items: items.results || [] })
+  // Get credits associated with this bill
+  const credits = await db.prepare(
+    `SELECT * FROM vendor_credits WHERE bill_id = ? ORDER BY created_at DESC`
+  ).bind(id).all()
+
+  return c.json({ bill, items: items.results || [], credits: credits.results || [] })
 })
 
 // Update bill (header-level edits or status changes)
@@ -726,7 +731,8 @@ app.get('/api/purchasing/bills', async (c) => {
   const poId = c.req.query('po_id')
   let q = `SELECT b.*, po.po_number, po.order_type, s.name as supplier_name,
     l.code as location_code,
-    (SELECT COUNT(*) FROM po_bill_items WHERE bill_id = b.id) as item_count
+    (SELECT COUNT(*) FROM po_bill_items WHERE bill_id = b.id) as item_count,
+    (SELECT COALESCE(SUM(vc.amount), 0) FROM vendor_credits vc WHERE vc.bill_id = b.id AND vc.status IN ('approved','applied')) as credit_total
     FROM po_bills b
     JOIN purchase_orders po ON b.po_id = po.id
     LEFT JOIN suppliers s ON po.supplier_id = s.id
@@ -814,6 +820,183 @@ app.get('/api/purchasing/cost-history/:productId', async (c) => {
   ).bind(productId, limit).all()
 
   return c.json({ history: history.results || [] })
+})
+
+// Delete bill (only pending/disputed bills can be deleted)
+app.delete('/api/purchasing/bills/:id', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  if (user.role !== 'admin' && user.role !== 'owner') return c.json({ error: 'Only admins can delete bills' }, 403)
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+
+  const bill = await db.prepare('SELECT * FROM po_bills WHERE id = ?').bind(id).first() as any
+  if (!bill) return c.json({ error: 'Bill not found' }, 404)
+  if (bill.status === 'paid') return c.json({ error: 'Cannot delete a paid bill. Void it or create a credit instead.' }, 400)
+
+  // If bill was approved, we need to reverse cost updates
+  if (bill.status === 'approved') {
+    // Restore old costs from cost history
+    const costEntries = await db.prepare(
+      'SELECT * FROM product_cost_history WHERE bill_id = ? AND source = ?'
+    ).bind(id, 'bill').all()
+    for (const entry of (costEntries.results || []) as any[]) {
+      if (entry.product_id && entry.old_cost !== undefined) {
+        await db.prepare('UPDATE products SET cost = ? WHERE id = ?').bind(entry.old_cost, entry.product_id).run()
+      }
+    }
+    // Remove cost history entries for this bill
+    await db.prepare('DELETE FROM product_cost_history WHERE bill_id = ? AND source = ?').bind(id, 'bill').run()
+  }
+
+  // Delete bill items, then bill
+  await db.prepare('DELETE FROM po_bill_items WHERE bill_id = ?').bind(id).run()
+  await db.prepare('DELETE FROM po_bills WHERE id = ?').bind(id).run()
+
+  return c.json({ success: true, message: 'Bill deleted' })
+})
+
+// ==================== VENDOR CREDITS & REFUNDS ====================
+
+function generateCreditNumber(): string {
+  const d = new Date()
+  const ymd = d.getFullYear().toString().slice(2) + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0')
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
+  return `CR-${ymd}-${rand}`
+}
+
+// List vendor credits
+app.get('/api/purchasing/credits', async (c) => {
+  const db = c.env.DB
+  const status = c.req.query('status')
+  const supplierId = c.req.query('supplier_id')
+  const creditType = c.req.query('credit_type')
+
+  let q = `SELECT vc.*, s.name as supplier_name,
+    b.bill_number as source_bill_number, ab.bill_number as applied_bill_number,
+    po.po_number
+    FROM vendor_credits vc
+    LEFT JOIN suppliers s ON vc.supplier_id = s.id
+    LEFT JOIN po_bills b ON vc.bill_id = b.id
+    LEFT JOIN po_bills ab ON vc.applied_to_bill_id = ab.id
+    LEFT JOIN purchase_orders po ON vc.po_id = po.id
+    WHERE 1=1`
+  const binds: any[] = []
+  if (status && status !== 'all') { q += ' AND vc.status = ?'; binds.push(status) }
+  if (supplierId) { q += ' AND vc.supplier_id = ?'; binds.push(parseInt(supplierId)) }
+  if (creditType) { q += ' AND vc.credit_type = ?'; binds.push(creditType) }
+  q += ' ORDER BY vc.created_at DESC'
+
+  const result = await db.prepare(q).bind(...binds).all()
+  return c.json({ credits: result.results || [] })
+})
+
+// Get single credit
+app.get('/api/purchasing/credits/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const credit = await db.prepare(
+    `SELECT vc.*, s.name as supplier_name,
+      b.bill_number as source_bill_number, ab.bill_number as applied_bill_number,
+      po.po_number
+     FROM vendor_credits vc
+     LEFT JOIN suppliers s ON vc.supplier_id = s.id
+     LEFT JOIN po_bills b ON vc.bill_id = b.id
+     LEFT JOIN po_bills ab ON vc.applied_to_bill_id = ab.id
+     LEFT JOIN purchase_orders po ON vc.po_id = po.id
+     WHERE vc.id = ?`
+  ).bind(id).first()
+  if (!credit) return c.json({ error: 'Credit not found' }, 404)
+  return c.json({ credit })
+})
+
+// Create vendor credit/refund
+app.post('/api/purchasing/credits', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const body = await c.req.json()
+  const { supplier_id, bill_id, po_id, credit_type, amount, reason, notes, refund_method } = body
+
+  if (!supplier_id || !amount || !reason) return c.json({ error: 'Supplier, amount, and reason are required' }, 400)
+
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+  const creditNumber = generateCreditNumber()
+
+  const result = await db.prepare(
+    `INSERT INTO vendor_credits (supplier_id, bill_id, po_id, credit_number, credit_type, amount, reason, status, refund_method, notes, created_by, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`
+  ).bind(supplier_id, bill_id ?? null, po_id ?? null, creditNumber,
+    credit_type || 'credit', amount, reason, refund_method ?? null,
+    notes ?? null, user.id, userInfo?.name || user.email).run()
+
+  return c.json({ success: true, id: result.meta.last_row_id, credit_number: creditNumber })
+})
+
+// Update vendor credit (approve, apply, void, edit)
+app.put('/api/purchasing/credits/:id', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  const { status, applied_to_bill_id, refund_method, refund_date, notes, amount, reason } = body
+
+  const existing = await db.prepare('SELECT * FROM vendor_credits WHERE id = ?').bind(id).first() as any
+  if (!existing) return c.json({ error: 'Credit not found' }, 404)
+
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+
+  // Build dynamic update
+  const sets: string[] = ['updated_at = datetime("now")']
+  const binds: any[] = []
+
+  if (status) {
+    sets.push('status = ?'); binds.push(status)
+    if (status === 'approved') {
+      sets.push('approved_by = ?', 'approved_by_name = ?', 'approved_at = datetime("now")')
+      binds.push(user.id, userInfo?.name || user.email)
+    }
+  }
+  if (applied_to_bill_id !== undefined) { sets.push('applied_to_bill_id = ?'); binds.push(applied_to_bill_id ?? null) }
+  if (refund_method !== undefined) { sets.push('refund_method = ?'); binds.push(refund_method ?? null) }
+  if (refund_date !== undefined) { sets.push('refund_date = ?'); binds.push(refund_date ?? null) }
+  if (notes !== undefined) { sets.push('notes = ?'); binds.push(notes ?? null) }
+  if (amount !== undefined) { sets.push('amount = ?'); binds.push(amount) }
+  if (reason !== undefined) { sets.push('reason = ?'); binds.push(reason) }
+
+  binds.push(id)
+  await db.prepare(`UPDATE vendor_credits SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run()
+
+  return c.json({ success: true })
+})
+
+// Delete vendor credit (only pending)
+app.delete('/api/purchasing/credits/:id', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+
+  const credit = await db.prepare('SELECT * FROM vendor_credits WHERE id = ?').bind(id).first() as any
+  if (!credit) return c.json({ error: 'Credit not found' }, 404)
+  if (credit.status !== 'pending') return c.json({ error: 'Only pending credits can be deleted' }, 400)
+
+  await db.prepare('DELETE FROM vendor_credits WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+// Get credit summary for a supplier
+app.get('/api/purchasing/suppliers/:id/credit-summary', async (c) => {
+  const db = c.env.DB
+  const supplierId = parseInt(c.req.param('id'))
+
+  const summary = await db.prepare(
+    `SELECT credit_type, status, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+     FROM vendor_credits WHERE supplier_id = ? GROUP BY credit_type, status`
+  ).bind(supplierId).all()
+
+  return c.json({ summary: summary.results || [] })
 })
 
 // ==================== FREIGHT CHARGES ====================

@@ -710,6 +710,32 @@ app.post('/api/inventory/transfers/:id/cancel', async (c) => {
 
 // ==================== BATCHES ====================
 
+// Batch summary per product (for quick count page batch indicators)
+app.get('/api/inventory/batch-summary', async (c) => {
+  const db = c.env.DB
+  const locationId = c.req.query('location_id')
+  if (!locationId) return c.json({ error: 'location_id required' }, 400)
+
+  const summary = await db.prepare(
+    `SELECT b.product_id, COUNT(*) as batch_count, SUM(b.qty) as batched_qty,
+      GROUP_CONCAT(b.qty || ' ' || b.condition, ', ') as batch_detail
+     FROM inventory_batches b
+     WHERE b.location_id = ? AND b.qty > 0
+     GROUP BY b.product_id`
+  ).bind(parseInt(locationId)).all()
+
+  // Convert to a map keyed by product_id
+  const map: Record<number, any> = {}
+  for (const row of (summary.results || []) as any[]) {
+    map[row.product_id] = {
+      batch_count: row.batch_count,
+      batched_qty: row.batched_qty,
+      batch_detail: row.batch_detail
+    }
+  }
+  return c.json({ summary: map })
+})
+
 app.get('/api/inventory/batches', async (c) => {
   const db = c.env.DB
   const productId = c.req.query('product_id')
