@@ -16591,10 +16591,14 @@ window._logisticsCleanup = function() {
   window._scanQueue.activeCount = 0;
   if (window._trRefreshTimer) clearTimeout(window._trRefreshTimer);
   window._trSelectedIdx = 0;
+  // Remove legacy mobile bottom nav if it exists
+  var _oldMobileNav = document.getElementById('mobileBottomNav');
+  if (_oldMobileNav) _oldMobileNav.remove();
   // Reset state
   currentUser = null;
   currentPage = 'dashboard';
   sidebarOpen = false;
+  _dpInitDone = false;
 };
 
 // ==================== STANDING ORDERS & SMS CONFIRMATIONS ====================
@@ -18228,69 +18232,6 @@ function statusCircle(status, size) {
     + '</div>';
 }
 
-// ==================== MOBILE BOTTOM NAV ====================
-
-function initMobileNav() {
-  if (document.getElementById('mobileBottomNav')) return;
-  // Only show on mobile/tablet
-  if (window.innerWidth > 768) return;
-
-  var nav = document.createElement('div');
-  nav.id = 'mobileBottomNav';
-  nav.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9998;background:#fff;border-top:2px solid #E5E7EB;display:flex;justify-content:space-around;padding:8px 0 env(safe-area-inset-bottom,8px);box-shadow:0 -2px 10px rgba(0,0,0,0.08)';
-  nav.innerHTML = mobileNavItems();
-  document.body.appendChild(nav);
-
-  // Add bottom padding to main content so nothing is hidden
-  var mc = document.querySelector('.main-content') || document.querySelector('.page-content');
-  if (mc) mc.style.paddingBottom = '80px';
-}
-
-function mobileNavItems() {
-  var active = typeof currentPage !== 'undefined' ? currentPage : '';
-  var items = [
-    { id: 'today', icon: 'fa-clipboard-check', label: 'Today', color: '#2563EB' },
-    { id: 'so_dashboard', icon: 'fa-comments', label: 'Messages', color: '#7C3AED' },
-    { id: '_alerts', icon: 'fa-bell', label: 'Alerts', color: '#DC2626' },
-    { id: '_more', icon: 'fa-bars', label: 'More', color: '#6B7280' }
-  ];
-  return items.map(function(item) {
-    var isActive = active === item.id;
-    var onclick = item.id === '_alerts' ? 'mobileNavAlerts()' : item.id === '_more' ? 'mobileNavMore()' : 'navigate(\'' + item.id + '\')';
-    return '<button onclick="' + onclick + '" style="flex:1;background:none;border:none;padding:8px 4px;cursor:pointer;text-align:center;opacity:' + (isActive ? '1' : '0.6') + '">'
-      + '<i class="fas ' + item.icon + '" style="font-size:22px;color:' + item.color + ';display:block;margin-bottom:3px"></i>'
-      + '<div style="font-size:11px;font-weight:700;color:' + (isActive ? item.color : '#6B7280') + '">' + item.label + '</div>'
-      + '</button>';
-  }).join('');
-}
-
-function mobileNavAlerts() {
-  // Toggle notification dropdown
-  if (typeof toggleNotifDropdown === 'function') toggleNotifDropdown();
-}
-window.mobileNavAlerts = mobileNavAlerts;
-
-function mobileNavMore() {
-  // Toggle sidebar
-  sidebarOpen = !sidebarOpen;
-  updateSidebar();
-}
-window.mobileNavMore = mobileNavMore;
-
-function updateMobileNav() {
-  var nav = document.getElementById('mobileBottomNav');
-  if (nav) nav.innerHTML = mobileNavItems();
-}
-
-// Listen for resize to show/hide mobile nav
-window.addEventListener('resize', function() {
-  if (window.innerWidth <= 768) initMobileNav();
-  else {
-    var nav = document.getElementById('mobileBottomNav');
-    if (nav) nav.remove();
-  }
-});
-
 // ==================== INIT DUMB-PROOF FEATURES ====================
 
 // Auto-init when logistics module loads
@@ -18299,7 +18240,7 @@ function initDumbProofFeatures() {
   if (_dpInitDone) return;
   _dpInitDone = true;
   initSmsAlerts();
-  initMobileNav();
+  // Mobile bottom nav is now handled by shell.js (shellRenderBottomNav)
 }
 
 // Hook into the logistics init
