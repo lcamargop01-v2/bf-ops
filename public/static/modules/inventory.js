@@ -209,11 +209,6 @@ async function invRender() {
     var html = await invRenderSnapshotsPage();
     root = document.getElementById('inventory-app'); if (!root) return;
     root.innerHTML = invRenderNav() + html;
-  } else if (invPage === 'order_assignments') {
-    root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Loading assignments...</div>';
-    var html = await invRenderOrderAssignments();
-    root = document.getElementById('inventory-app'); if (!root) return;
-    root.innerHTML = invRenderNav() + html;
   }
   } catch(err) {
     console.error('[Inventory] render error:', err);
@@ -236,8 +231,7 @@ function invRenderNav() {
 
     { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' },
     { id: 'snapshots', icon: 'fa-camera', label: 'Snapshots' },
-    { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' },
-    { id: 'order_assignments', icon: 'fa-user-gear', label: 'Order Assignments' }
+    { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' }
   ];
   // Filter by role permissions
   var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
@@ -503,7 +497,7 @@ function invRenderQuickCount() {
   var html = '<div class="inv-count-page">';
   html += '<div class="inv-count-header">';
   html += '<h2><i class="fas fa-calculator"></i> Quick Count \u2014 ' + escH(locName) + '</h2>';
-  html += '<p>Tap quantities to update. Changes are highlighted. Submit when done.</p>';
+  html += '<p>Tap quantities to update. Tap <i class="fas fa-pen-to-square" style="font-size:11px"></i> to edit names, categories, or request deletions.</p>';
 
   // Row 1: Store + Category + Sort
   html += '<div class="inv-count-filters">';
@@ -520,6 +514,7 @@ function invRenderQuickCount() {
   html += '<input id="invCountSearch" type="text" placeholder="Search products..." class="inv-count-search" oninput="invFilterCountList()">';
   html += '<div class="inv-count-toolbar-right">';
   html += '<span id="invCountSummary" class="inv-count-summary">' + invStockData.length + ' items</span>';
+  if (invUser && invUser.role === 'admin') html += '<button class="inv-btn inv-btn-outline inv-btn-sm" onclick="invShowCleanupReview()" style="color:#DC2626;border-color:#DC2626"><i class="fas fa-broom"></i> Review Deletions</button> ';
   if (invCanEdit('count')) html += '<button class="inv-btn inv-btn-primary" onclick="invSubmitBulkCount()"><i class="fas fa-check"></i> Submit Count</button>';
   html += '</div></div>';
   html += '</div>'; // end header
@@ -539,19 +534,48 @@ function invRenderQuickCount() {
     } else {
       lastCountedInfo = '<span class="inv-count-last inv-count-never"><i class="fas fa-exclamation-circle"></i> Never counted</span>';
     }
-    html += '<div class="inv-count-item" data-name="' + escH((s.product_name || '').toLowerCase()) + '" data-sku="' + escH((s.sku || '').toLowerCase()) + '">' +
+    // Subcategory options for this product's category
+    var subOptsForCat = invSubcatOptionsFor(s.category || 'shelf_goods');
+
+    html += '<div class="inv-count-item" data-name="' + escH((s.product_name || '').toLowerCase()) + '" data-sku="' + escH((s.sku || '').toLowerCase()) + '" data-pid="' + s.product_id + '">' +
+      '<div class="inv-count-item-row">' +
       '<div class="inv-count-item-info">' +
-      '<strong>' + escH(s.product_name) + '</strong>' +
-      '<span class="inv-muted">' + escH(s.sku || '') + ' \u00b7 ' + escH(s.unit_type || '') + ' \u00b7 <span class="inv-cat-badge">' + catLabel + '</span>' + (subLabel ? ' \u00b7 ' + subLabel : '') + '</span>' +
+      '<strong id="invCntName_' + idx + '">' + escH(s.product_name) + '</strong>' +
+      '<span class="inv-muted">' + escH(s.sku || '') + ' · ' + escH(s.unit_type || '') + ' · <span class="inv-cat-badge">' + catLabel + '</span>' + (subLabel ? ' · ' + subLabel : '') + '</span>' +
       lastCountedInfo +
       '</div>' +
       '<div class="inv-count-item-input">' +
       '<span class="inv-count-current">was: ' + (s.qty_on_hand || 0) + '</span>' +
       '<div class="inv-count-stepper">' +
-      '<button class="inv-stepper-btn" onclick="invStepCount(' + idx + ',-1)">\u2212</button>' +
+      '<button class="inv-stepper-btn" onclick="invStepCount(' + idx + ',-1)">−</button>' +
       '<input type="number" id="invCount_' + idx + '" class="inv-count-field" value="' + (s.qty_on_hand || 0) + '" data-original="' + (s.qty_on_hand || 0) + '" data-product="' + s.product_id + '" inputmode="numeric" onchange="invMarkChanged(' + idx + ')">' +
       '<button class="inv-stepper-btn" onclick="invStepCount(' + idx + ',1)">+</button>' +
-      '</div></div></div>';
+      '</div></div></div>' +
+      // Expand toggle
+      '<button class="inv-count-expand-btn" onclick="invToggleCountEdit(' + idx + ')" title="Edit product"><i class="fas fa-pen-to-square"></i></button>' +
+      // Expandable edit panel (hidden by default)
+      '<div class="inv-count-edit-panel" id="invCntEdit_' + idx + '" style="display:none">' +
+      '<div class="inv-count-edit-grid">' +
+      '<div class="inv-count-edit-field"><label>Name</label>' +
+      '<input type="text" id="invCntEditName_' + idx + '" class="inv-input" value="' + escH(s.product_name) + '" data-original="' + escH(s.product_name) + '" data-pid="' + s.product_id + '"></div>' +
+      '<div class="inv-count-edit-field"><label>Category</label>' +
+      '<select id="invCntEditCat_' + idx + '" class="inv-select" data-original="' + escH(s.category || 'shelf_goods') + '" data-pid="' + s.product_id + '" onchange="invCountCatChanged(' + idx + ')">' +
+      '<option value="hay"' + (s.category === 'hay' ? ' selected' : '') + '>Hay</option>' +
+      '<option value="shavings"' + (s.category === 'shavings' ? ' selected' : '') + '>Shavings</option>' +
+      '<option value="shelf_goods"' + (s.category === 'shelf_goods' || !s.category ? ' selected' : '') + '>Shelf Goods</option>' +
+      '</select></div>' +
+      '<div class="inv-count-edit-field"><label>Subcategory</label>' +
+      '<select id="invCntEditSub_' + idx + '" class="inv-select" data-original="' + escH(s.subcategory || '') + '" data-pid="' + s.product_id + '">' +
+      '<option value="">None</option>' + subOptsForCat +
+      '</select></div>' +
+      '</div>' +
+      '<div class="inv-count-edit-actions">' +
+      '<button class="inv-btn inv-btn-sm inv-btn-primary" onclick="invCountSaveEdit(' + idx + ')"><i class="fas fa-check"></i> Save Changes</button>' +
+      '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invCountViewBatches(' + s.product_id + ')"><i class="fas fa-layer-group"></i> Batches</button>' +
+      '<button class="inv-btn inv-btn-sm inv-btn-danger-outline" onclick="invCountRequestDelete(' + s.product_id + ',\'' + escH(s.product_name).replace(/'/g, "\\'") + '\')"><i class="fas fa-trash"></i> Request Delete</button>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
   });
   html += '</div></div>';
   return html;
@@ -632,6 +656,196 @@ async function invSubmitBulkCount() {
     invToast('Count failed: ' + (e.response?.data?.error || e.message), 'error');
   }
 }
+
+// ==================== COUNT PAGE — INLINE EDIT HELPERS ====================
+
+function invSubcatOptionsFor(category) {
+  var allSubs = {
+    hay: ['hay'],
+    shavings: ['bedding'],
+    shelf_goods: ['feed','supplement','dewormer','fly_control','grooming','hoof_care','first_aid',
+      'tack','blankets','treats','barn_equipment','fencing','riding_apparel','pet_supplies',
+      'cleaning','poultry','farm_supplies','tools','gift','general']
+  };
+  var subs = allSubs[category] || allSubs.shelf_goods;
+  return subs.map(function(s) { return '<option value="' + s + '">' + invSubcatLabel(s) + '</option>'; }).join('');
+}
+
+function invToggleCountEdit(idx) {
+  var panel = document.getElementById('invCntEdit_' + idx);
+  if (!panel) return;
+  var isOpen = panel.style.display !== 'none';
+  // Close all other panels first
+  document.querySelectorAll('.inv-count-edit-panel').forEach(function(p) { p.style.display = 'none'; });
+  document.querySelectorAll('.inv-count-item').forEach(function(i) { i.classList.remove('inv-count-editing'); });
+  if (!isOpen) {
+    panel.style.display = 'block';
+    panel.closest('.inv-count-item').classList.add('inv-count-editing');
+  }
+}
+window.invToggleCountEdit = invToggleCountEdit;
+
+function invCountCatChanged(idx) {
+  var catSel = document.getElementById('invCntEditCat_' + idx);
+  var subSel = document.getElementById('invCntEditSub_' + idx);
+  if (!catSel || !subSel) return;
+  var newCat = catSel.value;
+  var origSub = subSel.dataset.original || '';
+  subSel.innerHTML = '<option value="">None</option>' + invSubcatOptionsFor(newCat);
+  // Try to re-select original if it still applies
+  if (origSub) { subSel.value = origSub; if (!subSel.value) subSel.value = ''; }
+}
+window.invCountCatChanged = invCountCatChanged;
+
+async function invCountSaveEdit(idx) {
+  var nameInput = document.getElementById('invCntEditName_' + idx);
+  var catSel = document.getElementById('invCntEditCat_' + idx);
+  var subSel = document.getElementById('invCntEditSub_' + idx);
+  if (!nameInput || !catSel) return;
+
+  var pid = parseInt(nameInput.dataset.pid);
+  var changes = {};
+  if (nameInput.value.trim() !== nameInput.dataset.original) changes.name = nameInput.value.trim();
+  if (catSel.value !== catSel.dataset.original) changes.category = catSel.value;
+  if (subSel && subSel.value !== subSel.dataset.original) changes.subcategory = subSel.value || null;
+
+  if (!Object.keys(changes).length) { invToast('No changes to save', 'info'); return; }
+  if (!changes.name && nameInput.value.trim() === '') { invToast('Name cannot be empty', 'warning'); return; }
+
+  try {
+    await invAPI.patch('/api/inventory/products/' + pid + '/quick-update', changes, { headers: invHeaders() });
+    invToast('Product updated');
+    // Update local display immediately
+    if (changes.name) {
+      var nameEl = document.getElementById('invCntName_' + idx);
+      if (nameEl) nameEl.textContent = changes.name;
+      nameInput.dataset.original = changes.name;
+    }
+    if (changes.category) catSel.dataset.original = changes.category;
+    if (changes.subcategory !== undefined && subSel) subSel.dataset.original = changes.subcategory || '';
+    invToggleCountEdit(idx); // close panel
+  } catch(e) {
+    invToast('Save failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+window.invCountSaveEdit = invCountSaveEdit;
+
+function invCountViewBatches(productId) {
+  // Navigate to batches page — the batches page has search, they can filter by product
+  invNav('batches');
+  // After render, try to set search to product name
+  setTimeout(function() {
+    var searchInput = document.getElementById('invBatchSearch');
+    if (searchInput) {
+      var item = document.querySelector('.inv-count-item[data-pid="' + productId + '"]');
+      // We stored it, but page has re-rendered. Just navigate.
+    }
+  }, 500);
+}
+window.invCountViewBatches = invCountViewBatches;
+
+function invCountRequestDelete(productId, productName) {
+  var reasons = [
+    { val: 'duplicate', label: 'Duplicate product' },
+    { val: 'wrong_product', label: 'Wrong / incorrect product' },
+    { val: 'obsolete', label: 'Obsolete / no longer sold' },
+    { val: 'test_data', label: 'Test data / junk entry' },
+    { val: 'other', label: 'Other' }
+  ];
+  var reasonOpts = reasons.map(function(r) { return '<option value="' + r.val + '">' + r.label + '</option>'; }).join('');
+
+  var body = '<div style="margin-bottom:12px"><strong style="font-size:15px">' + escH(productName) + '</strong></div>' +
+    '<div style="margin-bottom:12px"><label style="display:block;font-weight:600;margin-bottom:4px">Reason</label>' +
+    '<select id="invCleanupReason" class="inv-select" style="width:100%">' + reasonOpts + '</select></div>' +
+    '<div style="margin-bottom:12px"><label style="display:block;font-weight:600;margin-bottom:4px">Details (optional)</label>' +
+    '<textarea id="invCleanupDetails" class="inv-input" rows="2" style="width:100%" placeholder="e.g. Duplicate of Product #123"></textarea></div>';
+
+  var footer = '<button class="inv-btn inv-btn-danger" onclick="invDoRequestDelete(' + productId + ')"><i class="fas fa-trash"></i> Submit Delete Request</button>';
+  invShowModal('<i class="fas fa-trash" style="color:#DC2626"></i> Request Product Deletion', body, footer);
+}
+window.invCountRequestDelete = invCountRequestDelete;
+
+async function invDoRequestDelete(productId) {
+  var reason = document.getElementById('invCleanupReason').value;
+  var details = (document.getElementById('invCleanupDetails').value || '').trim();
+
+  try {
+    await invAPI.post('/api/inventory/cleanup-requests', {
+      product_id: productId, request_type: 'delete', reason: reason, details: details || null
+    }, { headers: invHeaders() });
+    invToast('Delete request submitted — an admin will review it');
+    invCloseModal();
+    // Visually mark the item
+    var item = document.querySelector('.inv-count-item[data-pid="' + productId + '"]');
+    if (item) {
+      item.style.opacity = '0.5';
+      item.style.borderLeft = '3px solid #DC2626';
+      var badge = document.createElement('span');
+      badge.style.cssText = 'position:absolute;top:4px;right:4px;background:#DC2626;color:white;font-size:9px;padding:2px 6px;border-radius:4px;font-weight:700';
+      badge.textContent = 'DELETE REQUESTED';
+      item.style.position = 'relative';
+      item.appendChild(badge);
+    }
+  } catch(e) {
+    invToast('Request failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+window.invDoRequestDelete = invDoRequestDelete;
+
+// ==================== CLEANUP REQUEST REVIEW (Admin) ====================
+
+async function invShowCleanupReview() {
+  try {
+    var resp = await invAPI.get('/api/inventory/cleanup-requests?status=pending', { headers: invHeaders() });
+    var requests = resp.data.requests || [];
+  } catch(e) {
+    invToast('Failed to load requests: ' + (e.response?.data?.error || e.message), 'error');
+    return;
+  }
+
+  if (requests.length === 0) {
+    invToast('No pending cleanup requests', 'info');
+    return;
+  }
+
+  var body = '<div style="max-height:60vh;overflow-y:auto">';
+  requests.forEach(function(r) {
+    var reasonLabel = { duplicate: 'Duplicate', wrong_product: 'Wrong Product', obsolete: 'Obsolete', test_data: 'Test Data', other: 'Other' };
+    var typeLabel = { delete: 'Delete', rename: 'Rename', recategorize: 'Recategorize', merge_duplicate: 'Merge Duplicate' };
+    body += '<div style="padding:12px;border:1px solid #E2E8F0;border-radius:8px;margin-bottom:8px;background:white">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px">' +
+      '<div><strong style="font-size:14px">' + escH(r.product_name || 'Unknown Product') + '</strong>' +
+      '<div style="font-size:12px;color:#64748B">' + escH(r.product_sku || '') + ' · ' + escH(r.product_category || '') + '</div></div>' +
+      '<span style="background:#FEE2E2;color:#991B1B;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700;white-space:nowrap">' + (typeLabel[r.request_type] || r.request_type) + '</span></div>' +
+      '<div style="font-size:12px;margin-bottom:8px"><span style="font-weight:600">Reason:</span> ' + escH(reasonLabel[r.reason] || r.reason || '—') +
+      (r.details ? '<br><span style="font-weight:600">Details:</span> ' + escH(r.details) : '') + '</div>' +
+      '<div style="font-size:11px;color:#94A3B8;margin-bottom:8px">Requested by ' + escH(r.requested_by_name || 'Unknown') + ' · ' + invFmtDateShort(r.created_at) + '</div>' +
+      '<div style="display:flex;gap:6px">' +
+      '<button class="inv-btn inv-btn-sm inv-btn-success" onclick="invReviewCleanup(' + r.id + ',\'approved\')"><i class="fas fa-check"></i> Approve</button>' +
+      '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invReviewCleanup(' + r.id + ',\'rejected\')"><i class="fas fa-times"></i> Reject</button>' +
+      '</div></div>';
+  });
+  body += '</div>';
+
+  invShowModal('<i class="fas fa-broom" style="color:#DC2626"></i> Pending Cleanup Requests (' + requests.length + ')', body, '');
+}
+window.invShowCleanupReview = invShowCleanupReview;
+
+async function invReviewCleanup(requestId, status) {
+  var notes = status === 'rejected' ? prompt('Reason for rejection (optional):') : null;
+  try {
+    await invAPI.put('/api/inventory/cleanup-requests/' + requestId, {
+      status: status, review_notes: notes || null
+    }, { headers: invHeaders() });
+    invToast('Request ' + status);
+    invCloseModal();
+    // Re-open to refresh the list
+    setTimeout(function() { invShowCleanupReview(); }, 300);
+  } catch(e) {
+    invToast('Failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+window.invReviewCleanup = invReviewCleanup;
 
 // ==================== TRANSFERS ====================
 async function invRenderTransfers() {

@@ -162,6 +162,11 @@ async function poRender() {
       var resp = await poAPI.get('/api/purchasing/pos-requests/' + poCurrentOrder, { headers: poHeaders() });
       root = document.getElementById('purchasing-app'); if (!root) return;
       root.innerHTML = poRenderNav() + poRenderPosRequestDetail(resp.data);
+    } else if (poPage === 'order_assignments') {
+      root.innerHTML = poRenderNav() + '<div class="po-loading"><i class="fas fa-spinner fa-spin"></i> Loading assignments...</div>';
+      var html = await poRenderOrderAssignments();
+      root = document.getElementById('purchasing-app'); if (!root) return;
+      root.innerHTML = poRenderNav() + html;
     }
   } catch(err) {
     console.error('[Purchasing] render error:', err);
@@ -189,7 +194,8 @@ function poRenderNav() {
     { id: 'requests', icon: 'fa-hand', label: 'Requests' },
     { id: 'arriving', icon: 'fa-truck-moving', label: 'Arriving' },
     { id: 'bills', icon: 'fa-file-invoice-dollar', label: 'Bills' },
-    { id: 'suppliers', icon: 'fa-building', label: 'Suppliers' }
+    { id: 'suppliers', icon: 'fa-building', label: 'Suppliers' },
+    { id: 'order_assignments', icon: 'fa-user-gear', label: 'Assignments' }
   ];
   // Filter by role permissions
   var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
@@ -2615,3 +2621,124 @@ function poUrgencyLabel(urgency) {
   var labels = { low: 'Low', normal: 'Normal', high: 'High', critical: 'Critical' };
   return labels[urgency] || urgency || 'Normal';
 }
+
+// ==================== ORDER ASSIGNMENTS (moved from Inventory) ====================
+var _poOaData = null;
+
+async function poRenderOrderAssignments() {
+  try {
+    var resp = await poAPI.get('/api/inventory/category-assignments', { headers: poHeaders() });
+    _poOaData = resp.data;
+  } catch(e) {
+    return '<div style="padding:24px"><div style="text-align:center;padding:40px"><i class="fas fa-exclamation-triangle" style="color:#DC2626;font-size:32px"></i><h3>Failed to load</h3><p>' + (e.response?.data?.error || e.message) + '</p></div></div>';
+  }
+
+  var assignments = _poOaData.assignments || [];
+  var categories = _poOaData.categories || [];
+  var users = _poOaData.users || [];
+
+  var byCategory = {};
+  categories.forEach(function(c) { byCategory[c] = []; });
+  assignments.forEach(function(a) {
+    if (!byCategory[a.category]) byCategory[a.category] = [];
+    byCategory[a.category].push(a);
+  });
+
+  var html = '<div style="padding:16px 20px">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px"><h2 style="margin:0;font-size:18px;font-weight:700"><i class="fas fa-user-gear"></i> Order Assignments</h2>';
+  html += '<button class="po-btn po-btn-primary" onclick="poShowAddAssignment()"><i class="fas fa-plus"></i> Add Assignment</button>';
+  html += '</div>';
+  html += '<p style="color:#64748B;font-size:13px;margin-bottom:16px">Assign who is responsible for ordering each product category. Purchase requests auto-assign to the primary person.</p>';
+
+  if (categories.length === 0) {
+    html += '<div style="text-align:center;padding:40px;color:#94A3B8"><p>No product categories found.</p></div>';
+  } else {
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px">';
+    categories.forEach(function(cat) {
+      var catAssigns = byCategory[cat] || [];
+      var catLabel = cat.replace(/_/g, ' ');
+      catLabel = catLabel.charAt(0).toUpperCase() + catLabel.slice(1);
+
+      html += '<div style="background:white;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden">';
+      html += '<div style="padding:12px 16px;background:#F8FAFC;border-bottom:1px solid #E2E8F0;font-weight:700;font-size:14px">' + poEsc(catLabel) + '</div>';
+      if (catAssigns.length === 0) {
+        html += '<div style="padding:20px;text-align:center;color:#94A3B8"><i class="fas fa-user-slash"></i> Unassigned</div>';
+      } else {
+        catAssigns.forEach(function(a) {
+          html += '<div style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #F1F5F9">' +
+            '<div><i class="fas fa-user" style="color:#6366F1;margin-right:6px"></i> <strong>' + poEsc(a.user_name || a.user_email || 'User #' + a.user_id) + '</strong>' +
+            (a.is_primary ? ' <span style="background:#DCFCE7;color:#166534;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">Primary</span>' : '') +
+            (a.notes ? '<br><span style="font-size:12px;color:#64748B">' + poEsc(a.notes) + '</span>' : '') +
+            '</div>' +
+            '<button style="background:none;border:none;color:#DC2626;cursor:pointer;padding:4px 8px;font-size:14px" onclick="poRemoveAssignment(' + a.id + ')" title="Remove"><i class="fas fa-times"></i></button>' +
+            '</div>';
+        });
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function poShowAddAssignment() {
+  if (!_poOaData) { poToast('Data not loaded', 'error'); return; }
+  var categories = _poOaData.categories || [];
+  var users = _poOaData.users || [];
+
+  var body = '<div style="margin-bottom:12px"><label style="display:block;font-weight:600;margin-bottom:4px">Category</label><select id="poOaCategory" class="po-select" style="width:100%;padding:8px 12px">' +
+    '<option value="">Select category...</option>';
+  categories.forEach(function(c) {
+    var label = c.replace(/_/g, ' ');
+    label = label.charAt(0).toUpperCase() + label.slice(1);
+    body += '<option value="' + poEsc(c) + '">' + poEsc(label) + '</option>';
+  });
+  body += '</select></div>';
+
+  body += '<div style="margin-bottom:12px"><label style="display:block;font-weight:600;margin-bottom:4px">Assigned To</label><select id="poOaUser" class="po-select" style="width:100%;padding:8px 12px">' +
+    '<option value="">Select person...</option>';
+  users.forEach(function(u) {
+    body += '<option value="' + u.id + '" data-name="' + poEsc(u.name) + '">' + poEsc(u.name) + ' (' + poEsc(u.role) + ')</option>';
+  });
+  body += '</select></div>';
+
+  body += '<div style="margin-bottom:12px"><label style="font-weight:600"><input type="checkbox" id="poOaPrimary" checked> Primary person for this category</label></div>';
+  body += '<div style="margin-bottom:12px"><label style="display:block;font-weight:600;margin-bottom:4px">Notes (optional)</label><input id="poOaNotes" class="po-input" style="width:100%;padding:8px 12px" placeholder="e.g. Handles all hay vendors"></div>';
+
+  var footer = '<button class="po-btn po-btn-primary" onclick="poDoAddAssignment()"><i class="fas fa-check"></i> Assign</button>';
+  poShowModal('<i class="fas fa-user-gear"></i> Assign Category', body, footer);
+}
+window.poShowAddAssignment = poShowAddAssignment;
+
+async function poDoAddAssignment() {
+  var category = document.getElementById('poOaCategory').value;
+  var userSel = document.getElementById('poOaUser');
+  var userId = parseInt(userSel.value);
+  var userName = userSel.options[userSel.selectedIndex]?.getAttribute('data-name') || '';
+  var isPrimary = document.getElementById('poOaPrimary').checked ? 1 : 0;
+  var notes = document.getElementById('poOaNotes').value;
+
+  if (!category || !userId) { poToast('Select category and person', 'warning'); return; }
+
+  try {
+    await poAPI.post('/api/inventory/category-assignments', {
+      category: category, user_id: userId, user_name: userName, is_primary: isPrimary, notes: notes
+    }, { headers: poHeaders() });
+    poToast('Assignment saved');
+    poCloseModal();
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poDoAddAssignment = poDoAddAssignment;
+
+async function poRemoveAssignment(id) {
+  if (!confirm('Remove this assignment?')) return;
+  try {
+    await poAPI.delete('/api/inventory/category-assignments/' + id, { headers: poHeaders() });
+    poToast('Assignment removed');
+    poRender();
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poRemoveAssignment = poRemoveAssignment;

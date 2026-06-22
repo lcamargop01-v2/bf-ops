@@ -56,8 +56,7 @@ var MOBILE_NAV_PAGES = {
     { id: 'losses', icon: 'fa-triangle-exclamation', label: 'Losses' },
     { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' },
     { id: 'snapshots', icon: 'fa-camera', label: 'Snapshots' },
-    { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' },
-    { id: 'order_assignments', icon: 'fa-user-gear', label: 'Order Assignments' }
+    { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' }
   ],
   ordering: [
     { id: 'dashboard', icon: 'fa-tachometer-alt', label: 'Home' },
@@ -67,7 +66,8 @@ var MOBILE_NAV_PAGES = {
   ],
   ordering_more: [
     { id: 'requests', icon: 'fa-hand', label: 'Requests' },
-    { id: 'arriving', icon: 'fa-truck-moving', label: 'Arriving' }
+    { id: 'arriving', icon: 'fa-truck-moving', label: 'Arriving' },
+    { id: 'order_assignments', icon: 'fa-user-gear', label: 'Assignments' }
   ],
   tasks: [
     { id: 'dashboard', icon: 'fa-chart-line', label: 'Home' },

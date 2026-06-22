@@ -537,20 +537,30 @@
 .inv-count-list { margin-top: 12px; }
 .inv-count-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   padding: 12px 16px;
   background: white;
   border: 1px solid #E2E8F0;
   border-radius: 8px;
   margin-bottom: 6px;
   transition: all 0.15s;
-  gap: 12px;
+  gap: 8px;
+  position: relative;
 }
 .inv-count-item.inv-count-changed {
   border-color: #2563EB;
   background: #EFF6FF;
   box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
+}
+.inv-count-item.inv-count-editing {
+  border-color: #6366F1;
+  background: #F5F3FF;
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.2);
+}
+.inv-count-item-row {
+  display: flex; align-items: center; justify-content: space-between;
+  flex: 1 1 100%; gap: 12px; min-width: 0;
 }
 .inv-count-item-info {
   flex: 1;
@@ -567,6 +577,39 @@
 .inv-count-item-input { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .inv-count-current { font-size: 11px; color: #94A3B8; }
 .inv-count-stepper { display: flex; align-items: center; gap: 4px; }
+/* Expand/edit button */
+.inv-count-expand-btn {
+  background: none; border: 1px solid #E2E8F0; border-radius: 6px;
+  width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: #94A3B8; font-size: 13px;
+  transition: all 0.15s; flex-shrink: 0;
+}
+.inv-count-expand-btn:hover { border-color: #6366F1; color: #6366F1; }
+.inv-count-editing .inv-count-expand-btn { background: #6366F1; color: white; border-color: #6366F1; }
+/* Edit panel */
+.inv-count-edit-panel {
+  flex: 1 1 100%; padding: 12px 0 4px;
+  border-top: 1px solid #E2E8F0; margin-top: 4px;
+}
+.inv-count-edit-grid {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 10px;
+}
+.inv-count-edit-field label {
+  display: block; font-size: 11px; font-weight: 600; color: #64748B;
+  margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.3px;
+}
+.inv-count-edit-field .inv-input,
+.inv-count-edit-field .inv-select {
+  width: 100%; padding: 6px 10px; font-size: 13px; border-radius: 6px;
+  border: 1px solid #CBD5E1;
+}
+.inv-count-edit-actions {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+}
+.inv-btn-danger-outline {
+  color: #DC2626; border-color: #DC2626; background: transparent;
+}
+.inv-btn-danger-outline:hover { background: #FEF2F2; }
 .inv-stepper-btn {
   width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
@@ -876,6 +919,9 @@
   .inv-count-item { padding: 10px 12px; }
   .inv-stepper-btn { width: 48px; height: 48px; font-size: 24px; }
   .inv-count-field { width: 80px; font-size: 22px; padding: 8px; }
+  .inv-count-edit-grid { grid-template-columns: 1fr; }
+  .inv-count-edit-actions { flex-direction: column; }
+  .inv-count-edit-actions .inv-btn { width: 100%; justify-content: center; }
 
   .inv-stock-card-nums { grid-template-columns: repeat(2, 1fr); }
 

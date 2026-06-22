@@ -2156,6 +2156,138 @@ app.delete('/api/inventory/category-assignments/:id', async (c) => {
   return c.json({ success: true })
 })
 
+// ==================== PRODUCT CLEANUP REQUESTS ====================
+
+// Ensure table exists (auto-create if migration hasn't run)
+async function ensureCleanupTable(db: any) {
+  try {
+    await db.prepare(`CREATE TABLE IF NOT EXISTS product_cleanup_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL,
+      requested_by INTEGER NOT NULL,
+      requested_by_name TEXT,
+      request_type TEXT NOT NULL DEFAULT 'delete',
+      reason TEXT,
+      details TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      reviewed_by INTEGER,
+      reviewed_by_name TEXT,
+      reviewed_at TEXT,
+      review_notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )`).run()
+  } catch(e) { /* table already exists */ }
+}
+
+// List cleanup requests (admin)
+app.get('/api/inventory/cleanup-requests', async (c) => {
+  const db = c.env.DB
+  await ensureCleanupTable(db)
+  const status = c.req.query('status') || 'pending'
+  const rows = await db.prepare(
+    `SELECT cr.*, p.name as product_name, p.sku as product_sku, p.category as product_category, p.subcategory as product_subcategory, p.active as product_active
+     FROM product_cleanup_requests cr
+     LEFT JOIN products p ON p.id = cr.product_id
+     WHERE cr.status = ?
+     ORDER BY cr.created_at DESC`
+  ).bind(status).all()
+  return c.json({ requests: rows.results || [] })
+})
+
+// Create cleanup request
+app.post('/api/inventory/cleanup-requests', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  await ensureCleanupTable(db)
+  const { product_id, request_type, reason, details } = await c.req.json()
+  if (!product_id) return c.json({ error: 'product_id required' }, 400)
+
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+
+  await db.prepare(
+    `INSERT INTO product_cleanup_requests (product_id, requested_by, requested_by_name, request_type, reason, details)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(product_id, user.id, userInfo?.name ?? null, request_type || 'delete', reason ?? null, details ?? null).run()
+
+  return c.json({ success: true })
+})
+
+// Review cleanup request (admin approve/reject)
+app.put('/api/inventory/cleanup-requests/:id', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  await ensureCleanupTable(db)
+  const id = parseInt(c.req.param('id'))
+  const { status, review_notes } = await c.req.json()
+  if (!['approved', 'rejected'].includes(status)) return c.json({ error: 'Invalid status' }, 400)
+
+  const req = await db.prepare('SELECT * FROM product_cleanup_requests WHERE id = ?').bind(id).first() as any
+  if (!req) return c.json({ error: 'Request not found' }, 404)
+
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+
+  await db.prepare(
+    `UPDATE product_cleanup_requests SET status = ?, reviewed_by = ?, reviewed_by_name = ?, reviewed_at = datetime('now'), review_notes = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(status, user.id, userInfo?.name ?? null, review_notes ?? null, id).run()
+
+  // If approved and request_type is delete, deactivate the product
+  if (status === 'approved' && req.request_type === 'delete') {
+    await db.prepare('UPDATE products SET active = 0 WHERE id = ?').bind(req.product_id).run()
+    // Log in audit
+    const anyStock = await db.prepare('SELECT location_id FROM inventory_stock WHERE product_id = ? LIMIT 1').bind(req.product_id).first() as any
+    await db.prepare(
+      `INSERT INTO inventory_audit (product_id, location_id, action, qty_change, qty_after, user_id, user_name, notes)
+       VALUES (?, ?, 'product_deactivated', 0, 0, ?, ?, ?)`
+    ).bind(req.product_id, anyStock?.location_id ?? 1, user.id, userInfo?.name ?? 'Admin', `Cleanup request #${id} approved: ${req.reason || req.request_type}`).run()
+  }
+
+  return c.json({ success: true })
+})
+
+// Quick inline product update from count page (name, category, subcategory)
+app.patch('/api/inventory/products/:id/quick-update', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first() as any
+  if (!product) return c.json({ error: 'Product not found' }, 404)
+
+  const quickFields = ['name', 'category', 'subcategory']
+  const sets: string[] = []
+  const vals: any[] = []
+  for (const f of quickFields) {
+    if (body[f] !== undefined && body[f] !== product[f]) {
+      sets.push(`${f} = ?`)
+      vals.push(body[f])
+    }
+  }
+  if (!sets.length) return c.json({ success: true, message: 'No changes' })
+
+  vals.push(id)
+  await db.prepare(`UPDATE products SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run()
+
+  // Audit log
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+  const changes = quickFields.filter(f => body[f] !== undefined && body[f] !== product[f]).map(f => `${f}: ${product[f]} → ${body[f]}`).join(', ')
+  if (changes) {
+    const anyStock = await db.prepare('SELECT location_id FROM inventory_stock WHERE product_id = ? LIMIT 1').bind(id).first() as any
+    await db.prepare(
+      `INSERT INTO inventory_audit (product_id, location_id, action, qty_change, qty_after, user_id, user_name, notes)
+       VALUES (?, ?, 'product_quick_update', 0, 0, ?, ?, ?)`
+    ).bind(id, anyStock?.location_id ?? 1, user.id, userInfo?.name ?? 'System', `Count page update: ${changes}`).run()
+  }
+
+  return c.json({ success: true, changes })
+})
+
 // ==================== SMART RESTOCK (DEMAND ANALYSIS) ====================
 
 // Analyze buying habits at each location vs current stock
