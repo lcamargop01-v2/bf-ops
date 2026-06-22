@@ -472,7 +472,10 @@ async function doPinLogin() {
     initPushNotifications();
     initFeatureRequestBtn();
     initHelpAssistant();
-    if (currentUser.default_module) {
+    // Drivers go straight to their route view
+    if (currentUser.role === 'driver') {
+      launchModule('logistics', 'driver');
+    } else if (currentUser.default_module) {
       launchModule(currentUser.default_module, currentUser.default_page || null);
     } else {
       renderHome();
@@ -682,6 +685,8 @@ function canEdit(module, feature) {
 }
 
 function canViewFinancials() {
+  // Admin users must unlock with password to see financials
+  if (currentUser && currentUser.role === 'admin') return !!_adminVerified;
   if (_userPermissions === 'all') return true;
   return !!_canViewFinancials;
 }
@@ -915,16 +920,21 @@ function launchModule(moduleId, initialPage) {
   startNotifPolling();
 
   // Load the module
-  if (moduleId === 'admin') {
-    // Admin panel requires password verification for admin users who logged in via PIN
+  // Helper: show locked state and prompt for admin password before loading a module
+  function _adminGateModule(loadFn, label) {
     if (_adminVerified || !currentUser || currentUser.role !== 'admin') {
-      renderAdminPanel();
+      loadFn();
     } else {
-      // Show locked state, then prompt for password
       var mf = document.getElementById('moduleFrame');
-      if (mf) mf.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px"><i class="fas fa-lock" style="font-size:48px;color:#F59E0B"></i><h2 style="font-size:18px;color:#1E293B;font-weight:700">Admin Locked</h2><p style="color:#64748B">Password verification required</p><button onclick="requireAdminPassword(function(){renderAdminPanel()})" class="shell-save-btn" style="padding:10px 24px;font-size:14px"><i class="fas fa-key"></i> Unlock</button></div>';
-      requireAdminPassword(function() { renderAdminPanel(); });
+      if (mf) mf.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px"><i class="fas fa-lock" style="font-size:48px;color:#F59E0B"></i><h2 style="font-size:18px;color:#1E293B;font-weight:700">' + label + ' Locked</h2><p style="color:#64748B">Admin password required to access ' + label.toLowerCase() + '</p><button onclick="requireAdminPassword(function(){' + loadFn.name + '()})" class="shell-save-btn" style="padding:10px 24px;font-size:14px"><i class="fas fa-key"></i> Unlock</button></div>';
+      requireAdminPassword(function() { loadFn(); });
     }
+  }
+
+  if (moduleId === 'admin') {
+    _adminGateModule(renderAdminPanel, 'Admin');
+  } else if (moduleId === 'reports') {
+    _adminGateModule(loadReportsModule, 'Reports');
   } else if (moduleId === 'logistics') {
     loadLogisticsModule();
   } else if (moduleId === 'inventory') {
@@ -933,8 +943,6 @@ function launchModule(moduleId, initialPage) {
     loadPurchasingModule();
   } else if (moduleId === 'crm') {
     loadCRMModule();
-  } else if (moduleId === 'reports') {
-    loadReportsModule();
   } else if (moduleId === 'pos') {
     loadPOSModule();
   } else if (moduleId === 'tasks') {
@@ -2603,6 +2611,7 @@ async function renderAdminPanel() {
               <label style="font-size:12px;color:#64748B;display:flex;align-items:center;gap:4px;cursor:pointer">
                 <input type="checkbox" ${_adminShowArchived ? 'checked' : ''} onchange="_adminShowArchived=this.checked;renderAdminPanel()"> Show inactive
               </label>
+              <button class="shell-save-btn" style="background:#F59E0B" onclick="showAdminPinsModal()"><i class="fas fa-key"></i> PINs</button>
               <button class="shell-save-btn" style="background:#10B981" onclick="showAdminNewUserModal()"><i class="fas fa-plus"></i> New User</button>
             </div>
           </div>
@@ -3062,6 +3071,14 @@ async function showAdminEditUserModal(userId) {
           </div>
         </div>
         <div><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">New Password (leave blank to keep current)</label><input id="adminEditPassword" type="password" style="width:100%;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:13px" placeholder="Leave blank to keep current"></div>
+        <div style="display:flex;gap:12px;align-items:flex-end">
+          <div style="flex:1"><label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:4px">PIN</label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input id="adminEditPin" style="width:80px;padding:8px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:16px;letter-spacing:4px;text-align:center" maxlength="4" value="${user.pin||''}" placeholder="----">
+              <button onclick="adminResetPin(${userId})" style="padding:6px 10px;border:1px solid #F59E0B;border-radius:6px;background:#FFFBEB;cursor:pointer;font-size:12px;white-space:nowrap;color:#D97706;font-weight:600" title="Reset to random PIN"><i class="fas fa-dice"></i> Reset</button>
+            </div>
+          </div>
+        </div>
       </div>
       <div style="padding:12px 20px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end;gap:8px">
         <button onclick="this.closest('div[style*=fixed]').remove()" style="padding:8px 16px;border:1px solid #E2E8F0;border-radius:6px;background:white;cursor:pointer;font-size:13px">Cancel</button>
@@ -3084,6 +3101,13 @@ async function submitAdminEditUser(userId) {
   };
   var pw = document.getElementById('adminEditPassword').value;
   if (pw) payload.password = pw;
+  // Save PIN if changed
+  var pinEl = document.getElementById('adminEditPin');
+  var pinVal = pinEl ? pinEl.value.trim() : '';
+  if (pinVal && /^\d{4}$/.test(pinVal)) {
+    // Save PIN via separate endpoint
+    try { await API.put('/auth/pin', { user_id: userId, new_pin: pinVal }); } catch(e) { /* will save with main user update */ }
+  }
   try {
     await API.put('/admin/users/' + userId, payload);
     document.querySelector('div[style*="fixed"][style*="inset"]').remove();
@@ -3092,6 +3116,89 @@ async function submitAdminEditUser(userId) {
   } catch(err) {
     shellToast('Failed to update user: ' + (err.response ? err.response.data.error : err.message), 'error');
   }
+}
+
+async function adminResetPin(userId) {
+  if (!confirm('Reset this user\'s PIN to a random 4-digit code?')) return;
+  try {
+    var resp = await API.post('/admin/reset-pin/' + userId);
+    var newPin = resp.data.new_pin;
+    var pinEl = document.getElementById('adminEditPin');
+    if (pinEl) pinEl.value = newPin;
+    shellToast('PIN reset to ' + newPin);
+  } catch(err) {
+    shellToast('Failed to reset PIN: ' + (err.response ? err.response.data.error : err.message), 'error');
+  }
+}
+
+async function showAdminPinsModal() {
+  try {
+    var resp = await API.get('/admin/pins');
+    var users = resp.data.users || [];
+  } catch(err) { shellToast('Failed to load PINs', 'error'); return; }
+
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  var depts = {};
+  users.forEach(function(u) {
+    var dept = u.department || 'Other';
+    if (!depts[dept]) depts[dept] = [];
+    depts[dept].push(u);
+  });
+
+  var rows = '';
+  Object.keys(depts).sort().forEach(function(dept) {
+    rows += '<tr><td colspan="4" style="background:#F1F5F9;font-weight:700;font-size:12px;padding:8px 12px;color:#475569;text-transform:uppercase;letter-spacing:0.5px"><i class="fas fa-building" style="margin-right:6px"></i>' + dept + '</td></tr>';
+    depts[dept].forEach(function(u) {
+      var pinDisplay = u.pin ? '<code style="font-size:15px;letter-spacing:3px;background:#F8FAFC;padding:3px 10px;border-radius:4px;border:1px solid #E2E8F0;font-weight:700">' + u.pin + '</code>' : '<span style="color:#DC2626;font-size:12px">Not set</span>';
+      var statusBadge = u.active ? '' : '<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:#FEF2F2;color:#DC2626;margin-left:4px">Inactive</span>';
+      rows += '<tr' + (!u.active ? ' style="opacity:0.5"' : '') + '><td style="padding:8px 12px"><strong>' + u.name + '</strong>' + statusBadge + '</td><td style="padding:8px 12px;font-size:12px;color:#64748B">' + u.role + '</td><td style="padding:8px 12px;text-align:center">' + pinDisplay + '</td><td style="padding:8px 12px"><button class="shell-save-btn" style="font-size:11px;padding:4px 8px;background:#F59E0B" onclick="adminResetPinFromList(' + u.id + ',this)" title="Reset PIN"><i class="fas fa-dice"></i></button></td></tr>';
+    });
+  });
+
+  overlay.innerHTML = '<div style="background:white;border-radius:12px;width:600px;max-width:95vw;max-height:85vh;box-shadow:0 20px 60px rgba(0,0,0,.3);display:flex;flex-direction:column">' +
+    '<div style="padding:16px 20px;border-bottom:1px solid #E2E8F0;display:flex;justify-content:space-between;align-items:center;flex-shrink:0">' +
+    '<h3 style="font-size:16px;font-weight:700;color:#1E293B"><i class="fas fa-key" style="color:#F59E0B;margin-right:8px"></i>All User PINs</h3>' +
+    '<div style="display:flex;gap:8px"><button onclick="adminExportPins()" style="padding:6px 12px;border:1px solid #E2E8F0;border-radius:6px;background:white;cursor:pointer;font-size:12px;font-weight:600;color:#475569"><i class="fas fa-download"></i> Export CSV</button>' +
+    '<button onclick="this.closest(\'div[style*=fixed]\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#94A3B8">&times;</button></div>' +
+    '</div>' +
+    '<div style="overflow-y:auto;flex:1">' +
+    '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:2px solid #E2E8F0"><th style="padding:8px 12px;text-align:left">Name</th><th style="padding:8px 12px;text-align:left">Role</th><th style="padding:8px 12px;text-align:center">PIN</th><th style="padding:8px 12px;width:50px"></th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '</div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function adminResetPinFromList(userId, btn) {
+  try {
+    btn.disabled = true;
+    var resp = await API.post('/admin/reset-pin/' + userId);
+    // Refresh the modal
+    document.querySelector('div[style*="fixed"][style*="inset"]').remove();
+    shellToast('PIN reset to ' + resp.data.new_pin);
+    showAdminPinsModal();
+  } catch(err) { shellToast('Failed: ' + (err.response ? err.response.data.error : err.message), 'error'); btn.disabled = false; }
+}
+
+function adminExportPins() {
+  // Export current PIN data as CSV
+  var rows = document.querySelectorAll('div[style*="fixed"] table tbody tr');
+  var csv = 'Name,Role,Department,PIN\n';
+  var currentDept = '';
+  rows.forEach(function(tr) {
+    if (tr.children.length === 1) { currentDept = tr.textContent.trim(); return; }
+    var name = tr.children[0].textContent.trim();
+    var role = tr.children[1].textContent.trim();
+    var pinEl = tr.querySelector('code');
+    var pin = pinEl ? pinEl.textContent.trim() : 'Not set';
+    csv += '"' + name + '","' + role + '","' + currentDept + '","' + pin + '"\n';
+  });
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bf_user_pins_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
 }
 
 async function adminToggleUser(userId, active) {
@@ -3599,6 +3706,8 @@ document.addEventListener('keydown', function(e) {
       try { _lastMod = sessionStorage.getItem('bf_ops_last_module'); _lastPage = sessionStorage.getItem('bf_ops_last_page') || null; } catch(e) {}
       if (_lastMod) {
         launchModule(_lastMod, _lastPage);
+      } else if (currentUser.role === 'driver') {
+        launchModule('logistics', 'driver');
       } else if (currentUser.default_module) {
         launchModule(currentUser.default_module, currentUser.default_page || null);
       } else {

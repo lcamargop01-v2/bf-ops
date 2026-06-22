@@ -24,6 +24,7 @@ var invSuppliersList = []; // Cached suppliers for vendor picker
 var invBatchSummaryMap = {}; // batch summary per product_id for count page
 var invStockSearch = ''; // persisted stock search across re-renders
 var invStockCatFilter = ''; // persisted category filter across re-renders
+var invShowInactive = false; // toggle for showing inactive products
 
 // Permission helper for edit access (view-only enforcement)
 function invCanEdit(feature) {
@@ -131,6 +132,8 @@ async function invLoadStock() {
     else if (invPage === 'count' && invCountCategory) url += 'category=' + encodeURIComponent(invCountCategory) + '&';
     // Sort — from count page state
     if (invPage === 'count' && invCountSort) url += 'sort=' + invCountSort + '&';
+    // Include inactive products
+    if (invShowInactive) url += 'include_inactive=1&';
     var resp = await invAPI.get(url, { headers: invHeaders() });
     invStockData = resp.data.stock || [];
   } catch(e) { console.error('Stock load failed:', e); }
@@ -397,10 +400,11 @@ function invRenderStockList() {
     html += '<option value="' + c + '"' + (invStockCatFilter === c ? ' selected' : '') + '>' + label + '</option>';
   });
   html += '</select>';
+  html += '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#64748B;cursor:pointer;white-space:nowrap"><input type="checkbox" ' + (invShowInactive ? 'checked' : '') + ' onchange="invShowInactive=this.checked;invRender()"> Inactive</label>';
   html += '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invExportStock()"><i class="fas fa-download"></i> Export</button>';
   html += '</div>';
 
-  html += '<div class="inv-stock-count">' + invStockData.length + ' items</div>';
+  html += '<div class="inv-stock-count">' + invStockData.length + ' items' + (invShowInactive ? ' (including inactive)' : '') + '</div>';
 
   // Stock table (desktop) / cards (mobile)
   var _sf = invCanViewFin();
@@ -413,8 +417,9 @@ function invRenderStockList() {
     var lowStock = s.reorder_point > 0 && s.qty_on_hand <= s.reorder_point;
     var pNameEsc = escH(s.product_name).replace(/'/g, "\\'");
     var incoming = s.qty_incoming || 0;
-    html += '<tr class="' + (lowStock ? 'inv-row-warning' : '') + '">' +
-      '<td class="inv-clickable" onclick="invShowProductDetail(' + s.product_id + ')"><strong>' + escH(s.product_name) + '</strong></td>' +
+    var isInactive = s.product_active === 0;
+    html += '<tr class="' + (isInactive ? 'inv-row-inactive' : lowStock ? 'inv-row-warning' : '') + '">' +
+      '<td class="inv-clickable" onclick="invShowProductDetail(' + s.product_id + ')"><strong>' + escH(s.product_name) + '</strong>' + (isInactive ? ' <span class="inv-cat-badge inv-cat-other" style="font-size:9px">Inactive</span>' : '') + '</td>' +
       '<td class="inv-muted">' + escH(s.sku || '—') + '</td>' +
       '<td><span class="inv-cat-badge inv-cat-' + (s.category || 'shelf_goods') + '">' + escH((s.category || 'shelf_goods').replace(/_/g, ' ')) + '</span>' +
         (s.subcategory ? '<div style="font-size:10px;color:#64748B;margin-top:2px">' + invSubcatLabel(s.subcategory) + '</div>' : '') + '</td>' +
@@ -2842,7 +2847,7 @@ async function invRenderProductsPage() {
   var url = '/api/inventory/products?limit=50&offset=' + invProductsOffset;
   if (search) url += '&search=' + encodeURIComponent(search);
   if (cat) url += '&category=' + cat;
-  url += '&include_inactive=1';
+  if (invShowInactive) url += '&include_inactive=1';
 
   try {
     var resp = await invAPI.get(url, { headers: invHeaders() });
@@ -2864,6 +2869,7 @@ async function invRenderProductsPage() {
     html += '<option value="' + c + '"' + (cat === c ? ' selected' : '') + '>' + label + '</option>';
   });
   html += '</select>';
+  html += '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#64748B;cursor:pointer;white-space:nowrap"><input type="checkbox" ' + (invShowInactive ? 'checked' : '') + ' onchange="invShowInactive=this.checked;invProductsOffset=0;invRender()"> Show Inactive</label>';
   if (invCanEdit('products')) html += '<button class="inv-btn inv-btn-primary inv-btn-sm" onclick="invShowNewProduct()"><i class="fas fa-plus"></i> New Product</button>';
   html += '</div>';
 

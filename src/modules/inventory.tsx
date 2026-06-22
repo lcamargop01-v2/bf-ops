@@ -123,8 +123,9 @@ app.get('/api/inventory/stock', async (c) => {
   const lowStockOnly = c.req.query('low_stock') === '1'
   const sort = c.req.query('sort') // name, category, sku, qty, last_counted
 
+  const includeInactive = c.req.query('include_inactive') === '1'
   let query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.subcategory, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
-    p.primary_vendor_id, sv.name as primary_vendor_name,
+    p.primary_vendor_id, sv.name as primary_vendor_name, p.active as product_active,
     l.name as location_name, l.code as location_code,
     u_count.name as last_counted_by_name
     FROM inventory_stock s
@@ -132,7 +133,7 @@ app.get('/api/inventory/stock', async (c) => {
     JOIN locations l ON s.location_id = l.id
     LEFT JOIN suppliers sv ON p.primary_vendor_id = sv.id
     LEFT JOIN users u_count ON s.last_counted_by = u_count.id
-    WHERE p.active = 1`
+    WHERE 1=1` + (includeInactive ? '' : ' AND p.active = 1')
   const binds: any[] = []
 
   if (locationId) { query += ' AND s.location_id = ?'; binds.push(parseInt(locationId)) }

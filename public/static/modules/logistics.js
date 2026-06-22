@@ -9723,7 +9723,18 @@ async function renderDriver() {
     const completedStops = stops.filter(s => s.status === 'completed').length;
     const activeStop = stops.find(s => !['completed','failed','skipped'].includes(s.status));
     window._driverStops = stops;
+    const _driverInitials = (currentUser.name||'').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
     pc.innerHTML = `
+      <!-- Driver profile bar -->
+      <div class="card" style="margin-bottom:12px;padding:12px 16px;display:flex;align-items:center;gap:12px">
+        <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#D97706,#F59E0B);display:flex;align-items:center;justify-content:center;color:white;font-weight:800;font-size:16px;flex-shrink:0">${_driverInitials}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:16px;font-weight:700;color:var(--navy)">${currentUser.name}</div>
+          <div style="font-size:12px;color:var(--gray-500)">${currentUser.job_title||currentUser.role} · ${currentUser.department||''}</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="showDriverProfileModal()" title="My Settings"><i class="fas fa-user-cog"></i></button>
+      </div>
+
       <!-- Route header card -->
       <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,var(--navy-dark),var(--navy));color:white;border:none">
         <div class="card-body">
@@ -9872,6 +9883,70 @@ async function updateStopStatus(stopId, status) {
     showToast(status === 'completed' ? t('driver_delivery_completed') : status === 'arrived' ? t('driver_arrived_stop') : t('driver_status_updated'));
     renderDriver();
   } catch (err) { showToast(t('driver_update_failed'), 'error'); }
+}
+
+function showDriverProfileModal() {
+  const initials = (currentUser.name||'').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.innerHTML = `<div class="modal" style="max-width:420px">
+    <div class="modal-header" style="background:linear-gradient(135deg,#FFF7ED,#FFEDD5)">
+      <h3 class="modal-title"><i class="fas fa-user-circle" style="color:#D97706;margin-right:8px"></i>My Profile</h3>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="text-align:center;margin-bottom:20px">
+        <div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#D97706,#F59E0B);display:inline-flex;align-items:center;justify-content:center;color:white;font-weight:800;font-size:24px">${initials}</div>
+        <div style="font-size:18px;font-weight:700;margin-top:8px">${currentUser.name}</div>
+        <div style="font-size:13px;color:var(--gray-500)">${currentUser.job_title||currentUser.role}</div>
+      </div>
+      <div class="form-group" style="margin-bottom:12px">
+        <label class="form-label"><i class="fas fa-language" style="margin-right:6px;color:var(--navy-light)"></i>Language</label>
+        <select class="form-select" id="driverProfileLang">
+          <option value="en" ${(currentUser.preferred_language||'en')==='en'?'selected':''}>English</option>
+          <option value="es" ${currentUser.preferred_language==='es'?'selected':''}>Español</option>
+          <option value="ht" ${currentUser.preferred_language==='ht'?'selected':''}>Kreyòl</option>
+        </select>
+      </div>
+      <div style="border-top:1px solid var(--gray-200);padding-top:12px;margin-top:4px">
+        <label class="form-label"><i class="fas fa-key" style="margin-right:6px;color:#D97706"></i>Change PIN</label>
+        <div style="display:flex;gap:8px">
+          <input class="form-input" id="driverProfileNewPin" type="password" maxlength="4" pattern="[0-9]{4}" placeholder="New 4-digit PIN" style="flex:1;letter-spacing:6px;text-align:center;font-size:18px">
+          <button class="btn btn-outline btn-sm" onclick="driverSavePin()" id="driverPinSaveBtn"><i class="fas fa-save"></i></button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Close</button>
+      <button class="btn btn-primary" onclick="driverSaveProfile()"><i class="fas fa-save"></i> Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+}
+
+async function driverSaveProfile() {
+  const lang = document.getElementById('driverProfileLang').value;
+  try {
+    await API.put('/users/' + currentUser.id, { preferred_language: lang });
+    currentUser.preferred_language = lang;
+    localStorage.setItem('bf_user', JSON.stringify(currentUser));
+    showToast('Profile updated!');
+    document.querySelector('.modal-overlay').remove();
+  } catch(e) { showToast('Failed to save', 'error'); }
+}
+
+async function driverSavePin() {
+  const pin = document.getElementById('driverProfileNewPin').value;
+  if (!/^\d{4}$/.test(pin)) { showToast('PIN must be exactly 4 digits', 'warning'); return; }
+  const btn = document.getElementById('driverPinSaveBtn');
+  btn.disabled = true;
+  try {
+    await API.put('/auth/pin', { user_id: currentUser.id, new_pin: pin });
+    showToast('PIN changed!');
+    document.getElementById('driverProfileNewPin').value = '';
+  } catch(e) { showToast(e.response?.data?.error || 'Failed to change PIN', 'error'); }
+  btn.disabled = false;
 }
 
 function toggleDriverPacking(stopId) {

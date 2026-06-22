@@ -206,6 +206,40 @@ app.put('/api/auth/pin', async (c) => {
   } catch { return c.json({ error: 'Invalid token' }, 401) }
 })
 
+// Admin: view all PINs
+app.get('/api/admin/pins', async (c) => {
+  const auth = c.req.header('Authorization')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+  try {
+    const payload = JSON.parse(atob(auth.replace('Bearer ', '')))
+    if (payload.exp < Date.now()) return c.json({ error: 'Token expired' }, 401)
+    const db = c.env.DB
+    const caller = await db.prepare('SELECT role FROM users WHERE id = ?').bind(payload.id).first() as any
+    if (!caller || caller.role !== 'admin') return c.json({ error: 'Admin only' }, 403)
+    const rows = await db.prepare('SELECT id, name, role, department, pin, active FROM users ORDER BY department, name').all()
+    return c.json({ users: rows.results || [] })
+  } catch { return c.json({ error: 'Invalid token' }, 401) }
+})
+
+// Admin: reset user PIN to random 4-digit code
+app.post('/api/admin/reset-pin/:userId', async (c) => {
+  const auth = c.req.header('Authorization')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+  try {
+    const payload = JSON.parse(atob(auth.replace('Bearer ', '')))
+    if (payload.exp < Date.now()) return c.json({ error: 'Token expired' }, 401)
+    const db = c.env.DB
+    const caller = await db.prepare('SELECT role FROM users WHERE id = ?').bind(payload.id).first() as any
+    if (!caller || caller.role !== 'admin') return c.json({ error: 'Admin only' }, 403)
+    const uid = parseInt(c.req.param('userId'))
+    const newPin = String(Math.floor(1000 + Math.random() * 9000))
+    await db.prepare('UPDATE users SET pin = ? WHERE id = ?').bind(newPin, uid).run()
+    // Clear any lockout for this user
+    delete pinAttempts[uid]
+    return c.json({ success: true, new_pin: newPin })
+  } catch { return c.json({ error: 'Invalid token' }, 401) }
+})
+
 app.post('/api/auth/login', async (c) => {
   const { email, password } = await c.req.json()
   const db = c.env.DB
