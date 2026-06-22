@@ -546,6 +546,7 @@ function invRenderQuickCount() {
   html += '<span id="invCountSummary" class="inv-count-summary">' + invStockData.length + ' items</span>';
   if (_preNewCount > 0) html += '<button class="inv-count-pill inv-count-pill-new" data-status="new" onclick="invFilterCountByStatus(\'new\')" title="Show only new products"><i class="fas fa-circle-plus"></i> ' + _preNewCount + ' new</button>';
   if (_preOosCount > 0) html += '<button class="inv-count-pill inv-count-pill-oos" data-status="oos" onclick="invFilterCountByStatus(\'oos\')" title="Show only out-of-stock"><i class="fas fa-box-open"></i> ' + _preOosCount + ' out of stock</button>';
+  if (invCanEdit('count')) html += '<button class="inv-btn inv-btn-outline inv-btn-sm" onclick="invShowNewProduct()" style="color:#6366F1;border-color:#6366F1"><i class="fas fa-plus"></i> Add Product</button> ';
   if (invUser && invUser.role === 'admin') html += '<button class="inv-btn inv-btn-outline inv-btn-sm" onclick="invShowCleanupReview()" style="color:#DC2626;border-color:#DC2626"><i class="fas fa-broom"></i> Review Deletions</button> ';
   if (invCanEdit('count')) html += '<button class="inv-btn inv-btn-primary" onclick="invSubmitBulkCount()"><i class="fas fa-check"></i> Submit Count</button>';
   html += '</div></div>';
