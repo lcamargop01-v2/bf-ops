@@ -543,13 +543,17 @@ function renderCategories() {
   });
   el.innerHTML = html;
 
-  el.addEventListener('click', function(e) {
-    var btn = e.target.closest('[data-cat]');
-    if (!btn) return;
-    _s.currentCat = btn.dataset.cat;
-    renderCategories();
-    searchProducts(document.getElementById('posProductSearch')?.value || '');
-  });
+  // Only attach the delegated handler once (guard with flag on element)
+  if (!el._catHandlerBound) {
+    el._catHandlerBound = true;
+    el.addEventListener('click', function(e) {
+      var btn = e.target.closest('[data-cat]');
+      if (!btn) return;
+      _s.currentCat = btn.dataset.cat;
+      renderCategories();
+      searchProducts(document.getElementById('posProductSearch')?.value || '');
+    });
+  }
 }
 
 // ==================== PRODUCT SEARCH ====================
@@ -727,37 +731,40 @@ function renderCart() {
   });
   el.innerHTML = html;
 
-  // Delegated cart events
-  el.addEventListener('click', function handler(e) {
-    var row = e.target.closest('[data-idx]');
-    if (!row) return;
-    var idx = parseInt(row.dataset.idx);
-    var action = e.target.closest('[data-action]');
-    if (!action) return;
-    var act = action.dataset.action;
-    var item = _s.cart[idx];
-    if (!item) return;
+  // Delegated cart events — only attach once (guard with flag on element)
+  if (!el._cartHandlersBound) {
+    el._cartHandlersBound = true;
+    el.addEventListener('click', function(e) {
+      var row = e.target.closest('[data-idx]');
+      if (!row) return;
+      var idx = parseInt(row.dataset.idx);
+      var action = e.target.closest('[data-action]');
+      if (!action) return;
+      var act = action.dataset.action;
+      var item = _s.cart[idx];
+      if (!item) return;
 
-    if (act === 'qty-minus') { item.qty = Math.max(1, item.qty - 1); checkStockWarning(item); if (_s.customer) priceCheckItem(item.product_id); renderCart(); renderCartFooter(); }
-    else if (act === 'qty-plus') { item.qty += 1; checkStockWarning(item); if (_s.customer) priceCheckItem(item.product_id); renderCart(); renderCartFooter(); }
-    else if (act === 'line-disc') { openLineDiscount(idx); }
-    else if (act === 'remove') { _s.warnings = _s.warnings.filter(function(w) { return w.product_id !== item.product_id; }); _s.cart.splice(idx, 1); renderWarnings(); renderCart(); renderCartFooter(); }
-  });
+      if (act === 'qty-minus') { item.qty = Math.max(1, item.qty - 1); checkStockWarning(item); if (_s.customer) priceCheckItem(item.product_id); renderCart(); renderCartFooter(); }
+      else if (act === 'qty-plus') { item.qty += 1; checkStockWarning(item); if (_s.customer) priceCheckItem(item.product_id); renderCart(); renderCartFooter(); }
+      else if (act === 'line-disc') { openLineDiscount(idx); }
+      else if (act === 'remove') { _s.warnings = _s.warnings.filter(function(w) { return w.product_id !== item.product_id; }); _s.cart.splice(idx, 1); renderWarnings(); renderCart(); renderCartFooter(); }
+    });
 
-  el.addEventListener('change', function(e) {
-    var input = e.target.closest('[data-action="qty-input"]');
-    if (!input) return;
-    var row = input.closest('[data-idx]');
-    if (!row) return;
-    var idx = parseInt(row.dataset.idx);
-    var item = _s.cart[idx];
-    if (!item) return;
-    item.qty = Math.max(1, parseInt(input.value) || 1);
-    checkStockWarning(item);
-    if (_s.customer) priceCheckItem(item.product_id);
-    renderCart();
-    renderCartFooter();
-  });
+    el.addEventListener('change', function(e) {
+      var input = e.target.closest('[data-action="qty-input"]');
+      if (!input) return;
+      var row = input.closest('[data-idx]');
+      if (!row) return;
+      var idx = parseInt(row.dataset.idx);
+      var item = _s.cart[idx];
+      if (!item) return;
+      item.qty = Math.max(1, parseInt(input.value) || 1);
+      checkStockWarning(item);
+      if (_s.customer) priceCheckItem(item.product_id);
+      renderCart();
+      renderCartFooter();
+    });
+  }
 }
 
 // ==================== CART FOOTER ====================
