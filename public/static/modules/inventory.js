@@ -22,6 +22,8 @@ var invRecatFilter = ''; // Filter: '', 'changed', 'hay', 'shavings', 'shelf_goo
 var invRecatSearch = '';
 var invSuppliersList = []; // Cached suppliers for vendor picker
 var invBatchSummaryMap = {}; // batch summary per product_id for count page
+var invStockSearch = ''; // persisted stock search across re-renders
+var invStockCatFilter = ''; // persisted category filter across re-renders
 
 // Permission helper for edit access (view-only enforcement)
 function invCanEdit(feature) {
@@ -118,11 +120,14 @@ async function invLoadStock() {
   try {
     var url = '/api/inventory/stock?';
     if (invSelectedLocation) url += 'location_id=' + invSelectedLocation + '&';
+    // Use persisted search state (DOM may be destroyed by loading spinner)
     var search = document.getElementById('invSearchInput');
-    if (search && search.value) url += 'search=' + encodeURIComponent(search.value) + '&';
+    var searchVal = (search && search.value) ? search.value : invStockSearch;
+    if (searchVal) url += 'search=' + encodeURIComponent(searchVal) + '&';
     // Category filter — from stock page dropdown or count page state
     var cat = document.getElementById('invCategoryFilter');
-    if (cat && cat.value) url += 'category=' + cat.value + '&';
+    var catVal = (cat && cat.value) ? cat.value : invStockCatFilter;
+    if (catVal) url += 'category=' + catVal + '&';
     else if (invPage === 'count' && invCountCategory) url += 'category=' + encodeURIComponent(invCountCategory) + '&';
     // Sort — from count page state
     if (invPage === 'count' && invCountSort) url += 'sort=' + invCountSort + '&';
@@ -159,6 +164,12 @@ async function invRender() {
   var _ce = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
   var _editMode = _ce('inventory', invPage);
   root.classList.toggle('inv-view-only', !_editMode);
+
+  // Save search/filter state BEFORE wiping the DOM
+  var _si = document.getElementById('invSearchInput');
+  if (_si) invStockSearch = _si.value;
+  var _ci = document.getElementById('invCategoryFilter');
+  if (_ci) invStockCatFilter = _ci.value;
 
   root.innerHTML = '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
   console.log('[Inventory] rendering page:', invPage);
@@ -379,11 +390,11 @@ function invRenderStockList() {
 
   // Search & filter bar
   html += '<div class="inv-toolbar">';
-  html += '<div class="inv-search-box"><i class="fas fa-search"></i><input id="invSearchInput" type="text" placeholder="Search products..." oninput="invDebounceSearch()"></div>';
+  html += '<div class="inv-search-box"><i class="fas fa-search"></i><input id="invSearchInput" type="text" placeholder="Search products..." value="' + escH(invStockSearch) + '" oninput="invDebounceSearch()"></div>';
   html += '<select id="invCategoryFilter" onchange="invRender()" class="inv-select"><option value="">All Categories</option>';
   (invCategoryList || []).forEach(function(c) {
     var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
-    html += '<option value="' + c + '">' + label + '</option>';
+    html += '<option value="' + c + '"' + (invStockCatFilter === c ? ' selected' : '') + '>' + label + '</option>';
   });
   html += '</select>';
   html += '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invExportStock()"><i class="fas fa-download"></i> Export</button>';
