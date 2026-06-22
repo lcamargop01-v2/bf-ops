@@ -2430,10 +2430,22 @@ async function renderAdminPanel() {
             <div style="text-align:center;color:#94A3B8"><i class="fas fa-spinner fa-spin"></i> Loading fees...</div>
           </div>
         </div>
+
+        <!-- Feature Requests -->
+        <div class="shell-admin-card" style="margin-top:20px">
+          <div class="shell-admin-card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h3><i class="fas fa-lightbulb" style="color:#6366F1;margin-right:8px"></i>Feature Requests</h3>
+            <button class="shell-save-btn" style="background:#6366F1" onclick="showAdminFeatureRequests()"><i class="fas fa-expand"></i> Open Full View</button>
+          </div>
+          <div id="adminFeatureReqContent" style="padding:16px">
+            <div style="text-align:center;color:#94A3B8"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+          </div>
+        </div>
       </div>`;
 
-    // Load fee settings into admin panel
+    // Load fee settings and feature requests into admin panel
     _loadAdminFees();
+    _loadAdminFeatureReqs();
   } catch(err) {
     frame.innerHTML = '<div style="padding:40px;text-align:center"><p style="color:#DC2626">Error loading admin panel: ' + err.message + '</p><button class="shell-save-btn" onclick="renderAdminPanel()"><i class="fas fa-redo"></i> Retry</button></div>';
   }
@@ -2517,6 +2529,66 @@ async function _saveAdminFee(feeId, btn) {
   if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes'; }
 }
 window._saveAdminFee = _saveAdminFee;
+
+// ==================== ADMIN: FEATURE REQUESTS INLINE ====================
+async function _loadAdminFeatureReqs() {
+  var el = document.getElementById('adminFeatureReqContent');
+  if (!el) return;
+  try {
+    var r = await API.get('/feature-requests?limit=50');
+    var reqs = r.data.requests || [];
+    if (reqs.length === 0) {
+      el.innerHTML = '<div style="text-align:center;padding:24px;color:#94A3B8"><i class="fas fa-inbox" style="font-size:24px;display:block;margin-bottom:8px"></i>No feature requests yet</div>';
+      return;
+    }
+    var statusColors = { new:'#3B82F6', reviewed:'#8B5CF6', planned:'#6366F1', in_progress:'#F59E0B', completed:'#059669', declined:'#9CA3AF' };
+    var statusIcons = { new:'fa-circle-exclamation', reviewed:'fa-eye', planned:'fa-clipboard-list', in_progress:'fa-spinner', completed:'fa-circle-check', declined:'fa-circle-xmark' };
+    var counts = {};
+    reqs.forEach(function(req) { counts[req.status] = (counts[req.status] || 0) + 1; });
+    // Summary badges
+    var html = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">';
+    ['new','in_progress','planned','reviewed','completed','declined'].forEach(function(s) {
+      if (counts[s]) {
+        var col = statusColors[s] || '#9CA3AF';
+        html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;font-size:12px;font-weight:600;background:' + col + '18;color:' + col + ';border:1px solid ' + col + '30">';
+        html += '<i class="fas ' + (statusIcons[s]||'fa-circle') + '" style="font-size:10px"></i>' + (counts[s]) + ' ' + s.replace('_',' ') + '</span>';
+      }
+    });
+    html += '</div>';
+    // Request list (most recent first, grouped: new/in_progress first)
+    var priority = ['new','in_progress','planned','reviewed','completed','declined'];
+    reqs.sort(function(a, b) {
+      var pa = priority.indexOf(a.status), pb = priority.indexOf(b.status);
+      if (pa !== pb) return pa - pb;
+      return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+    });
+    var statuses = ['new','reviewed','planned','in_progress','completed','declined'];
+    reqs.forEach(function(req) {
+      var col = statusColors[req.status] || '#9CA3AF';
+      var priIcon = req.priority === 'critical' ? '<i class="fas fa-fire" style="color:#EF4444;margin-right:3px"></i>' : req.priority === 'high' ? '<i class="fas fa-arrow-up" style="color:#F59E0B;margin-right:3px"></i>' : '';
+      var date = req.created_at ? new Date(req.created_at + 'Z').toLocaleDateString() : '';
+      var statusOpts = statuses.map(function(s) {
+        return '<option value="' + s + '"' + (s === req.status ? ' selected' : '') + '>' + s.replace('_',' ') + '</option>';
+      }).join('');
+      html += '<div style="padding:12px;border:1px solid ' + col + '30;border-left:3px solid ' + col + ';border-radius:8px;margin-bottom:8px;background:white">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">';
+      html += '<div style="flex:1;min-width:180px">';
+      html += '<div style="font-weight:700;font-size:14px;color:#1E293B">' + priIcon + escHtml(req.title) + '</div>';
+      if (req.description) html += '<div style="font-size:12px;color:#64748B;margin-top:3px;white-space:pre-wrap;word-break:break-word">' + escHtml(req.description).substring(0, 300) + '</div>';
+      html += '<div style="font-size:11px;color:#94A3B8;margin-top:4px"><i class="fas fa-user"></i> ' + escHtml(req.submitted_by_name || 'Unknown') + ' &bull; <i class="fas fa-tag"></i> ' + escHtml(req.category || 'general') + ' &bull; ' + date + '</div>';
+      html += '</div>';
+      html += '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0">';
+      html += '<select onchange="updateFeatureReqStatus(' + req.id + ',this.value)" style="padding:4px 8px;border:1px solid #E2E8F0;border-radius:6px;font-size:11px;font-weight:600;background:white">' + statusOpts + '</select>';
+      html += '<button onclick="deleteFeatureReq(' + req.id + ')" style="padding:4px 8px;border:1px solid #FCA5A5;border-radius:6px;background:#FEF2F2;color:#DC2626;font-size:11px;cursor:pointer" title="Delete"><i class="fas fa-trash"></i></button>';
+      html += '</div></div>';
+      html += '<div style="margin-top:8px"><input type="text" placeholder="Add dev note..." value="' + escHtml(req.admin_notes || '').replace(/"/g,'&quot;') + '" onblur="updateFeatureReqNote(' + req.id + ',this.value)" style="width:100%;padding:6px 10px;border:1px solid #E2E8F0;border-radius:6px;font-size:12px;background:#F8FAFC"></div>';
+      html += '</div>';
+    });
+    el.innerHTML = html;
+  } catch(err) {
+    el.innerHTML = '<div style="text-align:center;padding:16px;color:#DC2626"><i class="fas fa-exclamation-triangle"></i> Error loading feature requests</div>';
+  }
+}
 
 function showAdminNewUserModal() {
   var overlay = document.createElement('div');
