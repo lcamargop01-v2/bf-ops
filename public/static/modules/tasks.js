@@ -35,7 +35,7 @@ window._tasksInit = function() {
 window._tasksCleanup = function() { tkUser = null; tkPage = 'dashboard'; tkTasks = []; };
 
 // ==================== NAV ====================
-function tkNav(page, data) { tkPage = page; tkCurrentTask = data || null; tkRender(); }
+function tkNav(page, data) { tkPage = page; tkCurrentTask = data || null; tkRender(); if (typeof window.shellSetSubPage === 'function') window.shellSetSubPage(page); }
 
 function tkRenderNav() {
   var pages = [

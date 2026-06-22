@@ -505,3 +505,140 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 @media (max-width: 480px) {
   .help-fab { right: 64px; }
 }
+
+/* ==================== MOBILE BOTTOM NAV ==================== */
+.shell-bottom-nav {
+  display: none; /* shown only on mobile */
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 1001;
+  background: var(--shell-bg);
+  border-top: 1px solid var(--shell-border);
+  padding: 4px 0 calc(4px + var(--sab));
+  padding-left: var(--sal); padding-right: var(--sar);
+}
+.shell-bottom-nav-items {
+  display: flex; justify-content: space-around; align-items: stretch;
+  max-width: 600px; margin: 0 auto;
+}
+.shell-bottom-nav-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; padding: 6px 4px 4px; flex: 1;
+  background: none; border: none; color: var(--shell-text-muted);
+  font-size: 10px; font-weight: 600; cursor: pointer;
+  transition: color 0.15s; -webkit-tap-highlight-color: transparent;
+  min-width: 0; text-decoration: none; position: relative;
+}
+.shell-bottom-nav-item i { font-size: 18px; line-height: 1; }
+.shell-bottom-nav-item span {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%; display: block;
+}
+.shell-bottom-nav-item.active { color: var(--shell-accent); }
+.shell-bottom-nav-item.active i { transform: scale(1.1); }
+.shell-bottom-nav-item .shell-bnav-badge {
+  position: absolute; top: 2px; right: calc(50% - 16px);
+  background: #DC2626; color: white; font-size: 9px; font-weight: 700;
+  min-width: 16px; height: 16px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 4px; line-height: 1;
+}
+
+/* Module switcher button in topbar (mobile) */
+.shell-module-switch-btn {
+  display: none; /* shown on mobile */
+  align-items: center; gap: 8px; padding: 4px 10px; border-radius: 8px;
+  background: none; border: 1px solid var(--shell-border);
+  color: var(--shell-text); font-size: 13px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s;
+}
+.shell-module-switch-btn:active { border-color: var(--shell-accent); }
+.shell-module-switch-btn i.module-icon { font-size: 14px; }
+.shell-module-switch-btn i.fa-chevron-down { font-size: 9px; color: var(--shell-text-muted); margin-left: 2px; }
+
+/* Module drawer (mobile full-screen overlay) */
+.shell-module-drawer-overlay {
+  display: none; position: fixed; inset: 0; z-index: 2000;
+  background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: shellFadeIn 0.15s ease;
+}
+.shell-module-drawer-overlay.open { display: flex; }
+.shell-module-drawer {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: var(--shell-surface); border-radius: 20px 20px 0 0;
+  padding: 12px 16px calc(16px + var(--sab));
+  max-height: 70vh; overflow-y: auto;
+  animation: shellSlideUp 0.2s ease;
+}
+@keyframes shellSlideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes shellFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.shell-module-drawer-handle {
+  width: 36px; height: 4px; background: var(--shell-border); border-radius: 2px;
+  margin: 0 auto 16px;
+}
+.shell-module-drawer h4 {
+  font-size: 11px; font-weight: 700; color: var(--shell-text-muted);
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+}
+.shell-module-drawer-item {
+  display: flex; align-items: center; gap: 12px; padding: 14px 12px;
+  border-radius: 12px; cursor: pointer; transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent; border: none; background: none;
+  width: 100%; text-align: left; font-family: inherit;
+}
+.shell-module-drawer-item:active { background: rgba(255,255,255,0.08); }
+.shell-module-drawer-item.active { background: rgba(99,102,241,0.15); }
+.shell-module-drawer-item .drawer-icon {
+  width: 40px; height: 40px; border-radius: 10px; display: flex;
+  align-items: center; justify-content: center; color: white; font-size: 16px;
+  flex-shrink: 0;
+}
+.shell-module-drawer-item .drawer-label {
+  font-size: 15px; font-weight: 600; color: var(--shell-text);
+}
+.shell-module-drawer-item .drawer-desc {
+  font-size: 11px; color: var(--shell-text-muted); margin-top: 1px;
+}
+.shell-module-drawer-item.active .drawer-label { color: var(--shell-accent); }
+
+/* "More" bottom sheet for overflow pages */
+.shell-more-sheet {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: var(--shell-surface); border-radius: 20px 20px 0 0;
+  padding: 12px 16px calc(16px + var(--sab));
+  max-height: 60vh; overflow-y: auto;
+  animation: shellSlideUp 0.2s ease;
+}
+.shell-more-sheet-item {
+  display: flex; align-items: center; gap: 12px; padding: 14px 12px;
+  border-radius: 10px; cursor: pointer; transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent; border: none; background: none;
+  width: 100%; text-align: left; font-family: inherit;
+}
+.shell-more-sheet-item:active { background: rgba(255,255,255,0.08); }
+.shell-more-sheet-item.active { background: rgba(99,102,241,0.15); }
+.shell-more-sheet-item i { font-size: 16px; color: var(--shell-text-muted); width: 24px; text-align: center; }
+.shell-more-sheet-item.active i { color: var(--shell-accent); }
+.shell-more-sheet-item span { font-size: 15px; font-weight: 600; color: var(--shell-text); }
+.shell-more-sheet-item.active span { color: var(--shell-accent); }
+
+@media (max-width: 768px) {
+  .shell-bottom-nav { display: block; }
+  .shell-module-switch-btn { display: flex; }
+  /* Adjust module frame to account for bottom nav */
+  .shell-module-frame { padding-bottom: calc(62px + var(--sab)) !important; }
+  /* Hide desktop-only elements on mobile */
+  .shell-mobile-module-select { display: none !important; }
+  /* Adjust help FAB for bottom nav */
+  .help-fab { bottom: calc(70px + var(--sab)) !important; }
+  .feature-req-fab { bottom: calc(70px + var(--sab)) !important; }
+  /* Topbar simplified */
+  .shell-topbar { gap: 8px; }
+  .shell-back-btn { display: none; }
+  /* Hide per-module internal navs — replaced by shell bottom nav */
+  .inv-nav, .po-nav, .tk-nav { display: none !important; }
+  /* Logistics: hide hamburger menu-toggle + sidebar, bottom nav replaces it */
+  .menu-toggle { display: none !important; }
+  .sidebar { transform: translateX(-100%) !important; }
+  .sidebar-overlay { display: none !important; }
+}

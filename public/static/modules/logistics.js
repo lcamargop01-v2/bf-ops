@@ -1720,6 +1720,8 @@ function navigate(page, params = {}) {
   window._params = params;
   render();
   if (window.innerWidth <= 1024) { sidebarOpen = false; updateSidebar(); }
+  // Update shell bottom nav
+  if (typeof window.shellSetSubPage === 'function') window.shellSetSubPage(page);
 }
 
 function cleanupAllMaps() {

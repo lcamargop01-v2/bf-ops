@@ -16,6 +16,202 @@ var MODULES = [
   { id: 'tasks', name: 'Tasks', icon: 'fa-list-check', desc: 'Team tasks, notifications, operations tracking', color: '#DC2626' },
 ];
 
+// ==================== MOBILE BOTTOM NAV CONFIG ====================
+// For each module: the 4 most-used pages shown in bottom nav, rest in "More"
+var MOBILE_NAV_PAGES = {
+  logistics: [
+    { id: 'dashboard', icon: 'fa-tachometer-alt', label: 'Home' },
+    { id: 'schedule', icon: 'fa-calendar-alt', label: 'Schedule' },
+    { id: 'routes', icon: 'fa-route', label: 'Routes' },
+    { id: 'driver', icon: 'fa-steering-wheel', label: 'Driving' }
+  ],
+  logistics_more: [
+    { id: 'ticket_review', icon: 'fa-rectangle-list', label: 'Ticket Review', adminOnly: true },
+    { id: 'route_builder', icon: 'fa-map-location-dot', label: 'Route Builder' },
+    { id: 'zones', icon: 'fa-map-location-dot', label: 'Zones' },
+    { id: 'trucks', icon: 'fa-truck', label: 'Fleet' },
+    { id: 'drivers_mgmt', icon: 'fa-id-card', label: 'Drivers' },
+    { id: 'maintenance', icon: 'fa-wrench', label: 'Maintenance' },
+    { id: 'warehouse', icon: 'fa-warehouse', label: 'Warehouse' },
+    { id: 'packing', icon: 'fa-list-check', label: 'Packing Lists' },
+    { id: 'returns', icon: 'fa-rotate-left', label: 'Returns' },
+    { id: 'learning', icon: 'fa-brain', label: 'AI Learning' },
+    { id: 'fleet_tracking', icon: 'fa-satellite-dish', label: 'Fleet Tracking' },
+    { id: 'fleet_sync', icon: 'fa-arrows-rotate', label: 'Fleet Sync' }
+  ],
+  inventory: [
+    { id: 'dashboard', icon: 'fa-chart-line', label: 'Home' },
+    { id: 'stock', icon: 'fa-boxes-stacked', label: 'Stock' },
+    { id: 'products', icon: 'fa-tags', label: 'Products' },
+    { id: 'count', icon: 'fa-calculator', label: 'Count' }
+  ],
+  inventory_more: [
+    { id: 'transfers', icon: 'fa-truck-ramp-box', label: 'Transfers' },
+    { id: 'smart_restock', icon: 'fa-wand-magic-sparkles', label: 'Smart Restock' },
+    { id: 'batches', icon: 'fa-layer-group', label: 'Batches' },
+    { id: 'losses', icon: 'fa-triangle-exclamation', label: 'Losses' },
+    { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' },
+    { id: 'snapshots', icon: 'fa-camera', label: 'Snapshots' },
+    { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' },
+    { id: 'order_assignments', icon: 'fa-user-gear', label: 'Order Assignments' }
+  ],
+  ordering: [
+    { id: 'dashboard', icon: 'fa-tachometer-alt', label: 'Home' },
+    { id: 'orders', icon: 'fa-file-invoice', label: 'Orders' },
+    { id: 'bills', icon: 'fa-file-invoice-dollar', label: 'Bills' },
+    { id: 'suppliers', icon: 'fa-building', label: 'Suppliers' }
+  ],
+  ordering_more: [
+    { id: 'requests', icon: 'fa-hand', label: 'Requests' },
+    { id: 'arriving', icon: 'fa-truck-moving', label: 'Arriving' }
+  ],
+  tasks: [
+    { id: 'dashboard', icon: 'fa-chart-line', label: 'Home' },
+    { id: 'my-tasks', icon: 'fa-user', label: 'My Tasks' },
+    { id: 'all-tasks', icon: 'fa-list-check', label: 'All Tasks' },
+    { id: 'notifications', icon: 'fa-bell', label: 'Alerts' }
+  ],
+  tasks_more: [
+    { id: 'pricing-alerts', icon: 'fa-dollar-sign', label: 'Price Alerts' }
+  ]
+};
+
+// Track which "page" is active within a module (for bottom nav highlighting)
+var _shellCurrentSubPage = null;
+
+function shellSetSubPage(pageId) {
+  _shellCurrentSubPage = pageId;
+  shellUpdateBottomNav();
+}
+
+function shellUpdateBottomNav() {
+  var nav = document.getElementById('shellBottomNav');
+  if (!nav || !activeModule) return;
+  var items = nav.querySelectorAll('.shell-bottom-nav-item');
+  items.forEach(function(item) {
+    var pg = item.getAttribute('data-page');
+    if (pg === '__more__') {
+      // "More" button active if current page is in the more list
+      var morePages = MOBILE_NAV_PAGES[activeModule + '_more'] || [];
+      var inMore = morePages.some(function(p) { return p.id === _shellCurrentSubPage; });
+      item.classList.toggle('active', inMore);
+    } else {
+      item.classList.toggle('active', pg === _shellCurrentSubPage);
+    }
+  });
+}
+
+function shellRenderBottomNav(moduleId) {
+  var pages = MOBILE_NAV_PAGES[moduleId] || [];
+  var morePages = MOBILE_NAV_PAGES[moduleId + '_more'] || [];
+  if (pages.length === 0) return '';
+
+  // Filter by permissions
+  var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+  var _user = currentUser || {};
+  pages = pages.filter(function(p) {
+    if (p.adminOnly && _user.role !== 'admin') return false;
+    return _ca(moduleId, p.id);
+  });
+  morePages = morePages.filter(function(p) {
+    if (p.adminOnly && _user.role !== 'admin') return false;
+    return _ca(moduleId, p.id);
+  });
+
+  var html = '<nav class="shell-bottom-nav" id="shellBottomNav">';
+  html += '<div class="shell-bottom-nav-items">';
+  pages.forEach(function(p) {
+    html += '<button class="shell-bottom-nav-item' + (p.id === _shellCurrentSubPage ? ' active' : '') + '" data-page="' + p.id + '" onclick="shellBottomNavTap(\'' + p.id + '\')">';
+    html += '<i class="fas ' + p.icon + '"></i><span>' + p.label + '</span></button>';
+  });
+  if (morePages.length > 0) {
+    var inMore = morePages.some(function(p) { return p.id === _shellCurrentSubPage; });
+    html += '<button class="shell-bottom-nav-item' + (inMore ? ' active' : '') + '" data-page="__more__" onclick="shellShowMoreSheet()">';
+    html += '<i class="fas fa-ellipsis"></i><span>More</span></button>';
+  }
+  html += '</div></nav>';
+  return html;
+}
+
+function shellBottomNavTap(pageId) {
+  _shellCurrentSubPage = pageId;
+  // Dispatch to the active module's navigate function
+  if (activeModule === 'logistics' && typeof window.navigate === 'function') {
+    window.navigate(pageId);
+  } else if (activeModule === 'inventory' && typeof window.invNav === 'function') {
+    window.invNav(pageId);
+  } else if (activeModule === 'ordering' && typeof window.poNav === 'function') {
+    window.poNav(pageId);
+  } else if (activeModule === 'tasks' && typeof window.tkNav === 'function') {
+    window.tkNav(pageId);
+  }
+  shellUpdateBottomNav();
+}
+
+function shellShowMoreSheet() {
+  // Remove existing
+  var existing = document.querySelector('.shell-module-drawer-overlay.more-sheet');
+  if (existing) { existing.remove(); return; }
+
+  var morePages = MOBILE_NAV_PAGES[activeModule + '_more'] || [];
+  var _ca = typeof window.canAccess === 'function' ? window.canAccess : function() { return true; };
+  var _user = currentUser || {};
+  morePages = morePages.filter(function(p) {
+    if (p.adminOnly && _user.role !== 'admin') return false;
+    return _ca(activeModule, p.id);
+  });
+
+  var overlay = document.createElement('div');
+  overlay.className = 'shell-module-drawer-overlay open more-sheet';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  var html = '<div class="shell-more-sheet">';
+  html += '<div class="shell-module-drawer-handle"></div>';
+  morePages.forEach(function(p) {
+    html += '<button class="shell-more-sheet-item' + (p.id === _shellCurrentSubPage ? ' active' : '') + '" onclick="this.closest(\'.shell-module-drawer-overlay\').remove();shellBottomNavTap(\'' + p.id + '\')">';
+    html += '<i class="fas ' + p.icon + '"></i><span>' + p.label + '</span></button>';
+  });
+  html += '</div>';
+  overlay.innerHTML = html;
+  document.body.appendChild(overlay);
+}
+
+function shellShowModuleDrawer() {
+  var existing = document.querySelector('.shell-module-drawer-overlay.module-drawer');
+  if (existing) { existing.remove(); return; }
+
+  var userModules = currentUser.modules || [];
+  var isAdmin = currentUser.role === 'admin';
+  var allMods = MODULES.filter(function(m) { return isAdmin || userModules.indexOf(m.id) >= 0; });
+
+  var overlay = document.createElement('div');
+  overlay.className = 'shell-module-drawer-overlay open module-drawer';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  var html = '<div class="shell-module-drawer">';
+  html += '<div class="shell-module-drawer-handle"></div>';
+  html += '<h4>Switch Module</h4>';
+  allMods.forEach(function(m) {
+    html += '<button class="shell-module-drawer-item' + (m.id === activeModule ? ' active' : '') + '" onclick="this.closest(\'.shell-module-drawer-overlay\').remove();launchModule(\'' + m.id + '\')">';
+    html += '<div class="drawer-icon" style="background:' + m.color + '"><i class="fas ' + m.icon + '"></i></div>';
+    html += '<div><div class="drawer-label">' + m.name + '</div><div class="drawer-desc">' + m.desc + '</div></div>';
+    html += '</button>';
+  });
+  if (isAdmin) {
+    html += '<button class="shell-module-drawer-item' + ('admin' === activeModule ? ' active' : '') + '" onclick="this.closest(\'.shell-module-drawer-overlay\').remove();launchModule(\'admin\')">';
+    html += '<div class="drawer-icon" style="background:#475569"><i class="fas fa-cog"></i></div>';
+    html += '<div><div class="drawer-label">Admin</div><div class="drawer-desc">User management, permissions</div></div>';
+    html += '</button>';
+  }
+  html += '<div style="padding:12px"><button class="shell-module-drawer-item" onclick="this.closest(\'.shell-module-drawer-overlay\').remove();renderHome()" style="border-top:1px solid var(--shell-border);border-radius:0;padding-top:16px">';
+  html += '<div class="drawer-icon" style="background:#64748B"><i class="fas fa-th-large"></i></div>';
+  html += '<div><div class="drawer-label">All Modules</div><div class="drawer-desc">Back to module picker</div></div>';
+  html += '</button></div>';
+  html += '</div>';
+  overlay.innerHTML = html;
+  document.body.appendChild(overlay);
+}
+
 // ==================== AUTH ====================
 
 function setToken(t) {
@@ -301,11 +497,30 @@ function launchModule(moduleId, initialPage) {
   const isAdmin = currentUser.role === 'admin';
   const allMods = MODULES.filter(m => isAdmin || userModules.includes(m.id));
 
+  var curMod = MODULES.find(function(m) { return m.id === moduleId; }) || { icon: 'fa-cog', name: moduleId === 'admin' ? 'Admin' : moduleId, color: '#475569' };
+
+  // Set initial sub-page for bottom nav
+  var primaryPages = MOBILE_NAV_PAGES[moduleId] || [];
+  var morePages = MOBILE_NAV_PAGES[moduleId + '_more'] || [];
+  var allSubPages = primaryPages.concat(morePages);
+  if (initialPage && allSubPages.some(function(p) { return p.id === initialPage; })) {
+    _shellCurrentSubPage = initialPage;
+  } else if (primaryPages.length > 0) {
+    _shellCurrentSubPage = primaryPages[0].id;
+  } else {
+    _shellCurrentSubPage = null;
+  }
+
   root.innerHTML = `
     <div class="shell-app-layout">
       <div class="shell-topbar">
         <button class="shell-back-btn" onclick="renderHome()">
           <i class="fas fa-th-large"></i> <span class="back-label">Modules</span>
+        </button>
+        <button class="shell-module-switch-btn" onclick="shellShowModuleDrawer()">
+          <i class="fas ${curMod.icon} module-icon" style="color:${curMod.color}"></i>
+          <span>${curMod.name}</span>
+          <i class="fas fa-chevron-down"></i>
         </button>
         <div class="shell-module-tabs">
           ${allMods.map(m => `
@@ -363,6 +578,7 @@ function launchModule(moduleId, initialPage) {
           </div>
         </div>
       </div>
+      ${shellRenderBottomNav(moduleId)}
     </div>`;
 
   // Start notification polling (refresh badge)

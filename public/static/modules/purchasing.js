@@ -90,6 +90,8 @@ function poNav(page, data) {
   poPage = page;
   poCurrentOrder = data || null;
   poRender();
+  // Update shell bottom nav
+  if (typeof window.shellSetSubPage === 'function') window.shellSetSubPage(page);
 }
 
 // ==================== MAIN RENDER ====================

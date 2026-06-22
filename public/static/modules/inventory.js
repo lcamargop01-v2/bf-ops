@@ -145,6 +145,8 @@ function invToast(msg, type) {
 function invNav(page) {
   invPage = page;
   invRender();
+  // Update shell bottom nav
+  if (typeof window.shellSetSubPage === 'function') window.shellSetSubPage(page);
 }
 
 // ==================== MAIN RENDER ====================
