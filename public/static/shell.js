@@ -258,42 +258,299 @@ function shellToast(msg, type = 'success') {
   setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3000);
 }
 
-// ==================== RENDER: LOGIN ====================
+// ==================== RENDER: LOGIN (PIN-based) ====================
 
-function renderLogin() {
+var _loginUsers = []; // cached user list for picker
+var _selectedLoginUser = null; // currently selected user for PIN entry
+var _pinDigits = ''; // accumulated PIN digits
+
+// Department display info
+var _deptInfo = {
+  management: { icon: 'fa-crown', color: '#F59E0B', label: 'Management' },
+  office: { icon: 'fa-headset', color: '#3B82F6', label: 'Office' },
+  warehouse: { icon: 'fa-warehouse', color: '#10B981', label: 'Warehouse' },
+  logistics: { icon: 'fa-truck-fast', color: '#8B5CF6', label: 'Logistics' }
+};
+
+async function renderLogin() {
   const root = document.getElementById('bf-ops-root');
   root.innerHTML = `
     <div class="shell-login-page">
-      <div class="shell-login-card">
+      <div class="shell-login-card shell-login-wide">
         <div class="shell-login-logo">
           <i class="fas fa-cubes"></i>
           <h1>BF Operations</h1>
-          <p>British Feed & Supplies Management</p>
+          <p>Select your name to clock in</p>
         </div>
-        <form onsubmit="doLogin(event)">
-          <div class="form-group">
-            <label class="form-label">Email</label>
-            <input class="form-input" type="email" id="shellLoginEmail" placeholder="your@email.com" required>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Password</label>
-            <input class="form-input" type="password" id="shellLoginPassword" placeholder="Enter password" required>
-          </div>
-          <button type="submit" class="shell-btn-login">
-            <i class="fas fa-sign-in-alt"></i> Sign In
-          </button>
-        </form>
-        <div class="shell-quick-logins">
-          <p>Quick access</p>
-          <div class="grid">
-            <button class="shell-quick-btn" onclick="shellQuickLogin('laura@britishfeed.com','admin123')"><i class="fas fa-crown"></i> Admin</button>
-            <button class="shell-quick-btn" onclick="shellQuickLogin('baylee@britishfeed.com','dispatch123')"><i class="fas fa-headset"></i> Dispatch</button>
-            <button class="shell-quick-btn" onclick="shellQuickLogin('taj@britishfeed.com','warehouse123')"><i class="fas fa-warehouse"></i> Warehouse</button>
-            <button class="shell-quick-btn" onclick="shellQuickLogin('james@britishfeed.com','driver123')"><i class="fas fa-truck"></i> Driver</button>
+        <div id="shellLoginContent">
+          <div style="text-align:center;padding:32px;color:var(--shell-text-muted)">
+            <i class="fas fa-spinner fa-spin" style="font-size:24px"></i>
+            <p style="margin-top:8px">Loading team...</p>
           </div>
         </div>
       </div>
     </div>`;
+  // Fetch active users
+  try {
+    var resp = await API.get('/auth/users-list');
+    _loginUsers = resp.data.users || [];
+    _selectedLoginUser = null;
+    _pinDigits = '';
+    _renderUserPicker();
+  } catch(e) {
+    document.getElementById('shellLoginContent').innerHTML = `
+      <div style="text-align:center;padding:24px;color:#EF4444">
+        <i class="fas fa-exclamation-triangle" style="font-size:24px"></i>
+        <p style="margin-top:8px">Failed to load users. Please refresh.</p>
+      </div>`;
+  }
+}
+
+function _renderUserPicker() {
+  var container = document.getElementById('shellLoginContent');
+  if (!container) return;
+
+  // Group by department
+  var groups = {};
+  _loginUsers.forEach(function(u) {
+    var dept = u.department || 'other';
+    if (!groups[dept]) groups[dept] = [];
+    groups[dept].push(u);
+  });
+
+  var deptOrder = ['management', 'office', 'warehouse', 'logistics', 'other'];
+  var html = '<div class="pin-user-search-wrap"><input type="text" class="pin-user-search" id="pinUserSearch" placeholder="Search name..." oninput="filterLoginUsers(this.value)"><i class="fas fa-search pin-search-icon"></i></div>';
+  html += '<div class="pin-user-grid" id="pinUserGrid">';
+
+  deptOrder.forEach(function(dept) {
+    var users = groups[dept];
+    if (!users || users.length === 0) return;
+    var info = _deptInfo[dept] || { icon: 'fa-user', color: '#64748B', label: dept.charAt(0).toUpperCase() + dept.slice(1) };
+    html += '<div class="pin-dept-label"><i class="fas ' + info.icon + '" style="color:' + info.color + '"></i> ' + info.label + '</div>';
+    users.forEach(function(u) {
+      var initials = (u.name || '?').split(' ').map(function(w) { return w[0]; }).join('').substring(0, 2).toUpperCase();
+      var shortTitle = u.job_title || u.role;
+      html += '<button class="pin-user-btn" data-uid="' + u.id + '" data-name="' + (u.name || '').toLowerCase() + '" onclick="selectLoginUser(' + u.id + ')">';
+      html += '<div class="pin-user-avatar" style="background:' + info.color + '">' + initials + '</div>';
+      html += '<div class="pin-user-info"><div class="pin-user-name">' + (u.name || 'Unknown') + '</div><div class="pin-user-role">' + shortTitle + '</div></div>';
+      html += '</button>';
+    });
+  });
+  html += '</div>';
+
+  container.innerHTML = html;
+}
+
+function filterLoginUsers(query) {
+  var q = (query || '').toLowerCase().trim();
+  var btns = document.querySelectorAll('.pin-user-btn');
+  var labels = document.querySelectorAll('.pin-dept-label');
+  // Show/hide individual buttons
+  btns.forEach(function(btn) {
+    var name = btn.getAttribute('data-name') || '';
+    btn.style.display = (!q || name.indexOf(q) !== -1) ? '' : 'none';
+  });
+  // Show/hide department labels based on visible children
+  labels.forEach(function(lbl) {
+    var next = lbl.nextElementSibling;
+    var hasVisible = false;
+    while (next && !next.classList.contains('pin-dept-label')) {
+      if (next.classList.contains('pin-user-btn') && next.style.display !== 'none') hasVisible = true;
+      next = next.nextElementSibling;
+    }
+    lbl.style.display = hasVisible ? '' : 'none';
+  });
+}
+
+function selectLoginUser(userId) {
+  var user = _loginUsers.find(function(u) { return u.id === userId; });
+  if (!user) return;
+  _selectedLoginUser = user;
+  _pinDigits = '';
+  _renderPinPad();
+}
+
+function _renderPinPad() {
+  var container = document.getElementById('shellLoginContent');
+  if (!container || !_selectedLoginUser) return;
+  var u = _selectedLoginUser;
+  var initials = (u.name || '?').split(' ').map(function(w) { return w[0]; }).join('').substring(0, 2).toUpperCase();
+  var info = _deptInfo[u.department] || { icon: 'fa-user', color: '#64748B' };
+
+  var dots = '';
+  for (var i = 0; i < 4; i++) {
+    dots += '<div class="pin-dot ' + (i < _pinDigits.length ? 'filled' : '') + '"></div>';
+  }
+
+  container.innerHTML = `
+    <div class="pin-pad-container">
+      <button class="pin-back-btn" onclick="_pinGoBack()"><i class="fas fa-arrow-left"></i> Back</button>
+      <div class="pin-selected-user">
+        <div class="pin-user-avatar-lg" style="background:${info.color}">${initials}</div>
+        <div class="pin-selected-name">${u.name}</div>
+        <div class="pin-selected-role">${u.job_title || u.role}</div>
+      </div>
+      <p class="pin-prompt">Enter your 4-digit PIN</p>
+      <div class="pin-dots" id="pinDots">${dots}</div>
+      <div class="pin-error" id="pinError"></div>
+      <div class="pin-keypad">
+        <button class="pin-key" onclick="pinKeyPress('1')">1</button>
+        <button class="pin-key" onclick="pinKeyPress('2')">2</button>
+        <button class="pin-key" onclick="pinKeyPress('3')">3</button>
+        <button class="pin-key" onclick="pinKeyPress('4')">4</button>
+        <button class="pin-key" onclick="pinKeyPress('5')">5</button>
+        <button class="pin-key" onclick="pinKeyPress('6')">6</button>
+        <button class="pin-key" onclick="pinKeyPress('7')">7</button>
+        <button class="pin-key" onclick="pinKeyPress('8')">8</button>
+        <button class="pin-key" onclick="pinKeyPress('9')">9</button>
+        <button class="pin-key pin-key-fn" onclick="pinKeyPress('clear')"><i class="fas fa-xmark"></i></button>
+        <button class="pin-key" onclick="pinKeyPress('0')">0</button>
+        <button class="pin-key pin-key-fn" onclick="pinKeyPress('back')"><i class="fas fa-delete-left"></i></button>
+      </div>
+    </div>`;
+}
+
+function _pinGoBack() {
+  _selectedLoginUser = null;
+  _pinDigits = '';
+  _renderUserPicker();
+}
+
+function pinKeyPress(key) {
+  var errEl = document.getElementById('pinError');
+  if (errEl) errEl.textContent = '';
+
+  if (key === 'clear') {
+    _pinDigits = '';
+  } else if (key === 'back') {
+    _pinDigits = _pinDigits.slice(0, -1);
+  } else {
+    if (_pinDigits.length >= 4) return;
+    _pinDigits += key;
+  }
+
+  // Update dots
+  var dotsEl = document.getElementById('pinDots');
+  if (dotsEl) {
+    var dots = '';
+    for (var i = 0; i < 4; i++) {
+      dots += '<div class="pin-dot ' + (i < _pinDigits.length ? 'filled' : '') + '"></div>';
+    }
+    dotsEl.innerHTML = dots;
+  }
+
+  // Auto-submit when 4 digits entered
+  if (_pinDigits.length === 4) {
+    doPinLogin();
+  }
+}
+
+async function doPinLogin() {
+  if (!_selectedLoginUser || _pinDigits.length !== 4) return;
+
+  // Disable keypad during login
+  var keys = document.querySelectorAll('.pin-key');
+  keys.forEach(function(k) { k.disabled = true; });
+
+  try {
+    var resp = await API.post('/auth/pin-login', { user_id: _selectedLoginUser.id, pin: _pinDigits });
+    var data = resp.data;
+    currentUser = data.user;
+    setToken(data.token);
+    localStorage.setItem('bf_ops_user', JSON.stringify(data.user));
+    _userPermissions = data.permissions || 'all';
+    _canViewFinancials = data.can_view_financials !== undefined ? !!data.can_view_financials : true;
+    localStorage.setItem('bf_ops_permissions', JSON.stringify(_userPermissions));
+    localStorage.setItem('bf_ops_can_view_financials', JSON.stringify(_canViewFinancials));
+    window._userPermissions = _userPermissions;
+    window._canViewFinancials = _canViewFinancials;
+    window.canAccess = canAccess;
+    window.canEdit = canEdit;
+    window.canViewFinancials = canViewFinancials;
+    shellToast('Welcome, ' + currentUser.name + '!');
+    initPushNotifications();
+    initFeatureRequestBtn();
+    initHelpAssistant();
+    if (currentUser.default_module) {
+      launchModule(currentUser.default_module, currentUser.default_page || null);
+    } else {
+      renderHome();
+    }
+  } catch(err) {
+    var msg = (err.response && err.response.data && err.response.data.error) || 'Incorrect PIN';
+    var errEl = document.getElementById('pinError');
+    if (errEl) errEl.textContent = msg;
+    _pinDigits = '';
+    // Reset dots
+    var dotsEl = document.getElementById('pinDots');
+    if (dotsEl) {
+      var dots = '';
+      for (var i = 0; i < 4; i++) dots += '<div class="pin-dot"></div>';
+      dotsEl.innerHTML = dots;
+    }
+    // Shake animation
+    var pad = document.querySelector('.pin-dots');
+    if (pad) { pad.classList.add('shake'); setTimeout(function() { pad.classList.remove('shake'); }, 500); }
+    // Re-enable keys
+    keys.forEach(function(k) { k.disabled = false; });
+  }
+}
+
+// ==================== ADMIN PASSWORD GATE ====================
+// For admin/financial views — requires password on top of PIN login
+var _adminVerified = false;
+
+function requireAdminPassword(callback) {
+  if (_adminVerified) { callback(); return; }
+  if (!currentUser || currentUser.role !== 'admin') {
+    shellToast('Admin access required', 'error');
+    return;
+  }
+  _showAdminPasswordModal(callback);
+}
+
+function _showAdminPasswordModal(callback) {
+  var overlay = document.createElement('div');
+  overlay.id = 'adminPwOverlay';
+  overlay.className = 'shell-modal-overlay';
+  overlay.innerHTML = `
+    <div class="shell-login-card" style="max-width:380px;margin:auto;">
+      <div style="text-align:center;margin-bottom:20px">
+        <i class="fas fa-shield-halved" style="font-size:36px;color:#F59E0B;display:block;margin-bottom:8px"></i>
+        <h2 style="font-size:18px;color:var(--shell-text);font-weight:700">Admin Verification</h2>
+        <p style="font-size:13px;color:var(--shell-text-muted);margin-top:4px">Enter your password to access admin/financial data</p>
+      </div>
+      <div class="form-group">
+        <input class="form-input" type="password" id="adminPwInput" placeholder="Admin password" autofocus
+          onkeydown="if(event.key==='Enter')verifyAdminPw()">
+      </div>
+      <div id="adminPwError" style="color:#EF4444;font-size:12px;text-align:center;margin-bottom:12px"></div>
+      <div style="display:flex;gap:8px">
+        <button onclick="document.getElementById('adminPwOverlay').remove()" class="shell-quick-btn" style="flex:1;justify-content:center;padding:12px">Cancel</button>
+        <button onclick="verifyAdminPw()" class="shell-btn-login" style="flex:1">Verify</button>
+      </div>
+    </div>`;
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+  document.body.appendChild(overlay);
+  window._adminPwCallback = callback;
+  setTimeout(function() { var inp = document.getElementById('adminPwInput'); if (inp) inp.focus(); }, 100);
+}
+
+async function verifyAdminPw() {
+  var pw = document.getElementById('adminPwInput').value;
+  if (!pw) return;
+  try {
+    await API.post('/auth/verify-admin', { password: pw });
+    _adminVerified = true;
+    // Auto-expire after 30 minutes
+    setTimeout(function() { _adminVerified = false; }, 30 * 60 * 1000);
+    var overlay = document.getElementById('adminPwOverlay');
+    if (overlay) overlay.remove();
+    if (window._adminPwCallback) { window._adminPwCallback(); window._adminPwCallback = null; }
+  } catch(err) {
+    var el = document.getElementById('adminPwError');
+    if (el) el.textContent = (err.response && err.response.data && err.response.data.error) || 'Incorrect password';
+  }
 }
 
 // Global permissions object:
@@ -361,16 +618,20 @@ function canViewFinancials() {
   return !!_canViewFinancials;
 }
 
+// Legacy email/password login (kept for backward compatibility — hidden from UI)
 async function doLogin(e) {
   if (e) e.preventDefault();
-  const email = document.getElementById('shellLoginEmail').value;
-  const password = document.getElementById('shellLoginPassword').value;
+  var emailEl = document.getElementById('shellLoginEmail');
+  var pwEl = document.getElementById('shellLoginPassword');
+  if (!emailEl || !pwEl) return;
+  var email = emailEl.value;
+  var password = pwEl.value;
   try {
-    const { data } = await API.post('/auth/login', { email, password });
+    var resp = await API.post('/auth/login', { email: email, password: password });
+    var data = resp.data;
     currentUser = data.user;
     setToken(data.token);
     localStorage.setItem('bf_ops_user', JSON.stringify(data.user));
-    // Store permissions (new format: { module: { feature: access_level } })
     _userPermissions = data.permissions || 'all';
     _canViewFinancials = data.can_view_financials !== undefined ? !!data.can_view_financials : true;
     localStorage.setItem('bf_ops_permissions', JSON.stringify(_userPermissions));
@@ -380,14 +641,10 @@ async function doLogin(e) {
     window.canAccess = canAccess;
     window.canEdit = canEdit;
     window.canViewFinancials = canViewFinancials;
-    shellToast(`Welcome, ${currentUser.name}!`);
-    // Register service worker for push notifications
+    shellToast('Welcome, ' + currentUser.name + '!');
     initPushNotifications();
-    // Feature request FAB
     initFeatureRequestBtn();
-    // AI Help Assistant FAB
     initHelpAssistant();
-    // Auto-navigate to user's default landing if configured
     if (currentUser.default_module) {
       launchModule(currentUser.default_module, currentUser.default_page || null);
     } else {
@@ -399,14 +656,14 @@ async function doLogin(e) {
 }
 
 function shellQuickLogin(email, pw) {
-  document.getElementById('shellLoginEmail').value = email;
-  document.getElementById('shellLoginPassword').value = pw;
+  // Legacy compat — no longer used on login screen
   doLogin(null);
 }
 
 function shellLogout() {
   currentUser = null;
   activeModule = null;
+  _adminVerified = false;
   setToken(null);
   localStorage.removeItem('bf_ops_user');
   localStorage.removeItem('bf_ops_token');
@@ -591,7 +848,15 @@ function launchModule(moduleId, initialPage) {
 
   // Load the module
   if (moduleId === 'admin') {
-    renderAdminPanel();
+    // Admin panel requires password verification for admin users who logged in via PIN
+    if (_adminVerified || !currentUser || currentUser.role !== 'admin') {
+      renderAdminPanel();
+    } else {
+      // Show locked state, then prompt for password
+      var mf = document.getElementById('moduleFrame');
+      if (mf) mf.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px"><i class="fas fa-lock" style="font-size:48px;color:#F59E0B"></i><h2 style="font-size:18px;color:#1E293B;font-weight:700">Admin Locked</h2><p style="color:#64748B">Password verification required</p><button onclick="requireAdminPassword(function(){renderAdminPanel()})" class="shell-save-btn" style="padding:10px 24px;font-size:14px"><i class="fas fa-key"></i> Unlock</button></div>';
+      requireAdminPassword(function() { renderAdminPanel(); });
+    }
   } else if (moduleId === 'logistics') {
     loadLogisticsModule();
   } else if (moduleId === 'inventory') {
@@ -3203,6 +3468,18 @@ async function avSavePreferences(userId) {
     document.getElementById('adminViewOverlay')?.remove();
   } catch(e) { shellToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
 }
+
+// ==================== KEYBOARD SUPPORT FOR PIN PAD ====================
+document.addEventListener('keydown', function(e) {
+  // Only when PIN pad is visible (user selected, entering PIN)
+  if (!_selectedLoginUser) return;
+  // Don't intercept if focus is on a real input field (like admin password modal)
+  if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) return;
+  if (e.key >= '0' && e.key <= '9') { pinKeyPress(e.key); e.preventDefault(); }
+  else if (e.key === 'Backspace') { pinKeyPress('back'); e.preventDefault(); }
+  else if (e.key === 'Escape') { _pinGoBack(); e.preventDefault(); }
+  else if (e.key === 'Delete') { pinKeyPress('clear'); e.preventDefault(); }
+});
 
 // ==================== INIT ====================
 

@@ -37,6 +37,141 @@ app.onError((err, c) => {
 // ==================== PARENT AUTH ENDPOINTS ====================
 // These override logistics auth to add module_access to the response
 
+// Public endpoint: list active users for PIN login picker (no sensitive data)
+app.get('/api/auth/users-list', async (c) => {
+  const db = c.env.DB
+  const users = await db.prepare(
+    `SELECT id, name, role, department, job_title FROM users WHERE active = 1 ORDER BY
+      CASE department
+        WHEN 'management' THEN 1
+        WHEN 'office' THEN 2
+        WHEN 'warehouse' THEN 3
+        WHEN 'logistics' THEN 4
+        ELSE 5
+      END, name`
+  ).all()
+  return c.json({ users: users.results || [] })
+})
+
+// PIN-based login — select user by id, authenticate with 4-digit PIN
+app.post('/api/auth/pin-login', async (c) => {
+  const { user_id, pin } = await c.req.json()
+  const db = c.env.DB
+
+  if (!user_id || !pin) return c.json({ error: 'User and PIN are required' }, 400)
+
+  const user = await db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').bind(user_id).first() as any
+  if (!user) return c.json({ error: 'User not found' }, 401)
+
+  // Check PIN (stored as plaintext 4-digit code)
+  if (!user.pin) return c.json({ error: 'PIN not set for this user. Contact admin.' }, 401)
+  if (user.pin !== String(pin)) return c.json({ error: 'Incorrect PIN' }, 401)
+
+  // Get module access for this user
+  let modules: string[] = []
+  try {
+    const accessRows = await db.prepare('SELECT module FROM user_module_access WHERE user_id = ?').bind(user.id).all()
+    modules = accessRows.results?.map((r: any) => r.module) || []
+  } catch { /* table may not exist in dev */ }
+  const allModules = user.role === 'admin' ? ['logistics', 'inventory', 'ordering', 'crm', 'reports', 'pos', 'tasks', 'admin'] : modules
+
+  // Get role-based feature permissions
+  let featurePerms: any = 'all'
+  let canViewFinancials = true
+  if (user.role !== 'admin') {
+    try {
+      const perms = await db.prepare('SELECT module, feature, access_level FROM role_permissions WHERE role_name = ?').bind(user.role).all()
+      const permMap: Record<string, Record<string, string>> = {}
+      for (const p of (perms.results || []) as any[]) {
+        if (!permMap[p.module]) permMap[p.module] = {}
+        permMap[p.module][p.feature] = p.access_level || 'edit'
+      }
+      featurePerms = permMap
+      const roleRow = await db.prepare('SELECT can_view_financials FROM roles WHERE name = ?').bind(user.role).first() as any
+      canViewFinancials = roleRow ? !!roleRow.can_view_financials : true
+    } catch { /* permissions tables may not exist in dev — default to 'all' */ }
+  }
+
+  // Generate token (24hr expiry)
+  const token = btoa(JSON.stringify({ id: user.id, email: user.email, role: user.role, exp: Date.now() + 86400000 }))
+
+  let pinnedPages = null
+  try { pinnedPages = user.pinned_pages ? JSON.parse(user.pinned_pages) : null } catch {}
+
+  return c.json({
+    user: {
+      id: user.id, name: user.name, email: user.email, role: user.role, phone: user.phone,
+      modules: allModules,
+      default_module: user.default_module || null,
+      default_page: user.default_page || null,
+      pinned_pages: pinnedPages,
+      sidebar_mode: user.sidebar_mode || 'full',
+    },
+    token,
+    permissions: featurePerms,
+    can_view_financials: canViewFinancials
+  })
+})
+
+// Admin password verification for sensitive views (financial/admin)
+app.post('/api/auth/verify-admin', async (c) => {
+  const auth = c.req.header('Authorization')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+  try {
+    const tokenStr = auth.replace('Bearer ', '')
+    const payload = JSON.parse(atob(tokenStr))
+    if (payload.exp < Date.now()) return c.json({ error: 'Token expired' }, 401)
+
+    const { password } = await c.req.json()
+    const db = c.env.DB
+    const user = await db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').bind(payload.id).first() as any
+    if (!user) return c.json({ error: 'User not found' }, 401)
+
+    // Must be admin role
+    if (user.role !== 'admin') return c.json({ error: 'Admin access required' }, 403)
+
+    // Verify password (SHA-256 hash)
+    const encoder = new TextEncoder()
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(password))
+    const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
+
+    if (user.password_hash !== hashHex && user.password_hash !== password) {
+      return c.json({ error: 'Incorrect password' }, 401)
+    }
+
+    return c.json({ verified: true })
+  } catch { return c.json({ error: 'Invalid token' }, 401) }
+})
+
+// Update user PIN (self or admin)
+app.put('/api/auth/pin', async (c) => {
+  const auth = c.req.header('Authorization')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+  try {
+    const tokenStr = auth.replace('Bearer ', '')
+    const payload = JSON.parse(atob(tokenStr))
+    if (payload.exp < Date.now()) return c.json({ error: 'Token expired' }, 401)
+
+    const { user_id, new_pin } = await c.req.json()
+    const db = c.env.DB
+
+    // Validate PIN format (4 digits)
+    if (!new_pin || !/^\d{4}$/.test(String(new_pin))) {
+      return c.json({ error: 'PIN must be exactly 4 digits' }, 400)
+    }
+
+    const targetId = user_id || payload.id
+    // Only admin can change other users' PINs
+    if (targetId !== payload.id) {
+      const caller = await db.prepare('SELECT role FROM users WHERE id = ?').bind(payload.id).first() as any
+      if (!caller || caller.role !== 'admin') return c.json({ error: 'Only admins can change other users\' PINs' }, 403)
+    }
+
+    await db.prepare('UPDATE users SET pin = ? WHERE id = ?').bind(String(new_pin), targetId).run()
+    return c.json({ success: true })
+  } catch { return c.json({ error: 'Invalid token' }, 401) }
+})
+
 app.post('/api/auth/login', async (c) => {
   const { email, password } = await c.req.json()
   const db = c.env.DB
@@ -127,7 +262,7 @@ app.get('/api/admin/users', async (c) => {
   const db = c.env.DB
   const incArchived = c.req.query('include_archived') === '1'
   const users = await db.prepare(
-    `SELECT id, name, email, role, phone, preferred_language, active, created_at, default_module, default_page, pinned_pages, sidebar_mode FROM users ${incArchived ? '' : 'WHERE active = 1'} ORDER BY role, name`
+    `SELECT id, name, email, role, phone, preferred_language, active, created_at, default_module, default_page, pinned_pages, sidebar_mode, department, job_title, pin FROM users ${incArchived ? '' : 'WHERE active = 1'} ORDER BY role, name`
   ).all()
   // Get module access for all users
   const access = await db.prepare('SELECT user_id, module FROM user_module_access').all()
@@ -162,8 +297,8 @@ app.post('/api/admin/users', async (c) => {
   const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
   try {
     const res = await db.prepare(
-      'INSERT INTO users (email, name, role, phone, preferred_language, password_hash, active) VALUES (?,?,?,?,?,?,?)'
-    ).bind(body.email, body.name, body.role || 'dispatcher', body.phone || null, body.preferred_language || 'en', hashHex, 1).run()
+      'INSERT INTO users (email, name, role, phone, preferred_language, password_hash, active, department, job_title, pin) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).bind(body.email, body.name, body.role || 'dispatcher', body.phone || null, body.preferred_language || 'en', hashHex, 1, body.department || null, body.job_title || null, body.pin || null).run()
     return c.json({ id: res.meta.last_row_id }, 201)
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) return c.json({ error: 'Email already exists' }, 409)
@@ -177,7 +312,7 @@ app.put('/api/admin/users/:id', async (c) => {
   const db = c.env.DB
   const fields: string[] = []
   const vals: any[] = []
-  for (const key of ['name', 'email', 'phone', 'role', 'preferred_language', 'active']) {
+  for (const key of ['name', 'email', 'phone', 'role', 'preferred_language', 'active', 'department', 'job_title', 'pin']) {
     if (body[key] !== undefined) { fields.push(`${key} = ?`); vals.push(body[key]) }
   }
   if (body.password) {

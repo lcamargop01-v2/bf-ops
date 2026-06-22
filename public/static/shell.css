@@ -41,9 +41,12 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   padding: 48px 40px; width: 420px; max-width: 90vw; position: relative; z-index: 1;
   box-shadow: 0 25px 60px rgba(0,0,0,0.4);
 }
-.shell-login-logo { text-align: center; margin-bottom: 32px; }
-.shell-login-logo i { font-size: 48px; color: var(--shell-accent); margin-bottom: 12px; display: block; }
-.shell-login-logo h1 { font-size: 28px; font-weight: 800; color: var(--shell-text); letter-spacing: -0.5px; }
+.shell-login-card.shell-login-wide {
+  width: 520px; max-width: 95vw; padding: 36px 32px;
+}
+.shell-login-logo { text-align: center; margin-bottom: 24px; }
+.shell-login-logo i { font-size: 42px; color: var(--shell-accent); margin-bottom: 8px; display: block; }
+.shell-login-logo h1 { font-size: 26px; font-weight: 800; color: var(--shell-text); letter-spacing: -0.5px; }
 .shell-login-logo p { font-size: 14px; color: var(--shell-text-muted); margin-top: 4px; }
 .shell-login-card .form-group { margin-bottom: 20px; }
 .shell-login-card .form-label { display: block; font-size: 13px; font-weight: 600; color: var(--shell-text-muted); margin-bottom: 6px; }
@@ -59,15 +62,113 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
 }
 .shell-btn-login:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(59,130,246,0.3); }
-.shell-quick-logins { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--shell-border); }
-.shell-quick-logins p { font-size: 12px; color: var(--shell-text-muted); text-align: center; margin-bottom: 12px; }
-.shell-quick-logins .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .shell-quick-btn {
   padding: 8px 12px; background: var(--shell-bg); border: 1px solid var(--shell-border);
   border-radius: 8px; color: var(--shell-text-muted); font-size: 12px; font-weight: 600;
   cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 6px;
 }
 .shell-quick-btn:hover { border-color: var(--shell-accent); color: var(--shell-text); background: rgba(59,130,246,0.1); }
+
+/* --- User Picker Grid --- */
+.pin-user-search-wrap {
+  position: relative; margin-bottom: 16px;
+}
+.pin-user-search {
+  width: 100%; padding: 10px 14px 10px 36px; background: var(--shell-bg); border: 1px solid var(--shell-border);
+  border-radius: 10px; color: var(--shell-text); font-size: 14px; outline: none; transition: border-color 0.2s;
+}
+.pin-user-search:focus { border-color: var(--shell-accent); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+.pin-user-search::placeholder { color: #475569; }
+.pin-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #475569; font-size: 14px; pointer-events: none; }
+
+.pin-user-grid {
+  max-height: 400px; overflow-y: auto; padding-right: 4px;
+  scrollbar-width: thin; scrollbar-color: var(--shell-border) transparent;
+}
+.pin-user-grid::-webkit-scrollbar { width: 6px; }
+.pin-user-grid::-webkit-scrollbar-thumb { background: var(--shell-border); border-radius: 3px; }
+
+.pin-dept-label {
+  font-size: 11px; font-weight: 700; color: var(--shell-text-muted); text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 12px 4px 6px; display: flex; align-items: center; gap: 6px;
+  border-bottom: 1px solid rgba(71,85,105,0.3); margin-bottom: 6px;
+}
+.pin-dept-label:first-child { padding-top: 0; }
+
+.pin-user-btn {
+  width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+  background: transparent; border: 1px solid transparent; border-radius: 10px;
+  cursor: pointer; transition: all 0.15s; text-align: left;
+}
+.pin-user-btn:hover { background: rgba(59,130,246,0.08); border-color: rgba(59,130,246,0.3); }
+.pin-user-btn:active { background: rgba(59,130,246,0.15); transform: scale(0.98); }
+
+.pin-user-avatar {
+  width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+  color: white; font-weight: 700; font-size: 14px; flex-shrink: 0;
+}
+.pin-user-info { flex: 1; min-width: 0; }
+.pin-user-name { font-size: 14px; font-weight: 600; color: var(--shell-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-user-role { font-size: 11px; color: var(--shell-text-muted); margin-top: 1px; }
+
+/* --- PIN Pad --- */
+.pin-pad-container { text-align: center; }
+.pin-back-btn {
+  background: none; border: none; color: var(--shell-text-muted); font-size: 13px; font-weight: 600;
+  cursor: pointer; padding: 4px 8px; border-radius: 6px; transition: all 0.15s; margin-bottom: 16px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.pin-back-btn:hover { color: var(--shell-text); background: rgba(255,255,255,0.05); }
+
+.pin-selected-user { margin-bottom: 20px; }
+.pin-user-avatar-lg {
+  width: 64px; height: 64px; border-radius: 16px; display: inline-flex; align-items: center; justify-content: center;
+  color: white; font-weight: 800; font-size: 22px; margin-bottom: 10px;
+}
+.pin-selected-name { font-size: 20px; font-weight: 700; color: var(--shell-text); }
+.pin-selected-role { font-size: 13px; color: var(--shell-text-muted); margin-top: 2px; }
+
+.pin-prompt { font-size: 14px; color: var(--shell-text-muted); margin-bottom: 16px; }
+
+.pin-dots {
+  display: flex; justify-content: center; gap: 14px; margin-bottom: 8px;
+}
+.pin-dot {
+  width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--shell-border);
+  transition: all 0.15s;
+}
+.pin-dot.filled {
+  background: var(--shell-accent); border-color: var(--shell-accent);
+  box-shadow: 0 0 8px rgba(59,130,246,0.4);
+}
+.pin-dots.shake {
+  animation: pinShake 0.4s ease-in-out;
+}
+@keyframes pinShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-6px); }
+  80% { transform: translateX(6px); }
+}
+
+.pin-error {
+  color: #EF4444; font-size: 13px; font-weight: 600; min-height: 20px; margin-bottom: 8px;
+}
+
+.pin-keypad {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+  max-width: 260px; margin: 0 auto;
+}
+.pin-key {
+  width: 100%; aspect-ratio: 1.3; border-radius: 14px; border: 1px solid var(--shell-border);
+  background: rgba(15,23,42,0.6); color: var(--shell-text); font-size: 22px; font-weight: 600;
+  cursor: pointer; transition: all 0.12s; display: flex; align-items: center; justify-content: center;
+}
+.pin-key:hover { background: rgba(59,130,246,0.15); border-color: var(--shell-accent); }
+.pin-key:active { transform: scale(0.92); background: rgba(59,130,246,0.25); }
+.pin-key:disabled { opacity: 0.4; cursor: not-allowed; }
+.pin-key.pin-key-fn { font-size: 18px; color: var(--shell-text-muted); }
 
 /* ==================== MODULE PICKER (HOME) ==================== */
 .shell-home {
@@ -219,11 +320,14 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 /* ==================== RESPONSIVE ==================== */
 @media (max-width: 768px) {
   /* --- Login --- */
-  .shell-login-card { padding: 28px 20px; width: 100%; max-width: 100vw; border-radius: 0; min-height: 100vh; display: flex; flex-direction: column; justify-content: center; }
-  .shell-login-logo h1 { font-size: 24px; }
-  .shell-login-logo i { font-size: 40px; }
+  .shell-login-card, .shell-login-card.shell-login-wide { padding: 24px 16px; width: 100%; max-width: 100vw; border-radius: 0; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; justify-content: flex-start; padding-top: calc(24px + var(--sat)); }
+  .shell-login-logo { margin-bottom: 16px; }
+  .shell-login-logo h1 { font-size: 22px; }
+  .shell-login-logo i { font-size: 36px; }
   .shell-btn-login { padding: 16px; font-size: 16px; }
-  .shell-quick-logins .grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .pin-user-grid { max-height: calc(100dvh - 220px); }
+  .pin-keypad { max-width: 240px; gap: 8px; }
+  .pin-key { font-size: 20px; border-radius: 12px; }
 
   /* --- Home (module picker) --- */
   .shell-home { min-height: 100vh; min-height: 100dvh; }
@@ -265,8 +369,9 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   .shell-home-grid { padding: 12px; gap: 10px; }
   .shell-module-card { padding: 16px 14px; }
   .shell-module-icon { width: 38px; height: 38px; font-size: 17px; margin-bottom: 12px; }
-  .shell-login-card { padding: 24px 16px; }
-  .shell-quick-logins .grid { grid-template-columns: 1fr; }
+  .shell-login-card, .shell-login-card.shell-login-wide { padding: 20px 12px; padding-top: calc(20px + var(--sat)); }
+  .pin-user-grid { max-height: calc(100dvh - 200px); }
+  .pin-keypad { max-width: 220px; }
 }
 
 /* ==================== NOTIFICATION BELL ==================== */
