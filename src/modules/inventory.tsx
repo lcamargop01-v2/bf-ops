@@ -874,6 +874,58 @@ app.put('/api/inventory/batches/:id', async (c) => {
   return c.json({ success: true })
 })
 
+// Delete a batch
+app.delete('/api/inventory/batches/:id', async (c) => {
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const { adjust_stock } = c.req.query()
+
+  const batch = await db.prepare('SELECT * FROM inventory_batches WHERE id = ?').bind(id).first() as any
+  if (!batch) return c.json({ error: 'Batch not found' }, 404)
+
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+
+  // Delete any batch images first
+  await db.prepare('DELETE FROM batch_images WHERE batch_id = ?').bind(id).run()
+
+  // Delete the batch
+  await db.prepare('DELETE FROM inventory_batches WHERE id = ?').bind(id).run()
+
+  // Optionally adjust stock (subtract batch qty from on-hand)
+  // If batch was created with track_only, don't adjust stock on delete either
+  const stock = await db.prepare('SELECT qty_on_hand FROM inventory_stock WHERE product_id = ? AND location_id = ?')
+    .bind(batch.product_id, batch.location_id).first() as any
+  const oldQty = stock?.qty_on_hand || 0
+
+  if (adjust_stock === '1') {
+    const newQty = Math.max(0, oldQty - batch.qty)
+    await db.prepare('UPDATE inventory_stock SET qty_on_hand = ?, updated_at = datetime("now") WHERE product_id = ? AND location_id = ?')
+      .bind(newQty, batch.product_id, batch.location_id).run()
+
+    await auditLog(db, {
+      product_id: batch.product_id, location_id: batch.location_id,
+      action: 'batch_deleted', qty_change: -(batch.qty),
+      qty_before: oldQty, qty_after: newQty,
+      reason: `Batch ${batch.batch_number} deleted (${batch.qty} ${batch.condition}) — stock adjusted`,
+      batch_id: id,
+      user_id: user.id, user_name: userInfo?.name || user.email
+    })
+  } else {
+    await auditLog(db, {
+      product_id: batch.product_id, location_id: batch.location_id,
+      action: 'batch_deleted', qty_change: 0,
+      qty_before: oldQty, qty_after: oldQty,
+      reason: `Batch ${batch.batch_number} deleted (${batch.qty} ${batch.condition}) — tracking removed`,
+      batch_id: id,
+      user_id: user.id, user_name: userInfo?.name || user.email
+    })
+  }
+
+  return c.json({ success: true })
+})
+
 // ==================== HOLDS ====================
 
 app.get('/api/inventory/holds', async (c) => {
@@ -1492,7 +1544,7 @@ app.post('/api/inventory/products/recategorize-apply', async (c) => {
   const body = await c.req.json()
   // overrides: { [product_id]: category } — user can override specific products
   const overrides: Record<number, string> = body.overrides || {}
-  const validCategories = ['hay', 'shavings', 'shelf_goods']
+  const validCategories = ['hay', 'shavings', 'shelf_goods', 'grain']
 
   // Fetch all products
   const allProducts: any[] = []
@@ -1714,7 +1766,7 @@ app.delete('/api/inventory/products/:id/vendors/:vendorId', async (c) => {
 
 // ==================== CATEGORY CONSOLIDATION HELPER ====================
 
-// Classify a product into 3 consolidated categories: hay, shavings, shelf_goods
+// Classify a product into 4 consolidated categories: hay, shavings, grain, shelf_goods
 function classifyProduct(name: string, currentCategory: string): { category: string, subcategory: string } {
   const n = (name || '').toLowerCase()
   const cat = (currentCategory || '').toLowerCase()
@@ -1741,10 +1793,8 @@ function classifyProduct(name: string, currentCategory: string): { category: str
     for (const kw of shavingsKeywords) { if (n.includes(kw)) return result('shavings', 'bedding') }
   }
 
-  // === Everything below is shelf_goods with a subcategory ===
-
-  // --- FEED ---
-  const feedKeywords = ['feed', 'grain', ' oat', 'oats ', 'beet pulp', ' mash', 'mash ',
+  // --- GRAIN / FEED (now its own top-level category) ---
+  const grainKeywords = ['feed', 'grain', ' oat', 'oats ', 'beet pulp', ' mash', 'mash ',
     'cavalor', 'buckeye', 'nutrena', 'purina', 'tribute', 'calf-manna', 'sweet feed',
     'pelleted feed', 'complete feed', 'equine senior', 'horse feed', 'ration balancer',
     'mineral block', 'salt block', 'salt lick', 'omolene', 'ultium', 'safechoice',
@@ -1752,8 +1802,10 @@ function classifyProduct(name: string, currentCategory: string): { category: str
   const feedAccessory = (n.includes('feed') && /\b(scoop|bucket|pan|tub|bin)\b/.test(n))
     || /\b(corner\s*feeder|hook\s*over\s*feeder|hang\s*feeder|greedy\s*feeder|slow\s*feed\s*net)\b/.test(n)
   if (!feedAccessory) {
-    for (const kw of feedKeywords) { if (n.includes(kw)) return result('shelf_goods', 'feed') }
+    for (const kw of grainKeywords) { if (n.includes(kw)) return result('grain', 'feed') }
   }
+
+  // === Everything below is shelf_goods with a subcategory ===
 
   // --- SUPPLEMENT ---
   if (/\b(supplement|electrolyte|probiotic|vitamin|mineral mix|joint|glucosamine|msm|omega|biotin|amino|digest|gut health)\b/.test(n)) return result('shelf_goods', 'supplement')

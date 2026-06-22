@@ -170,6 +170,28 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .pin-key:disabled { opacity: 0.4; cursor: not-allowed; }
 .pin-key.pin-key-fn { font-size: 18px; color: var(--shell-text-muted); }
 
+/* PIN lockout */
+.pin-lockout {
+  text-align: center; padding: 24px 0;
+}
+.pin-lockout-icon {
+  width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 16px;
+  background: rgba(239,68,68,0.15); display: flex; align-items: center; justify-content: center;
+}
+.pin-lockout-icon i { font-size: 28px; color: #EF4444; }
+.pin-lockout-title { font-size: 20px; font-weight: 700; color: #EF4444; margin-bottom: 4px; }
+.pin-lockout-msg { font-size: 13px; color: var(--shell-text-muted); margin-bottom: 16px; }
+.pin-lockout-timer {
+  font-size: 36px; font-weight: 700; color: var(--shell-text); font-variant-numeric: tabular-nums;
+  margin-bottom: 20px;
+}
+.pin-lockout-back {
+  background: none; border: 1px solid var(--shell-border); color: var(--shell-text-muted);
+  padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;
+  transition: all 0.15s;
+}
+.pin-lockout-back:hover { color: var(--shell-text); border-color: var(--shell-text-muted); }
+
 /* ==================== MODULE PICKER (HOME) ==================== */
 .shell-home {
   height: 100vh; height: 100dvh; background: linear-gradient(180deg, #0F172A 0%, #1E293B 100%);

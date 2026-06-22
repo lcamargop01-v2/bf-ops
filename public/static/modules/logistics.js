@@ -3219,7 +3219,7 @@ async function showNewOrderModal() {
               <select class="form-select" id="inlineNewProdUnit"><option value="bag">Bag</option><option value="bale">Bale</option><option value="pail">Pail</option><option value="block">Block</option><option value="each">Each</option></select>
             </div>
             <div class="form-group"><label class="form-label" style="font-size:11px">Category</label>
-              <select class="form-select" id="inlineNewProdCat"><option value="hay">Hay</option><option value="shavings">Shavings</option><option value="shelf_goods">Shelf Goods</option></select>
+              <select class="form-select" id="inlineNewProdCat"><option value="hay">Hay</option><option value="shavings">Shavings</option><option value="grain">Grain</option><option value="shelf_goods">Shelf Goods</option></select>
             </div>
           </div>
           <div class="form-row">
@@ -8044,7 +8044,7 @@ async function showEditProductModal(id) {
         <div class="form-group"><label class="form-label">SKU</label><input class="form-input" id="editProdSku" value="${p.sku||''}"></div></div>
       <div class="form-row-3">
         <div class="form-group"><label class="form-label">Category</label>
-          <select class="form-select" id="editProdCat">${['hay','shavings','shelf_goods'].map(c=>`<option value="${c}" ${p.category===c?'selected':''}>${c.replace(/_/g,' ')}</option>`).join('')}</select>
+          <select class="form-select" id="editProdCat">${['hay','shavings','grain','shelf_goods'].map(c=>`<option value="${c}" ${p.category===c?'selected':''}>${c.replace(/_/g,' ')}</option>`).join('')}</select>
         </div>
         <div class="form-group"><label class="form-label">Weight/Unit (lbs)</label><input class="form-input" type="number" id="editProdWeight" value="${p.weight_per_unit}"></div>
         <div class="form-group"><label class="form-label">Unit Type</label><input class="form-input" id="editProdUnit" value="${p.unit_type||'bag'}"></div>
@@ -8462,13 +8462,13 @@ async function renderProducts() {
   pc.innerHTML = '<div style="text-align:center;padding:60px"><i class="fas fa-spinner fa-spin fa-2x" style="color:#9ca3af"></i></div>';
   const showArchived = _archiveToggles.products || false;
   const { data } = await API.get('/products' + (showArchived ? '?include_archived=1' : ''));
-  const catIcons = { hay: 'fa-seedling', shavings: 'fa-tree', shelf_goods: 'fa-box' };
+  const catIcons = { hay: 'fa-seedling', shavings: 'fa-tree', grain: 'fa-wheat-awn', shelf_goods: 'fa-box' };
   pc.innerHTML = `
     <div class="filters-bar no-print">
       <div class="search-bar" style="flex:1;max-width:320px"><i class="fas fa-search"></i><input class="form-input" placeholder="Search products..." id="prodSearch" onkeyup="filterProducts()"></div>
       <select class="form-select" style="width:160px" id="prodCatFilter" onchange="filterProducts()">
         <option value="">All Categories</option><option value="hay">Hay</option><option value="shavings">Shavings</option>
-        <option value="shelf_goods">Shelf Goods</option>
+        <option value="grain">Grain</option><option value="shelf_goods">Shelf Goods</option>
       </select>
       ${archiveToggleBtn(showArchived, "toggleArchive('products','renderProducts')")}
       <button class="btn btn-primary" onclick="showNewProductModal()"><i class="fas fa-plus"></i> New Product</button>
@@ -8511,7 +8511,7 @@ async function filterProducts() {
   if (category) params.set('category', category);
   if (showArchived) params.set('include_archived', '1');
   const { data } = await API.get(`/products?${params}`);
-  const catIcons = { hay: 'fa-seedling', shavings: 'fa-tree', shelf_goods: 'fa-box' };
+  const catIcons = { hay: 'fa-seedling', shavings: 'fa-tree', grain: 'fa-wheat-awn', shelf_goods: 'fa-box' };
   document.getElementById('productsTableBody').innerHTML = data.products.map(p => {
     const stockStatus = p.stock_quantity <= 0 ? 'out' : p.stock_quantity < 20 ? 'low' : 'ok';
     const stockBadge = stockStatus === 'out' ? '<span class="badge badge-cancelled">Out of Stock</span>' : stockStatus === 'low' ? '<span class="badge badge-urgent">Low Stock</span>' : '<span class="badge badge-confirmed">In Stock</span>';
@@ -8536,7 +8536,7 @@ async function showNewProductModal() {
         <div class="form-group"><label class="form-label">SKU</label><input class="form-input" id="newProdSku"></div></div>
       <div class="form-row-3">
         <div class="form-group"><label class="form-label">Category</label>
-          <select class="form-select" id="newProdCat"><option value="hay">Hay</option><option value="shavings">Shavings</option><option value="shelf_goods">Shelf Goods</option></select>
+          <select class="form-select" id="newProdCat"><option value="hay">Hay</option><option value="shavings">Shavings</option><option value="grain">Grain</option><option value="shelf_goods">Shelf Goods</option></select>
         </div>
         <div class="form-group"><label class="form-label">Weight/Unit (lbs)</label><input class="form-input" type="number" id="newProdWeight" value="50"></div>
         <div class="form-group"><label class="form-label">Unit Type</label><input class="form-input" id="newProdUnit" value="bag"></div>
@@ -15281,9 +15281,10 @@ function whShowThresholdManager() {
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 
   const zones = [
-    { key:'shelf_goods', label:'Shelf Goods', icon:'fa-boxes-stacked', color:'#2563EB' },
+    { key:'shelf_goods', label:'Shelf Goods', icon:'fa-boxes-stacked', color:'#7C3AED' },
     { key:'hay', label:'Hay', icon:'fa-wheat-awn', color:'#CA8A04' },
-    { key:'shavings', label:'Shavings', icon:'fa-leaf', color:'#059669' }
+    { key:'shavings', label:'Shavings', icon:'fa-leaf', color:'#059669' },
+    { key:'grain', label:'Grain', icon:'fa-seedling', color:'#2563EB' }
   ];
   const prods = (whData.products || []).filter(p => p.low_stock_threshold > 0 || p.reorder_point > 0);
 

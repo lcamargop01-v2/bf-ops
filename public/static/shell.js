@@ -411,6 +411,7 @@ function _renderPinPad() {
 }
 
 function _pinGoBack() {
+  if (_pinLockoutTimer) { clearInterval(_pinLockoutTimer); _pinLockoutTimer = null; }
   _selectedLoginUser = null;
   _pinDigits = '';
   _renderUserPicker();
@@ -477,8 +478,18 @@ async function doPinLogin() {
       renderHome();
     }
   } catch(err) {
-    var msg = (err.response && err.response.data && err.response.data.error) || 'Incorrect PIN';
+    var resp = err.response && err.response.data;
+    var msg = (resp && resp.error) || 'Incorrect PIN';
     var errEl = document.getElementById('pinError');
+
+    // Handle lockout (429)
+    if (resp && resp.locked) {
+      _pinDigits = '';
+      var secs = resp.retry_after || 300;
+      _showPinLockout(secs);
+      return;
+    }
+
     if (errEl) errEl.textContent = msg;
     _pinDigits = '';
     // Reset dots
@@ -494,6 +505,63 @@ async function doPinLogin() {
     // Re-enable keys
     keys.forEach(function(k) { k.disabled = false; });
   }
+}
+
+// ==================== PIN LOCKOUT DISPLAY ====================
+var _pinLockoutTimer = null;
+
+function _showPinLockout(seconds) {
+  // Clear any prior timer
+  if (_pinLockoutTimer) { clearInterval(_pinLockoutTimer); _pinLockoutTimer = null; }
+
+  var remaining = seconds;
+  var padCon = document.querySelector('.pin-pad-container');
+  if (!padCon) return;
+
+  // Replace keypad area with lockout message
+  var keypadEl = padCon.querySelector('.pin-keypad');
+  var dotsEl = document.getElementById('pinDots');
+  var errEl = document.getElementById('pinError');
+  if (dotsEl) dotsEl.style.display = 'none';
+  if (errEl) errEl.style.display = 'none';
+
+  // Create lockout overlay
+  var lockEl = document.createElement('div');
+  lockEl.id = 'pinLockout';
+  lockEl.className = 'pin-lockout';
+  lockEl.innerHTML = '<div class="pin-lockout-icon"><i class="fas fa-lock"></i></div>' +
+    '<div class="pin-lockout-title">Account Locked</div>' +
+    '<div class="pin-lockout-msg">Too many failed attempts</div>' +
+    '<div class="pin-lockout-timer" id="pinLockoutTimer">' + _fmtLockTime(remaining) + '</div>' +
+    '<button class="pin-lockout-back" onclick="_pinGoBack()"><i class="fas fa-arrow-left"></i> Try Different User</button>';
+  if (keypadEl) keypadEl.style.display = 'none';
+  padCon.appendChild(lockEl);
+
+  _pinLockoutTimer = setInterval(function() {
+    remaining--;
+    var timerEl = document.getElementById('pinLockoutTimer');
+    if (remaining <= 0) {
+      clearInterval(_pinLockoutTimer);
+      _pinLockoutTimer = null;
+      // Remove lockout and restore keypad
+      var lo = document.getElementById('pinLockout');
+      if (lo) lo.remove();
+      if (keypadEl) keypadEl.style.display = '';
+      if (dotsEl) { dotsEl.style.display = ''; dotsEl.innerHTML = '<div class="pin-dot"></div>'.repeat(4); }
+      if (errEl) { errEl.style.display = ''; errEl.textContent = ''; }
+      _pinDigits = '';
+      var keys = document.querySelectorAll('.pin-key');
+      keys.forEach(function(k) { k.disabled = false; });
+    } else if (timerEl) {
+      timerEl.textContent = _fmtLockTime(remaining);
+    }
+  }, 1000);
+}
+
+function _fmtLockTime(s) {
+  var m = Math.floor(s / 60);
+  var sec = s % 60;
+  return (m > 0 ? m + ':' : '0:') + (sec < 10 ? '0' : '') + sec;
 }
 
 // ==================== ADMIN PASSWORD GATE ====================

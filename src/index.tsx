@@ -53,6 +53,11 @@ app.get('/api/auth/users-list', async (c) => {
   return c.json({ users: users.results || [] })
 })
 
+// Rate limiting for PIN attempts — in-memory tracker (resets on isolate recycle)
+const pinAttempts: Record<number, { count: number, lockedUntil: number }> = {}
+const PIN_MAX_ATTEMPTS = 5
+const PIN_LOCKOUT_MS = 5 * 60 * 1000  // 5 minutes
+
 // PIN-based login — select user by id, authenticate with 4-digit PIN
 app.post('/api/auth/pin-login', async (c) => {
   const { user_id, pin } = await c.req.json()
@@ -60,12 +65,41 @@ app.post('/api/auth/pin-login', async (c) => {
 
   if (!user_id || !pin) return c.json({ error: 'User and PIN are required' }, 400)
 
-  const user = await db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').bind(user_id).first() as any
+  const uid = parseInt(user_id)
+
+  // Check rate limit
+  const attempt = pinAttempts[uid]
+  if (attempt) {
+    if (attempt.lockedUntil > Date.now()) {
+      const remainSec = Math.ceil((attempt.lockedUntil - Date.now()) / 1000)
+      return c.json({ error: `Too many attempts. Try again in ${remainSec}s.`, locked: true, retry_after: remainSec }, 429)
+    }
+    // Reset if lockout expired
+    if (attempt.lockedUntil > 0 && attempt.lockedUntil <= Date.now()) {
+      attempt.count = 0
+      attempt.lockedUntil = 0
+    }
+  }
+
+  const user = await db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').bind(uid).first() as any
   if (!user) return c.json({ error: 'User not found' }, 401)
 
   // Check PIN (stored as plaintext 4-digit code)
   if (!user.pin) return c.json({ error: 'PIN not set for this user. Contact admin.' }, 401)
-  if (user.pin !== String(pin)) return c.json({ error: 'Incorrect PIN' }, 401)
+  if (user.pin !== String(pin)) {
+    // Track failed attempt
+    if (!pinAttempts[uid]) pinAttempts[uid] = { count: 0, lockedUntil: 0 }
+    pinAttempts[uid].count++
+    const remaining = PIN_MAX_ATTEMPTS - pinAttempts[uid].count
+    if (remaining <= 0) {
+      pinAttempts[uid].lockedUntil = Date.now() + PIN_LOCKOUT_MS
+      return c.json({ error: 'Too many failed attempts. Locked for 5 minutes.', locked: true, retry_after: 300 }, 429)
+    }
+    return c.json({ error: 'Incorrect PIN' + (remaining <= 2 ? ` (${remaining} attempt${remaining === 1 ? '' : 's'} remaining)` : '') }, 401)
+  }
+
+  // Successful login — clear attempts
+  delete pinAttempts[uid]
 
   // Get module access for this user
   let modules: string[] = []

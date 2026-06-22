@@ -18,7 +18,7 @@ var invCountCategory = ''; // Quick Count category filter
 var invCountSort = 'name'; // Quick Count sort: name, category, sku, qty, last_counted
 var invRecatData = null; // Recategorize preview data
 var invRecatOverrides = {}; // User overrides { product_id: category }
-var invRecatFilter = ''; // Filter: '', 'changed', 'hay', 'shavings', 'shelf_goods'
+var invRecatFilter = ''; // Filter: '', 'changed', 'hay', 'shavings', 'grain', 'shelf_goods'
 var invRecatSearch = '';
 var invSuppliersList = []; // Cached suppliers for vendor picker
 var invBatchSummaryMap = {}; // batch summary per product_id for count page
@@ -89,7 +89,7 @@ async function invLoadCategories() {
     var resp = await invAPI.get('/api/inventory/products/categories', { headers: invHeaders() });
     invCategoryList = resp.data.categories || [];
   } catch(e) {
-    invCategoryList = ['hay','shavings','shelf_goods'];
+    invCategoryList = ['hay','shavings','grain','shelf_goods'];
   }
 }
 
@@ -594,6 +594,7 @@ function invRenderQuickCount() {
       '<select id="invCntEditCat_' + idx + '" class="inv-select" data-original="' + escH(s.category || 'shelf_goods') + '" data-pid="' + s.product_id + '" onchange="invCountCatChanged(' + idx + ')">' +
       '<option value="hay"' + (s.category === 'hay' ? ' selected' : '') + '>Hay</option>' +
       '<option value="shavings"' + (s.category === 'shavings' ? ' selected' : '') + '>Shavings</option>' +
+      '<option value="grain"' + (s.category === 'grain' ? ' selected' : '') + '>Grain</option>' +
       '<option value="shelf_goods"' + (s.category === 'shelf_goods' || !s.category ? ' selected' : '') + '>Shelf Goods</option>' +
       '</select></div>' +
       '<div class="inv-count-edit-field"><label>Subcategory</label>' +
@@ -695,7 +696,8 @@ function invSubcatOptionsFor(category) {
   var allSubs = {
     hay: ['hay'],
     shavings: ['bedding'],
-    shelf_goods: ['feed','supplement','dewormer','fly_control','grooming','hoof_care','first_aid',
+    grain: ['feed','supplement'],
+    shelf_goods: ['dewormer','fly_control','grooming','hoof_care','first_aid',
       'tack','blankets','treats','barn_equipment','fencing','riding_apparel','pet_supplies',
       'cleaning','poultry','farm_supplies','tools','gift','general']
   };
@@ -804,6 +806,7 @@ async function invCountViewBatches(productId) {
           (b.notes ? '<div style="font-size:12px;color:#64748B;margin-top:2px">' + escH(b.notes) + '</div>' : '') +
           '</div>' +
           '<div style="text-align:center;min-width:50px"><div style="font-size:22px;font-weight:800;color:#1E293B;line-height:1">' + b.qty + '</div><div style="font-size:10px;color:#94A3B8;text-transform:uppercase">' + escH(b.unit_type || 'units') + '</div></div>' +
+          '<button onclick="invDeleteBatch(' + b.id + ',' + productId + ')" style="background:none;border:none;color:#CBD5E1;cursor:pointer;padding:4px 6px;font-size:14px;border-radius:6px;transition:all 0.15s" onmouseover="this.style.color=\'#DC2626\';this.style.background=\'#FEE2E2\'" onmouseout="this.style.color=\'#CBD5E1\';this.style.background=\'none\'" title="Delete batch"><i class="fas fa-trash"></i></button>' +
           '</div>';
       });
       body += '</div>';
@@ -903,6 +906,22 @@ async function invBatchAllQuick(productId, locationId, totalQty) {
   } catch(e) { invToast('Batch failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 window.invBatchAllQuick = invBatchAllQuick;
+
+async function invDeleteBatch(batchId, productId) {
+  if (!confirm('Delete this batch? (Stock quantities will not change — only the batch record is removed)')) return;
+  try {
+    await invAPI.delete('/api/inventory/batches/' + batchId, { headers: invHeaders() });
+    invToast('Batch deleted');
+    // Refresh batch summary cache
+    try {
+      var bsResp = await invAPI.get('/api/inventory/batch-summary?location_id=' + invSelectedLocation, { headers: invHeaders() });
+      invBatchSummaryMap = bsResp.data.summary || {};
+    } catch(e) {}
+    // Re-open modal to show updated list
+    invCountViewBatches(productId);
+  } catch(e) { invToast('Delete failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.invDeleteBatch = invDeleteBatch;
 
 function invCountRequestDelete(productId, productName) {
   var reasons = [
@@ -1311,7 +1330,7 @@ async function invRenderCategoriesPage() {
   var filtered = products;
   if (invRecatFilter === 'changed') {
     filtered = products.filter(function(p) { return p.changed || invRecatOverrides[p.id]; });
-  } else if (['hay', 'shavings', 'shelf_goods'].indexOf(invRecatFilter) >= 0) {
+  } else if (['hay', 'shavings', 'grain', 'shelf_goods'].indexOf(invRecatFilter) >= 0) {
     filtered = products.filter(function(p) {
       var eff = invRecatOverrides[p.id] || p.suggested_category;
       return eff === invRecatFilter;
@@ -1337,6 +1356,7 @@ async function invRenderCategoriesPage() {
   var cats = [
     { key: 'hay', icon: 'fa-wheat-awn', color: '#059669', label: 'Hay' },
     { key: 'shavings', icon: 'fa-tree', color: '#D97706', label: 'Shavings' },
+    { key: 'grain', icon: 'fa-seedling', color: '#2563EB', label: 'Grain' },
     { key: 'shelf_goods', icon: 'fa-store', color: '#7C3AED', label: 'Shelf Goods' }
   ];
   cats.forEach(function(cat) {
@@ -1368,6 +1388,7 @@ async function invRenderCategoriesPage() {
     { val: 'changed', label: 'Changed Only (' + summary.changed + ')' },
     { val: 'hay', label: 'Hay (' + (byS.hay || 0) + ')' },
     { val: 'shavings', label: 'Shavings (' + (byS.shavings || 0) + ')' },
+    { val: 'grain', label: 'Grain (' + (byS.grain || 0) + ')' },
     { val: 'shelf_goods', label: 'Shelf Goods (' + (byS.shelf_goods || 0) + ')' }
   ];
   html += '<select class="inv-select" onchange="invRecatFilter=this.value;invRenderCatPage()">';
@@ -1405,6 +1426,7 @@ async function invRenderCategoriesPage() {
       '<option value=""' + (!hasOverride ? ' selected' : '') + '>AI: ' + invCatLabel(p.suggested_category) + '</option>' +
       '<option value="hay"' + (invRecatOverrides[p.id] === 'hay' ? ' selected' : '') + '>Hay</option>' +
       '<option value="shavings"' + (invRecatOverrides[p.id] === 'shavings' ? ' selected' : '') + '>Shavings</option>' +
+      '<option value="grain"' + (invRecatOverrides[p.id] === 'grain' ? ' selected' : '') + '>Grain</option>' +
       '<option value="shelf_goods"' + (invRecatOverrides[p.id] === 'shelf_goods' ? ' selected' : '') + '>Shelf Goods</option>' +
       '</select></td></tr>';
   });
@@ -1420,7 +1442,7 @@ async function invRenderCategoriesPage() {
 }
 
 function invCatLabel(cat) {
-  var labels = { hay: 'Hay', shavings: 'Shavings', shelf_goods: 'Shelf Goods' };
+  var labels = { hay: 'Hay', shavings: 'Shavings', grain: 'Grain', shelf_goods: 'Shelf Goods' };
   return labels[cat] || (cat || 'shelf_goods').replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
 }
 
