@@ -776,51 +776,94 @@ async function invCountViewBatches(productId) {
     var batchedQty = batches.reduce(function(s, b) { return s + (b.qty || 0); }, 0);
     var unbatched = totalOnHand - batchedQty;
 
-    var body = '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;padding:12px;margin-bottom:16px">' +
-      '<div style="font-weight:600;color:#1E40AF;margin-bottom:4px"><i class="fas fa-layer-group"></i> ' + escH(pName) + '</div>' +
-      '<div style="display:flex;gap:16px;font-size:13px;flex-wrap:wrap">' +
-      '<span><strong>' + totalOnHand + '</strong> total on hand</span>' +
-      '<span><strong>' + batchedQty + '</strong> in batches</span>' +
-      (unbatched > 0 ? '<span style="color:#D97706"><strong>' + unbatched + '</strong> unbatched</span>' : '<span style="color:#059669"><i class="fas fa-check"></i> All batched</span>') +
+    // Summary bar
+    var allOk = unbatched <= 0 && totalOnHand > 0;
+    var summaryColor = allOk ? '#F0FDF4' : '#EFF6FF';
+    var summaryBorder = allOk ? '#BBF7D0' : '#BFDBFE';
+    var body = '<div style="background:' + summaryColor + ';border:1px solid ' + summaryBorder + ';border-radius:10px;padding:14px;margin-bottom:16px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">' +
+      '<div style="font-weight:700;font-size:15px;color:#1E293B"><i class="fas fa-boxes-stacked" style="color:#3B82F6"></i> ' + escH(pName) + '</div>' +
+      '<div style="font-size:24px;font-weight:800;color:#1E293B">' + totalOnHand + ' <span style="font-size:13px;font-weight:500;color:#64748B">total</span></div>' +
+      '</div>' +
+      '<div style="display:flex;gap:12px;margin-top:10px;font-size:13px;flex-wrap:wrap">' +
+      '<span style="background:white;padding:4px 10px;border-radius:6px;border:1px solid #E2E8F0"><i class="fas fa-layer-group" style="color:#3B82F6"></i> <strong>' + batchedQty + '</strong> batched</span>' +
+      (unbatched > 0 ? '<span style="background:#FEF3C7;padding:4px 10px;border-radius:6px;border:1px solid #FDE68A;color:#92400E"><i class="fas fa-exclamation-triangle"></i> <strong>' + unbatched + '</strong> unbatched</span>'
+        : '<span style="background:#DCFCE7;padding:4px 10px;border-radius:6px;border:1px solid #BBF7D0;color:#166534"><i class="fas fa-check-circle"></i> All batched</span>') +
       '</div></div>';
 
-    // Existing batches
+    // Existing batches as editable cards
     if (batches.length > 0) {
-      body += '<h4 style="margin-bottom:8px"><i class="fas fa-layer-group"></i> Existing Batches</h4>';
-      body += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">';
-      batches.forEach(function(b) {
-        var condClass = b.condition === 'good' ? '#059669' : b.condition === 'fair' ? '#D97706' : '#DC2626';
-        body += '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:white;border:1px solid #E2E8F0;border-radius:8px;border-left:3px solid ' + condClass + '">' +
-          '<div style="flex:1"><strong style="font-size:13px">' + escH(b.batch_number) + '</strong>' +
-          '<div style="font-size:12px;color:#64748B">' + escH(b.condition) + (b.notes ? ' · ' + escH(b.notes) : '') + '</div></div>' +
-          '<div style="text-align:right"><strong style="font-size:16px">' + b.qty + '</strong><div style="font-size:11px;color:#64748B">' + escH(b.unit_type || 'units') + '</div></div></div>';
+      body += '<div style="margin-bottom:12px">';
+      batches.forEach(function(b, i) {
+        var condColors = { good: '#059669', fair: '#D97706', poor: '#EA580C', damaged: '#DC2626' };
+        var cc = condColors[b.condition] || '#64748B';
+        body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:white;border:1px solid #E2E8F0;border-radius:10px;border-left:4px solid ' + cc + ';margin-bottom:6px">' +
+          '<div style="flex:1;min-width:0">' +
+          '<div style="display:flex;align-items:center;gap:6px"><strong style="font-size:14px">' + escH(b.batch_number) + '</strong>' +
+          '<span style="font-size:11px;background:' + cc + '22;color:' + cc + ';padding:2px 8px;border-radius:12px;font-weight:600">' + escH(b.condition) + '</span></div>' +
+          (b.notes ? '<div style="font-size:12px;color:#64748B;margin-top:2px">' + escH(b.notes) + '</div>' : '') +
+          '</div>' +
+          '<div style="text-align:center;min-width:50px"><div style="font-size:22px;font-weight:800;color:#1E293B;line-height:1">' + b.qty + '</div><div style="font-size:10px;color:#94A3B8;text-transform:uppercase">' + escH(b.unit_type || 'units') + '</div></div>' +
+          '</div>';
       });
       body += '</div>';
     }
 
-    // Quick add batch form (inline, no navigation)
-    if (unbatched > 0 || batches.length === 0) {
-      body += '<h4 style="margin-bottom:8px"><i class="fas fa-plus"></i> Add Batch</h4>' +
-        '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:12px">' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
-        '<div class="inv-form-group"><label style="font-size:12px;font-weight:600">Qty</label><input id="invInlineBatchQty" type="number" class="inv-input" value="' + Math.max(unbatched, 0) + '" min="1" inputmode="numeric" style="font-size:16px;font-weight:700"></div>' +
-        '<div class="inv-form-group"><label style="font-size:12px;font-weight:600">Condition</label><select id="invInlineBatchCond" class="inv-select">' +
-        '<option value="good">Good</option><option value="fair">Fair</option><option value="poor">Poor</option><option value="damaged">Damaged</option></select></div></div>' +
-        '<div class="inv-form-group" style="margin-top:8px"><label style="font-size:12px;font-weight:600">Notes <span style="color:#94A3B8;font-weight:400">(optional)</span></label>' +
-        '<input id="invInlineBatchNotes" type="text" class="inv-input" placeholder="e.g. Back of warehouse, top shelf..."></div>' +
-        '<button class="inv-btn inv-btn-primary inv-btn-sm" style="margin-top:8px;width:100%" onclick="invDoInlineBatch(' + productId + ',' + locId + ')"><i class="fas fa-layer-group"></i> Create Batch</button></div>';
+    // Quick add batch form — always visible for adding more
+    var addTitle = batches.length > 0 ? 'Add Another Batch' : 'Create First Batch';
+    var defaultQty = Math.max(unbatched, 1);
+    body += '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:14px">' +
+      '<div style="font-weight:700;font-size:13px;margin-bottom:10px;color:#334155"><i class="fas fa-plus-circle" style="color:#3B82F6"></i> ' + addTitle + '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+      '<div><label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:4px">Quantity</label>' +
+      '<input id="invInlineBatchQty" type="number" class="inv-input" value="' + defaultQty + '" min="1" max="' + Math.max(unbatched, 9999) + '" inputmode="numeric" style="font-size:18px;font-weight:700;text-align:center"' +
+      ' oninput="invUpdateBatchRemaining(' + totalOnHand + ',' + batchedQty + ')"></div>' +
+      '<div><label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:4px">Condition</label>' +
+      '<select id="invInlineBatchCond" class="inv-select" style="height:44px">' +
+      '<option value="good">✅ Good</option><option value="fair">⚠️ Fair</option><option value="poor">🔶 Poor</option><option value="damaged">❌ Damaged</option></select></div></div>' +
+      '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:4px">Notes <span style="font-weight:400">(optional)</span></label>' +
+      '<input id="invInlineBatchNotes" type="text" class="inv-input" placeholder="e.g. Back of warehouse, pallet #3..."></div>' +
+      '<div id="invBatchRemainPreview" style="margin-top:8px;font-size:12px;color:#64748B;text-align:center"></div>' +
+      '<button class="inv-btn inv-btn-primary" style="margin-top:10px;width:100%;padding:12px;font-size:14px" onclick="invDoInlineBatch(' + productId + ',' + locId + ')">' +
+      '<i class="fas fa-layer-group"></i> Create Batch</button>' +
+      '</div>';
+
+    // "Batch All" shortcut — single click to batch everything as good
+    if (unbatched > 0 && batches.length === 0) {
+      body += '<button class="inv-btn inv-btn-outline" style="width:100%;margin-top:8px;padding:10px;font-size:13px" onclick="invBatchAllQuick(' + productId + ',' + locId + ',' + totalOnHand + ')">' +
+        '<i class="fas fa-magic"></i> Batch All ' + totalOnHand + ' as Good (one batch)</button>';
     }
 
-    var footer = '<button class="po-btn po-btn-outline" onclick="invCloseModal()">Close</button>';
-    invShowModal('<i class="fas fa-layer-group"></i> Batches — ' + escH(pName), body, footer);
+    var footer = '<button class="inv-btn inv-btn-outline" onclick="invCloseModal()">Done</button>';
+    invShowModal('<i class="fas fa-layer-group"></i> Batches', body, footer);
+
+    // Initial remaining preview
+    invUpdateBatchRemaining(totalOnHand, batchedQty);
   } catch(e) {
     invToast('Failed to load batches: ' + (e.response?.data?.error || e.message), 'error');
   }
 }
 window.invCountViewBatches = invCountViewBatches;
 
+function invUpdateBatchRemaining(totalOnHand, alreadyBatched) {
+  var el = document.getElementById('invBatchRemainPreview');
+  if (!el) return;
+  var newQty = parseInt(document.getElementById('invInlineBatchQty').value) || 0;
+  var afterBatch = alreadyBatched + newQty;
+  var remain = totalOnHand - afterBatch;
+  if (remain < 0) {
+    el.innerHTML = '<span style="color:#DC2626"><i class="fas fa-exclamation-triangle"></i> Over-allocated by ' + Math.abs(remain) + ' — total on hand is ' + totalOnHand + '</span>';
+  } else if (remain === 0) {
+    el.innerHTML = '<span style="color:#059669"><i class="fas fa-check-circle"></i> All ' + totalOnHand + ' will be batched</span>';
+  } else {
+    el.innerHTML = '<span style="color:#64748B">' + remain + ' will remain unbatched after this</span>';
+  }
+}
+window.invUpdateBatchRemaining = invUpdateBatchRemaining;
+
 async function invDoInlineBatch(productId, locationId) {
-  var qty = parseInt(document.getElementById('invInlineBatchQty').value);
+  var qtyEl = document.getElementById('invInlineBatchQty');
+  var qty = parseInt(qtyEl.value);
   var condition = document.getElementById('invInlineBatchCond').value;
   var notes = document.getElementById('invInlineBatchNotes').value;
 
@@ -829,14 +872,37 @@ async function invDoInlineBatch(productId, locationId) {
   try {
     var resp = await invAPI.post('/api/inventory/batches', {
       product_id: productId, location_id: locationId,
-      qty: qty, condition: condition, notes: notes || null
+      qty: qty, condition: condition, notes: notes || null,
+      track_only: true  // Don't increase qty_on_hand — just organizing existing stock
     }, { headers: invHeaders() });
     invToast('Batch ' + (resp.data.batch_number || '') + ' created (' + qty + ' ' + condition + ')');
+    // Refresh batch summary cache
+    try {
+      var bsResp = await invAPI.get('/api/inventory/batch-summary?location_id=' + locationId, { headers: invHeaders() });
+      invBatchSummaryMap = bsResp.data.summary || {};
+    } catch(e) {}
     // Re-open the same panel to show updated list
     invCountViewBatches(productId);
   } catch(e) { invToast('Batch failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 window.invDoInlineBatch = invDoInlineBatch;
+
+async function invBatchAllQuick(productId, locationId, totalQty) {
+  try {
+    var resp = await invAPI.post('/api/inventory/batches', {
+      product_id: productId, location_id: locationId,
+      qty: totalQty, condition: 'good', notes: null,
+      track_only: true
+    }, { headers: invHeaders() });
+    invToast('All ' + totalQty + ' batched as good');
+    try {
+      var bsResp = await invAPI.get('/api/inventory/batch-summary?location_id=' + locationId, { headers: invHeaders() });
+      invBatchSummaryMap = bsResp.data.summary || {};
+    } catch(e) {}
+    invCountViewBatches(productId);
+  } catch(e) { invToast('Batch failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.invBatchAllQuick = invBatchAllQuick;
 
 function invCountRequestDelete(productId, productName) {
   var reasons = [

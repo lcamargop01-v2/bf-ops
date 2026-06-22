@@ -764,7 +764,7 @@ app.post('/api/inventory/batches', async (c) => {
   const user = getUserFromHeader(c)
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const db = c.env.DB
-  const { product_id, location_id, qty, condition, notes, source, batch_number } = await c.req.json()
+  const { product_id, location_id, qty, condition, notes, source, batch_number, track_only } = await c.req.json()
 
   const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
   const batchNum = batch_number || `B-${Date.now().toString(36).toUpperCase()}`
@@ -776,21 +776,36 @@ app.post('/api/inventory/batches', async (c) => {
 
   const batchId = result.meta.last_row_id as number
 
-  // Update inventory stock — batch qty adds to on-hand inventory
+  // track_only: create batch record without changing qty_on_hand
+  // Used from count page where stock is already counted — batches just organize existing stock
   const stock = await getOrCreateStock(db, product_id, location_id)
   const oldQty = stock.qty_on_hand || 0
-  const newQty = oldQty + qty
-  await db.prepare('UPDATE inventory_stock SET qty_on_hand = ?, updated_at = datetime("now") WHERE product_id = ? AND location_id = ?')
-    .bind(newQty, product_id, location_id).run()
 
-  await auditLog(db, {
-    product_id, location_id, action: 'batch_created', qty_change: qty,
-    qty_before: oldQty, qty_after: newQty,
-    reason: `Batch ${batchNum} created (${condition || 'good'})`,
-    batch_id: batchId,
-    notes: notes || null,
-    user_id: user.id, user_name: userInfo?.name || user.email
-  })
+  if (!track_only) {
+    // Normal batch creation (e.g. from receiving) — adds to on-hand
+    const newQty = oldQty + qty
+    await db.prepare('UPDATE inventory_stock SET qty_on_hand = ?, updated_at = datetime("now") WHERE product_id = ? AND location_id = ?')
+      .bind(newQty, product_id, location_id).run()
+
+    await auditLog(db, {
+      product_id, location_id, action: 'batch_created', qty_change: qty,
+      qty_before: oldQty, qty_after: newQty,
+      reason: `Batch ${batchNum} created (${condition || 'good'})`,
+      batch_id: batchId,
+      notes: notes || null,
+      user_id: user.id, user_name: userInfo?.name || user.email
+    })
+  } else {
+    // Track-only: just log the batch assignment, no stock change
+    await auditLog(db, {
+      product_id, location_id, action: 'batch_assigned', qty_change: 0,
+      qty_before: oldQty, qty_after: oldQty,
+      reason: `Batch ${batchNum} assigned (${qty} ${condition || 'good'}) — tracking only`,
+      batch_id: batchId,
+      notes: notes || null,
+      user_id: user.id, user_name: userInfo?.name || user.email
+    })
+  }
 
   return c.json({ success: true, id: batchId, batch_number: batchNum })
 })
