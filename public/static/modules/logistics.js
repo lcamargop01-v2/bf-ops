@@ -8372,13 +8372,29 @@ async function renderCustomerDetail(id) {
       </div>
     </div>
     <div class="card" style="margin-top:20px">
-      <div class="card-header"><h3 class="card-title">Order History</h3></div>
+      <div class="card-header">
+        <h3 class="card-title">Order History</h3>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span style="font-size:12px;color:var(--gray-500)">${data.orders.length} deliveries${data.sales && data.sales.length ? ', ' + data.sales.length + ' POS sales' : ''}</span>
+        </div>
+      </div>
       <div class="table-container">
-        <table><thead><tr><th>Order</th><th>Date</th><th>Priority</th><th>Status</th></tr></thead>
-        <tbody>${data.orders.map(o => `<tr onclick="navigate('orders',{viewId:${o.id}})">
-          <td><strong>${o.order_number}</strong></td><td>${formatDate(o.scheduled_date)}</td>
-          <td>${priorityBadge(o.priority)}</td><td>${statusBadge(o.status)}</td>
-        </tr>`).join('')}</tbody></table>
+        <table><thead><tr><th>Order #</th><th>Type</th><th>Date</th><th>Status</th></tr></thead>
+        <tbody>${(() => {
+          const combined = [
+            ...data.orders.map(o => ({ ...o, _src: 'delivery', _date: o.scheduled_date || o.created_at })),
+            ...(data.sales || []).map(s => ({ ...s, order_number: s.sale_number, _src: 'sale', _date: s.created_at }))
+          ].sort((a, b) => (b._date || '').localeCompare(a._date || ''));
+          return combined.map(o => {
+            const srcBadge = o._src === 'sale'
+              ? '<span class="badge" style="background:#DBEAFE;color:#1D4ED8;font-size:10px"><i class="fas fa-cash-register"></i> POS</span>'
+              : '<span class="badge" style="background:#DCFCE7;color:#16A34A;font-size:10px"><i class="fas fa-truck"></i> Delivery</span>';
+            const clickFn = o._src === 'sale'
+              ? 'event.stopPropagation()'
+              : "navigate('orders',{viewId:" + o.id + "})";
+            return '<tr onclick="' + clickFn + '" style="cursor:pointer"><td><strong>' + (o.order_number || '') + '</strong></td><td>' + srcBadge + '</td><td>' + formatDate(o._date) + '</td><td>' + statusBadge(o.status) + '</td></tr>';
+          }).join('');
+        })()}</tbody></table>
       </div>
     </div>`;
 }

@@ -832,7 +832,14 @@ app.get('/api/customers/:id', async (c) => {
   if (!customer) return c.json({ error: 'Customer not found' }, 404)
   const addresses = await c.env.DB.prepare('SELECT * FROM addresses WHERE customer_id = ? ORDER BY is_primary DESC').bind(id).all()
   const orders = await c.env.DB.prepare('SELECT * FROM orders WHERE customer_id = ? ORDER BY created_at DESC LIMIT 20').bind(id).all()
-  return c.json({ customer, addresses: addresses.results, orders: orders.results })
+  // Also fetch recent POS sales for unified history
+  const sales = await c.env.DB.prepare(`
+    SELECT s.id, s.sale_number, s.status, s.total, s.sale_type, s.created_at,
+      (SELECT COUNT(*) FROM pos_sale_items si WHERE si.sale_id = s.id) as item_count
+    FROM pos_sales s WHERE s.customer_id = ? AND s.status != 'voided'
+    ORDER BY s.created_at DESC LIMIT 20
+  `).bind(id).all()
+  return c.json({ customer, addresses: addresses.results, orders: orders.results, sales: sales.results || [] })
 })
 
 app.post('/api/customers', async (c) => {

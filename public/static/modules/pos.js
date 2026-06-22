@@ -195,6 +195,7 @@ var _posSidebarItems = [
   { id: 'register', icon: 'fa-cash-register', label: 'Register' },
   { id: 'dashboard', icon: 'fa-chart-bar', label: 'Dashboard' },
   { id: 'history', icon: 'fa-clock-rotate-left', label: 'Sales History' },
+  { id: 'all-orders', icon: 'fa-layer-group', label: 'All Orders' },
   { section: 'Order Management' },
   { id: 'orders', icon: 'fa-clipboard-list', label: 'Customer Orders' },
   { id: 'recurring', icon: 'fa-sync-alt', label: 'Recurring Orders' },
@@ -245,6 +246,7 @@ function renderRegisterView() {
         '<button class="pos-topbar-btn" id="posBtnDash"><i class="fas fa-chart-bar"></i> <span class="hide-mobile">Dashboard</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnReg"><i class="fas fa-cash-register"></i> <span class="hide-mobile">Register</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnHist"><i class="fas fa-clock-rotate-left"></i> <span class="hide-mobile">History</span></button>' +
+        '<button class="pos-topbar-btn" id="posBtnOrders"><i class="fas fa-clipboard-list"></i> <span class="hide-mobile">Orders</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnCust"><i class="fas fa-address-book"></i> <span class="hide-mobile">Customers</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnInvReq"><i class="fas fa-boxes-stacked"></i> <span class="hide-mobile">Stock Req</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnStmts"><i class="fas fa-file-invoice-dollar"></i> <span class="hide-mobile">Statements</span></button>' +
@@ -256,12 +258,14 @@ function renderRegisterView() {
     '<div id="posViewRegister" class="pos-view pos-register"></div>' +
     '<div id="posViewHistory" class="pos-view pos-history"></div>' +
     '<div id="posViewCustomers" class="pos-view pos-customers"></div>' +
+    '<div id="posViewAll-orders" class="pos-view pos-all-orders"></div>' +
     '<div id="posViewInventory-requests" class="pos-view pos-inv-requests"></div>' +
     '<div id="posViewStatements" class="pos-view pos-statements"></div>';
 
   on('posBtnDash', 'click', function() { switchView('dashboard'); });
   on('posBtnReg', 'click', function() { switchView('register'); });
   on('posBtnHist', 'click', function() { switchView('history'); });
+  on('posBtnOrders', 'click', function() { switchView('all-orders'); });
   on('posBtnCust', 'click', function() { switchView('customers'); });
   on('posBtnInvReq', 'click', function() { switchView('inventory-requests'); });
   on('posBtnStmts', 'click', function() { switchView('statements'); });
@@ -352,6 +356,7 @@ function _renderDistributionLayout(el, locName) {
           '<div id="posViewRegister" class="pos-view pos-register"></div>' +
           '<div id="posViewHistory" class="pos-view pos-history"></div>' +
           '<div id="posViewCustomers" class="pos-view pos-customers"></div>' +
+          '<div id="posViewAll-orders" class="pos-view pos-all-orders"></div>' +
           '<div id="posViewInventory-requests" class="pos-view pos-inv-requests"></div>' +
           '<div id="posViewStatements" class="pos-view pos-statements"></div>' +
         '</div>' +
@@ -382,6 +387,7 @@ var _dcPageTitles = {
   register: '<i class="fas fa-cash-register"></i> Register',
   dashboard: '<i class="fas fa-chart-bar"></i> Dashboard',
   history: '<i class="fas fa-clock-rotate-left"></i> Sales History',
+  'all-orders': '<i class="fas fa-clipboard-list"></i> All Orders',
   customers: '<i class="fas fa-users"></i> Customers',
   'inventory-requests': '<i class="fas fa-boxes-stacked"></i> Stock Requests',
   statements: '<i class="fas fa-file-invoice-dollar"></i> Statements',
@@ -423,7 +429,7 @@ function _posSwitchDCView(viewId) {
         window._params = params || {};
         if (_posLogisticsPages[page]) {
           _posSwitchDCView(page);
-        } else if (['register','dashboard','history','customers','inventory-requests','statements'].indexOf(page) >= 0) {
+        } else if (['register','dashboard','history','all-orders','customers','inventory-requests','statements'].indexOf(page) >= 0) {
           _posSwitchDCView(page);
         } else {
           // Page not in POS — show toast
@@ -455,6 +461,7 @@ function switchView(view) {
   if (view === 'register') renderRegisterContent();
   else if (view === 'dashboard') loadDashboard();
   else if (view === 'history') loadHistory();
+  else if (view === 'all-orders') loadAllOrders();
   else if (view === 'customers') loadCustomerList();
   else if (view === 'inventory-requests') loadInventoryRequests();
   else if (view === 'statements') loadStatements();
@@ -2027,6 +2034,86 @@ function doHistorySearch() {
     if (tableEl) tableEl.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)"><i class="fas fa-exclamation-triangle"></i> Failed to load</div>';
   });
 }
+
+// ==================== ALL ORDERS VIEW (unified POS + Delivery) ====================
+function loadAllOrders() {
+  var el = document.getElementById('posViewAll-orders');
+  if (!el) return;
+  var today = new Date().toISOString().slice(0, 10);
+  var weekAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+
+  el.innerHTML =
+    '<div style="padding:16px">' +
+      '<h3 style="margin:0 0 12px;font-size:16px;font-weight:700;color:var(--pos-navy)"><i class="fas fa-clipboard-list"></i> All Orders</h3>' +
+      '<div class="pos-history-filters" style="flex-wrap:wrap">' +
+        '<input type="date" id="posAllOrdFrom" value="' + weekAgo + '">' +
+        '<span style="color:var(--pos-gray-400);font-size:12px">to</span>' +
+        '<input type="date" id="posAllOrdTo" value="' + today + '">' +
+        '<select id="posAllOrdType"><option value="">All Types</option><option value="sale">POS Sales</option><option value="delivery">Delivery Orders</option></select>' +
+        '<select id="posAllOrdStatus"><option value="">All Statuses</option><option value="completed">Completed</option><option value="new">New</option><option value="confirmed">Confirmed</option><option value="scheduled">Scheduled</option><option value="in_transit">In Transit</option><option value="delivered">Delivered</option></select>' +
+        '<input type="text" id="posAllOrdSearch" placeholder="Search order # or customer...">' +
+        '<button class="pos-btn" id="posAllOrdSearchBtn" style="background:var(--pos-navy);color:white;padding:8px 14px;font-size:13px"><i class="fas fa-search"></i> Search</button>' +
+      '</div>' +
+      '<div id="posAllOrdTable" style="margin-top:12px"><div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div></div>' +
+    '</div>';
+
+  on('posAllOrdSearchBtn', 'click', doAllOrdersSearch);
+  var searchIn = document.getElementById('posAllOrdSearch');
+  if (searchIn) searchIn.addEventListener('keydown', function(e) { if (e.key === 'Enter') doAllOrdersSearch(); });
+  doAllOrdersSearch();
+}
+
+function doAllOrdersSearch() {
+  var from = gv('posAllOrdFrom') || '';
+  var to = gv('posAllOrdTo') || '';
+  var type = gv('posAllOrdType') || '';
+  var status = gv('posAllOrdStatus') || '';
+  var search = gv('posAllOrdSearch') || '';
+  var q = 'from=' + from + '&to=' + to;
+  if (type) q += '&type=' + type;
+  if (status) q += '&status=' + status;
+  if (search) q += '&search=' + encodeURIComponent(search);
+
+  API.get('/pos/all-orders?' + q).then(function(r) {
+    var orders = r.data.orders || [];
+    var tableEl = document.getElementById('posAllOrdTable');
+    if (!tableEl) return;
+    if (orders.length === 0) {
+      tableEl.innerHTML = '<div style="text-align:center;padding:30px;color:var(--pos-gray-400)"><i class="fas fa-inbox" style="font-size:24px;display:block;margin-bottom:8px"></i>No orders found</div>';
+      return;
+    }
+    var html = '<table class="pos-table"><thead><tr><th>Order #</th><th>Type</th><th>Customer</th><th>Status</th><th>Items</th><th class="right">Total</th><th>Date</th></tr></thead><tbody>';
+    orders.forEach(function(o) {
+      var srcIcon = o.source === 'sale' ? '<span class="pos-badge" style="background:#DBEAFE;color:#1D4ED8;font-size:10px"><i class="fas fa-cash-register"></i> POS</span>' :
+        '<span class="pos-badge" style="background:#DCFCE7;color:#16A34A;font-size:10px"><i class="fas fa-truck"></i> Delivery</span>';
+      var statusClass = 'status-' + (o.status || 'draft');
+      html += '<tr class="clickable" data-allord-id="' + o.id + '" data-allord-src="' + o.source + '">' +
+        '<td style="font-weight:600">' + esc(o.order_number || '') + '</td>' +
+        '<td>' + srcIcon + '</td>' +
+        '<td>' + esc(o.customer_name || 'Walk-in') + '</td>' +
+        '<td><span class="status-badge ' + statusClass + '">' + esc(o.status || '') + '</span></td>' +
+        '<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">' + esc((o.items_summary || '').slice(0, 80)) + '</td>' +
+        '<td class="right money">$' + (o.total || 0).toFixed(2) + '</td>' +
+        '<td style="font-size:12px;color:var(--pos-gray-400)">' + (o.created_at || '').slice(0, 10) + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table>';
+    tableEl.innerHTML = html;
+
+    tableEl.querySelectorAll('[data-allord-id]').forEach(function(row) {
+      row.addEventListener('click', function() {
+        var id = parseInt(row.dataset.allordId);
+        var src = row.dataset.allordSrc;
+        if (src === 'sale') showSaleDetail(id);
+        else openOrderDetail(id, 'order');
+      });
+    });
+  }).catch(function() {
+    var tableEl = document.getElementById('posAllOrdTable');
+    if (tableEl) tableEl.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)"><i class="fas fa-exclamation-triangle"></i> Failed to load</div>';
+  });
+}
+window.loadAllOrders = loadAllOrders;
 
 // ==================== SALE DETAIL MODAL ====================
 function showSaleDetail(id) {

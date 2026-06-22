@@ -491,6 +491,7 @@ function poRenderCreateOrder() {
   poNewItems = [{ product_id: '', description: '', qty_ordered: '', unit: 'each', unit_cost: '' }];
 
   var supplierOpts = '<option value="">— Select Supplier —</option>';
+  supplierOpts += '<option value="__new__" style="font-weight:bold;color:#D97706">➕ Add New Supplier...</option>';
   poSuppliers.forEach(function(s) {
     supplierOpts += '<option value="' + s.id + '">' + poEsc(s.name) + (s.code ? ' (' + poEsc(s.code) + ')' : '') + '</option>';
   });
@@ -513,7 +514,7 @@ function poRenderCreateOrder() {
     '<option value="feed">Feed</option>' +
     '<option value="shelf_goods">Shelf Goods</option>' +
     '</select></div>';
-  html += '<div class="po-form-group"><label>Supplier</label><select id="poNewSupplier" class="po-select">' + supplierOpts + '</select></div>';
+  html += '<div class="po-form-group"><label>Supplier</label><select id="poNewSupplier" class="po-select" onchange="poHandleSupplierSelect(this)">' + supplierOpts + '</select></div>';
   html += '</div>';
 
   // Row 2: Location & Dates
@@ -2336,6 +2337,60 @@ async function poViewImage(imageId) {
 }
 
 // Add supplier modal
+// Handle supplier dropdown __new__ selection inline
+function poHandleSupplierSelect(sel) {
+  if (sel.value !== '__new__') return;
+  sel.value = ''; // Reset while modal is open
+  poShowQuickAddSupplier(sel);
+}
+window.poHandleSupplierSelect = poHandleSupplierSelect;
+
+function poShowQuickAddSupplier(targetSelect) {
+  var body = '<div class="po-form-group"><label>Name *</label><input id="poQuickSupName" type="text" class="po-input" placeholder="Supplier name"></div>' +
+    '<div class="po-form-row">' +
+    '<div class="po-form-group"><label>Phone</label><input id="poQuickSupPhone" type="tel" class="po-input" placeholder="Phone number"></div>' +
+    '<div class="po-form-group"><label>Email</label><input id="poQuickSupEmail" type="email" class="po-input" placeholder="Email"></div>' +
+    '</div>' +
+    '<div class="po-form-group"><label>Payment Terms</label><select id="poQuickSupTerms" class="po-select">' +
+    '<option value="Net 30">Net 30</option><option value="Net 15">Net 15</option><option value="COD">COD</option>' +
+    '</select></div>';
+  var footer = '<button class="po-btn po-btn-primary" id="poQuickSupSave"><i class="fas fa-plus"></i> Add & Select</button>';
+  poShowModal('<i class="fas fa-building"></i> Quick Add Supplier', body, footer);
+  setTimeout(function() {
+    var saveBtn = document.getElementById('poQuickSupSave');
+    if (saveBtn) saveBtn.addEventListener('click', async function() {
+      var name = (document.getElementById('poQuickSupName') || {}).value || '';
+      if (!name.trim()) { poToast('Name is required', 'warning'); return; }
+      try {
+        var resp = await poAPI.post('/api/purchasing/suppliers', {
+          name: name.trim(),
+          phone: (document.getElementById('poQuickSupPhone') || {}).value || null,
+          email: (document.getElementById('poQuickSupEmail') || {}).value || null,
+          payment_terms: (document.getElementById('poQuickSupTerms') || {}).value || 'Net 30'
+        }, { headers: poHeaders() });
+        var newId = resp.data.id;
+        // Refresh suppliers list
+        var supResp = await poAPI.get('/api/purchasing/suppliers', { headers: poHeaders() });
+        poSuppliers = supResp.data.suppliers || [];
+        // Add to dropdown & select
+        if (targetSelect) {
+          var newOpt = document.createElement('option');
+          newOpt.value = newId;
+          newOpt.textContent = name.trim();
+          newOpt.selected = true;
+          var refOpt = targetSelect.querySelector('option[value="__new__"]');
+          if (refOpt) refOpt.insertAdjacentElement('afterend', newOpt);
+          else targetSelect.appendChild(newOpt);
+        }
+        poToast('Supplier "' + name.trim() + '" added');
+        poCloseModal();
+      } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+    });
+    var inp = document.getElementById('poQuickSupName');
+    if (inp) inp.focus();
+  }, 100);
+}
+
 function poShowAddSupplier() {
   var body = '<div class="po-form-group"><label>Name *</label><input id="poSupName" type="text" class="po-input" placeholder="Supplier name"></div>' +
     '<div class="po-form-row">' +

@@ -2591,4 +2591,125 @@ app.post('/api/pos/request-purchase', async (c) => {
   })
 })
 
+// ==================== ALL ORDERS (unified POS sales + delivery orders) ====================
+app.get('/api/pos/all-orders', async (c) => {
+  const db = c.env.DB
+  const from = c.req.query('from') || ''
+  const to = c.req.query('to') || ''
+  const search = c.req.query('search') || ''
+  const type = c.req.query('type') || '' // 'sale', 'delivery', or '' for both
+  const status = c.req.query('status') || ''
+  const customerId = c.req.query('customer_id') || ''
+  const limit = parseInt(c.req.query('limit') || '100')
+
+  const results: any[] = []
+
+  // POS Sales
+  if (type !== 'delivery') {
+    let sq = `SELECT s.id, s.sale_number as order_number, 'sale' as source, s.status, s.total,
+      s.sale_type, s.created_at, s.customer_id,
+      COALESCE(c.business_name, c.contact_name, 'Walk-in') as customer_name,
+      (SELECT COUNT(*) FROM pos_sale_items si WHERE si.sale_id = s.id) as item_count,
+      GROUP_CONCAT(si2.product_name, ', ') as items_summary
+      FROM pos_sales s
+      LEFT JOIN customers c ON s.customer_id = c.id
+      LEFT JOIN pos_sale_items si2 ON si2.sale_id = s.id`
+    const sp: any[] = []
+    const swhere: string[] = ['1=1']
+    if (from) { swhere.push('DATE(s.created_at) >= ?'); sp.push(from) }
+    if (to) { swhere.push('DATE(s.created_at) <= ?'); sp.push(to) }
+    if (status) { swhere.push('s.status = ?'); sp.push(status) }
+    if (customerId) { swhere.push('s.customer_id = ?'); sp.push(parseInt(customerId)) }
+    if (search) { swhere.push('(s.sale_number LIKE ? OR c.business_name LIKE ? OR c.contact_name LIKE ?)'); sp.push(`%${search}%`, `%${search}%`, `%${search}%`) }
+    sq += ' WHERE ' + swhere.join(' AND ') + ' GROUP BY s.id ORDER BY s.created_at DESC LIMIT ?'
+    sp.push(limit)
+    const sales = await db.prepare(sq).bind(...sp).all()
+    for (const s of (sales.results || []) as any[]) {
+      results.push({ ...s, source: 'sale' })
+    }
+  }
+
+  // Delivery Orders
+  if (type !== 'sale') {
+    let oq = `SELECT o.id, o.order_number, 'delivery' as source, o.status, o.total_weight as total,
+      'delivery' as sale_type, o.created_at, o.customer_id,
+      COALESCE(c.business_name, c.contact_name, '') as customer_name,
+      (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) as item_count,
+      (SELECT GROUP_CONCAT(p.name, ', ') FROM order_items oi2 JOIN products p ON p.id = oi2.product_id WHERE oi2.order_id = o.id) as items_summary,
+      o.scheduled_date, o.priority,
+      r.route_number, r.status as route_status
+      FROM orders o
+      LEFT JOIN customers c ON o.customer_id = c.id
+      LEFT JOIN route_stops rs ON rs.order_id = o.id
+      LEFT JOIN routes r ON rs.route_id = r.id`
+    const op: any[] = []
+    const owhere: string[] = ['1=1']
+    if (from) { owhere.push('DATE(o.created_at) >= ?'); op.push(from) }
+    if (to) { owhere.push('DATE(o.created_at) <= ?'); op.push(to) }
+    if (status) { owhere.push('o.status = ?'); op.push(status) }
+    if (customerId) { owhere.push('o.customer_id = ?'); op.push(parseInt(customerId)) }
+    if (search) { owhere.push('(o.order_number LIKE ? OR c.business_name LIKE ? OR c.contact_name LIKE ?)'); op.push(`%${search}%`, `%${search}%`, `%${search}%`) }
+    oq += ' WHERE ' + owhere.join(' AND ') + ' ORDER BY o.created_at DESC LIMIT ?'
+    op.push(limit)
+    const orders = await db.prepare(oq).bind(...op).all()
+    for (const o of (orders.results || []) as any[]) {
+      results.push({ ...o, source: 'delivery' })
+    }
+  }
+
+  // Sort combined by created_at DESC
+  results.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+
+  return c.json({ orders: results.slice(0, limit) })
+})
+
+// ==================== CUSTOMER UNIFIED HISTORY (for CRM + logistics) ====================
+app.get('/api/pos/customer-history/:customerId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  const limit = parseInt(c.req.query('limit') || '50')
+
+  const [sales, orders] = await Promise.all([
+    db.prepare(`
+      SELECT s.id, s.sale_number as order_number, 'sale' as source, s.status, s.total,
+        s.sale_type, s.created_at,
+        (SELECT GROUP_CONCAT(method || ':' || amount) FROM pos_payments WHERE sale_id = s.id) as payment_methods,
+        (SELECT COUNT(*) FROM pos_sale_items si WHERE si.sale_id = s.id) as item_count,
+        GROUP_CONCAT(si2.product_name || ' x' || CAST(si2.quantity AS INTEGER), ', ') as items_summary
+      FROM pos_sales s
+      LEFT JOIN pos_sale_items si2 ON si2.sale_id = s.id
+      WHERE s.customer_id = ? AND s.status != 'voided'
+      GROUP BY s.id ORDER BY s.created_at DESC LIMIT ?
+    `).bind(customerId, limit).all(),
+    db.prepare(`
+      SELECT o.id, o.order_number, 'delivery' as source, o.status, o.total_weight as total,
+        'delivery' as sale_type, o.created_at, o.scheduled_date, o.priority,
+        (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) as item_count,
+        (SELECT GROUP_CONCAT(p.name || ' x' || CAST(oi2.quantity AS INTEGER), ', ') FROM order_items oi2 JOIN products p ON p.id = oi2.product_id WHERE oi2.order_id = o.id) as items_summary,
+        r.route_number
+      FROM orders o
+      LEFT JOIN route_stops rs ON rs.order_id = o.id
+      LEFT JOIN routes r ON rs.route_id = r.id
+      WHERE o.customer_id = ? AND o.status != 'cancelled'
+      ORDER BY o.created_at DESC LIMIT ?
+    `).bind(customerId, limit).all()
+  ])
+
+  const combined = [...(sales.results || []), ...(orders.results || [])]
+    .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''))
+    .slice(0, limit)
+
+  // Summary stats
+  const allSales = (sales.results || []) as any[]
+  const allOrders = (orders.results || []) as any[]
+  const stats = {
+    total_sales: allSales.length,
+    total_orders: allOrders.length,
+    sales_revenue: allSales.reduce((s: number, x: any) => s + (x.total || 0), 0),
+    orders_revenue: allOrders.reduce((s: number, x: any) => s + (x.total || 0), 0)
+  }
+
+  return c.json({ history: combined, stats })
+})
+
 export { app as posApp }

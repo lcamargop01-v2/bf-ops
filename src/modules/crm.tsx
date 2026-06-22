@@ -128,7 +128,22 @@ app.get('/api/crm/organizations/:id', async (c) => {
   const opps = await db.prepare(`SELECT o.*, s.name as stage_name FROM crm_opportunities o LEFT JOIN crm_pipeline_stages s ON o.stage_id = s.id WHERE o.organization_id = ? ORDER BY o.updated_at DESC`).bind(id).all()
   const activities = await db.prepare(`SELECT a.*, u.name as owner_name FROM crm_activities a LEFT JOIN users u ON a.owner_id = u.id WHERE a.organization_id = ? ORDER BY a.created_at DESC LIMIT 20`).bind(id).all()
 
-  return c.json({ organization: org, contacts: contacts.results || [], opportunities: opps.results || [], activities: activities.results || [] })
+  // If linked to a POS customer, fetch unified order history
+  let orderHistory: any[] = []
+  if ((org as any).customer_id) {
+    const custId = (org as any).customer_id
+    const [deliveryOrders, posSales] = await Promise.all([
+      db.prepare(`SELECT o.id, o.order_number, 'delivery' as source, o.status, o.total_weight as total, o.created_at, o.scheduled_date, o.priority
+        FROM orders o WHERE o.customer_id = ? AND o.status != 'cancelled' ORDER BY o.created_at DESC LIMIT 15`).bind(custId).all(),
+      db.prepare(`SELECT s.id, s.sale_number as order_number, 'sale' as source, s.status, s.total, s.sale_type, s.created_at
+        FROM pos_sales s WHERE s.customer_id = ? AND s.status != 'voided' ORDER BY s.created_at DESC LIMIT 15`).bind(custId).all()
+    ])
+    orderHistory = [...(deliveryOrders.results || []), ...(posSales.results || [])]
+      .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''))
+      .slice(0, 20)
+  }
+
+  return c.json({ organization: org, contacts: contacts.results || [], opportunities: opps.results || [], activities: activities.results || [], orderHistory })
 })
 
 app.post('/api/crm/organizations', async (c) => {

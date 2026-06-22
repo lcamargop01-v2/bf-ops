@@ -64,19 +64,74 @@ function crmUserSelectHtml(fieldId, selectedId) {
   var html = '<select class="crm-input" id="' + fieldId + '">';
   html += '<option value="">(Unassigned)</option>';
   crmAllUsers.forEach(function(u) {
-    html += '<option value="' + u.id + '"' + (u.id == selectedId ? ' selected' : '') + '>' + crmEsc(u.name) + '</option>';
+    html += '<option value="' + u.id + '"' + (u.id == selectedId ? ' selected' : '') + '>' + crmEsc(u.name) + ' (' + crmEsc(u.role || '') + ')</option>';
   });
   html += '</select>';
   return html;
 }
 function crmOrgSelectHtml(fieldId, selectedId, required) {
-  var html = '<select class="crm-input" id="' + fieldId + '">';
+  var html = '<select class="crm-input" id="' + fieldId + '" onchange="crmHandleOrgSelect(this)">';
   html += '<option value="">' + (required ? '-- Select Organization --' : '(None)') + '</option>';
+  html += '<option value="__new__" style="font-weight:bold;color:#6366F1">➕ Add New Organization...</option>';
   crmAllOrgs.forEach(function(o) {
     html += '<option value="' + o.id + '"' + (o.id == selectedId ? ' selected' : '') + '>' + crmEsc(o.name) + (o.org_type ? ' (' + o.org_type + ')' : '') + '</option>';
   });
   html += '</select>';
   return html;
+}
+function crmHandleOrgSelect(sel) {
+  if (sel.value !== '__new__') return;
+  sel.value = '';
+  crmShowQuickAddOrg(sel);
+}
+window.crmHandleOrgSelect = crmHandleOrgSelect;
+
+function crmShowQuickAddOrg(targetSelect) {
+  var html = '<div class="crm-overlay" id="crmQuickOrgOverlay" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.4);z-index:10000;display:flex;align-items:center;justify-content:center">' +
+    '<div style="background:white;border-radius:12px;padding:24px;width:400px;max-width:90vw;box-shadow:0 10px 40px rgba(0,0,0,0.2)">' +
+    '<h3 style="margin:0 0 16px;font-size:16px;font-weight:700"><i class="fas fa-building" style="color:#6366F1"></i> Quick Add Organization</h3>' +
+    '<div style="display:grid;gap:10px">' +
+      '<div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Name *</label><input id="crmQuickOrgName" class="crm-input" placeholder="Organization name" autofocus></div>' +
+      '<div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Phone</label><input id="crmQuickOrgPhone" class="crm-input" placeholder="Phone"></div>' +
+      '<div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Type</label><select id="crmQuickOrgType" class="crm-input">' +
+        '<option value="prospect">Prospect</option><option value="customer">Customer</option><option value="vendor">Vendor</option><option value="partner">Partner</option>' +
+      '</select></div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">' +
+      '<button class="crm-btn crm-btn-outline" id="crmQuickOrgCancel">Cancel</button>' +
+      '<button class="crm-btn crm-btn-primary" id="crmQuickOrgSave"><i class="fas fa-plus"></i> Add & Select</button>' +
+    '</div></div></div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+  setTimeout(function() {
+    document.getElementById('crmQuickOrgCancel').addEventListener('click', function() { document.getElementById('crmQuickOrgOverlay').remove(); });
+    document.getElementById('crmQuickOrgOverlay').addEventListener('click', function(e) { if (e.target === this) this.remove(); });
+    document.getElementById('crmQuickOrgSave').addEventListener('click', async function() {
+      var name = (document.getElementById('crmQuickOrgName') || {}).value || '';
+      if (!name.trim()) { crmToast('Name is required', 'error'); return; }
+      try {
+        var resp = await crmAPI.post('/api/crm/organizations', {
+          name: name.trim(),
+          phone: (document.getElementById('crmQuickOrgPhone') || {}).value || null,
+          org_type: (document.getElementById('crmQuickOrgType') || {}).value || 'prospect'
+        }, { headers: crmHeaders() });
+        var newId = resp.data.id;
+        crmAllOrgs.push({ id: newId, name: name.trim(), org_type: (document.getElementById('crmQuickOrgType') || {}).value || 'prospect' });
+        if (targetSelect) {
+          var opt = document.createElement('option');
+          opt.value = newId;
+          opt.textContent = name.trim();
+          opt.selected = true;
+          var ref = targetSelect.querySelector('option[value="__new__"]');
+          if (ref) ref.insertAdjacentElement('afterend', opt);
+          else targetSelect.appendChild(opt);
+        }
+        crmToast('Organization "' + name.trim() + '" added');
+        document.getElementById('crmQuickOrgOverlay').remove();
+      } catch(e) { crmToast('Failed to create organization', 'error'); }
+    });
+    var inp = document.getElementById('crmQuickOrgName');
+    if (inp) inp.focus();
+  }, 50);
 }
 function crmToast(msg, type) {
   type = type || 'success';
@@ -953,6 +1008,29 @@ function crmRenderOrgDetail() {
             '</tr>';
           }).join('') + '</tbody></table></div>') +
       '</div>' +
+
+      // Order History (if linked to POS customer)
+      (function() {
+        var hist = crmDetailData.orderHistory || [];
+        if (hist.length === 0 && !org.customer_id) return '';
+        return '<div class="crm-section">' +
+          '<div class="crm-section-header"><h2 class="crm-section-title"><i class="fas fa-receipt"></i> Order History (' + hist.length + ')</h2></div>' +
+          (hist.length === 0 ? '<p class="crm-muted">No orders yet.</p>' :
+            '<div class="crm-table-wrap"><table class="crm-table crm-table-hover"><thead><tr><th>Order #</th><th>Type</th><th>Status</th><th class="text-right">Total</th><th>Date</th></tr></thead><tbody>' +
+            hist.map(function(o) {
+              var srcBadge = o.source === 'sale'
+                ? '<span style="display:inline-block;padding:2px 6px;border-radius:4px;background:#DBEAFE;color:#1D4ED8;font-size:10px;font-weight:600"><i class="fas fa-cash-register"></i> POS</span>'
+                : '<span style="display:inline-block;padding:2px 6px;border-radius:4px;background:#DCFCE7;color:#16A34A;font-size:10px;font-weight:600"><i class="fas fa-truck"></i> Delivery</span>';
+              return '<tr>' +
+                '<td><strong>' + crmEsc(o.order_number || '') + '</strong></td>' +
+                '<td>' + srcBadge + '</td>' +
+                '<td>' + crmOppStatusBadge(o.status) + '</td>' +
+                '<td class="text-right"><strong>' + crmFmt$(o.total || 0) + '</strong></td>' +
+                '<td>' + crmFmtDate(o.created_at) + '</td>' +
+              '</tr>';
+            }).join('') + '</tbody></table></div>') +
+        '</div>';
+      })() +
 
       // Activities
       crmActivitiesSection(activities, org.id, 'organization') +
