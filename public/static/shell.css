@@ -606,20 +606,24 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   position: absolute; bottom: 0; left: 0; right: 0;
   background: var(--shell-surface); border-radius: 20px 20px 0 0;
   padding: 12px 16px calc(16px + var(--sab));
-  max-height: 60vh; overflow-y: auto;
+  max-height: 70vh; overflow-y: auto;
   animation: shellSlideUp 0.2s ease;
 }
-.shell-more-sheet-item {
-  display: flex; align-items: center; gap: 12px; padding: 14px 12px;
-  border-radius: 10px; cursor: pointer; transition: background 0.15s;
-  -webkit-tap-highlight-color: transparent; border: none; background: none;
-  width: 100%; text-align: left; font-family: inherit;
+.shell-more-sheet-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
 }
-.shell-more-sheet-item:active { background: rgba(255,255,255,0.08); }
-.shell-more-sheet-item.active { background: rgba(99,102,241,0.15); }
-.shell-more-sheet-item i { font-size: 16px; color: var(--shell-text-muted); width: 24px; text-align: center; }
+.shell-more-sheet-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 14px 6px;
+  border-radius: 12px; cursor: pointer; transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent; border: none; background: rgba(255,255,255,0.04);
+  text-align: center; font-family: inherit; min-height: 72px;
+}
+.shell-more-sheet-item:active { background: rgba(255,255,255,0.1); }
+.shell-more-sheet-item.active { background: rgba(99,102,241,0.18); }
+.shell-more-sheet-item i { font-size: 20px; color: var(--shell-text-muted); line-height: 1; }
 .shell-more-sheet-item.active i { color: var(--shell-accent); }
-.shell-more-sheet-item span { font-size: 15px; font-weight: 600; color: var(--shell-text); }
+.shell-more-sheet-item span { font-size: 11px; font-weight: 600; color: var(--shell-text); line-height: 1.2; }
 .shell-more-sheet-item.active span { color: var(--shell-accent); }
 
 @media (max-width: 768px) {
@@ -635,10 +639,23 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   /* Topbar simplified */
   .shell-topbar { gap: 8px; }
   .shell-back-btn { display: none; }
-  /* Hide per-module internal navs — replaced by shell bottom nav */
-  .inv-nav, .po-nav, .tk-nav { display: none !important; }
+  /* Hide per-module nav tab buttons — replaced by shell bottom nav.
+     Keep containers for location pickers, action buttons, view-only banners. */
+  .inv-nav-scroll, .po-nav-scroll, .tk-nav-scroll { display: none !important; }
+  .inv-nav, .po-nav, .tk-nav {
+    flex-wrap: wrap; justify-content: flex-end; min-height: 0;
+    padding: 6px 12px !important; gap: 8px !important;
+  }
   /* Logistics: hide hamburger menu-toggle + sidebar, bottom nav replaces it */
   .menu-toggle { display: none !important; }
   .sidebar { transform: translateX(-100%) !important; }
+  .sidebar.open { transform: translateX(-100%) !important; }
   .sidebar-overlay { display: none !important; }
+  /* Logistics topbar: slim down — page title only, hide date */
+  .topbar { height: 36px !important; padding: 0 12px !important; border-bottom-color: transparent !important; }
+  .topbar-breadcrumb { display: none !important; }
+  .topbar-title { font-size: 13px !important; font-weight: 600 !important; color: #64748B !important; }
+  /* Push toasts above bottom nav */
+  .toast-container { bottom: calc(72px + var(--sab)) !important; }
+  .shell-toast { bottom: calc(72px + var(--sab)) !important; }
 }

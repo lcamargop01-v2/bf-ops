@@ -21,20 +21,24 @@ var MODULES = [
 var MOBILE_NAV_PAGES = {
   logistics: [
     { id: 'dashboard', icon: 'fa-tachometer-alt', label: 'Home' },
+    { id: 'orders', icon: 'fa-file-invoice', label: 'Orders' },
     { id: 'schedule', icon: 'fa-calendar-alt', label: 'Schedule' },
-    { id: 'routes', icon: 'fa-route', label: 'Routes' },
-    { id: 'driver', icon: 'fa-steering-wheel', label: 'Driving' }
+    { id: 'routes', icon: 'fa-route', label: 'Routes' }
   ],
   logistics_more: [
     { id: 'ticket_review', icon: 'fa-rectangle-list', label: 'Ticket Review', adminOnly: true },
+    { id: 'driver', icon: 'fa-steering-wheel', label: 'Driving' },
     { id: 'route_builder', icon: 'fa-map-location-dot', label: 'Route Builder' },
+    { id: 'customers', icon: 'fa-users', label: 'Customers' },
+    { id: 'recurring', icon: 'fa-repeat', label: 'Recurring' },
+    { id: 'so_dashboard', icon: 'fa-bell-concierge', label: 'Standing Orders' },
+    { id: 'warehouse', icon: 'fa-warehouse', label: 'Warehouse' },
+    { id: 'packing', icon: 'fa-list-check', label: 'Packing Lists' },
+    { id: 'returns', icon: 'fa-rotate-left', label: 'Returns' },
     { id: 'zones', icon: 'fa-map-location-dot', label: 'Zones' },
     { id: 'trucks', icon: 'fa-truck', label: 'Fleet' },
     { id: 'drivers_mgmt', icon: 'fa-id-card', label: 'Drivers' },
     { id: 'maintenance', icon: 'fa-wrench', label: 'Maintenance' },
-    { id: 'warehouse', icon: 'fa-warehouse', label: 'Warehouse' },
-    { id: 'packing', icon: 'fa-list-check', label: 'Packing Lists' },
-    { id: 'returns', icon: 'fa-rotate-left', label: 'Returns' },
     { id: 'learning', icon: 'fa-brain', label: 'AI Learning' },
     { id: 'fleet_tracking', icon: 'fa-satellite-dish', label: 'Fleet Tracking' },
     { id: 'fleet_sync', icon: 'fa-arrows-rotate', label: 'Fleet Sync' }
@@ -167,11 +171,12 @@ function shellShowMoreSheet() {
 
   var html = '<div class="shell-more-sheet">';
   html += '<div class="shell-module-drawer-handle"></div>';
+  html += '<div class="shell-more-sheet-grid">';
   morePages.forEach(function(p) {
     html += '<button class="shell-more-sheet-item' + (p.id === _shellCurrentSubPage ? ' active' : '') + '" onclick="this.closest(\'.shell-module-drawer-overlay\').remove();shellBottomNavTap(\'' + p.id + '\')">';
     html += '<i class="fas ' + p.icon + '"></i><span>' + p.label + '</span></button>';
   });
-  html += '</div>';
+  html += '</div></div>';
   overlay.innerHTML = html;
   document.body.appendChild(overlay);
 }
