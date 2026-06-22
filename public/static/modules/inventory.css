@@ -619,6 +619,33 @@
 .inv-batch-indicator:hover { background: #E0E7FF; }
 .inv-batch-indicator.inv-batch-none { color: #94A3B8; background: #F1F5F9; }
 .inv-batch-indicator.inv-batch-none:hover { background: #E2E8F0; color: #64748B; }
+
+/* Quick Count status badges (NEW / OUT OF STOCK) */
+.inv-count-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 2px 8px; border-radius: 6px;
+  margin-left: 8px; vertical-align: middle; white-space: nowrap;
+}
+.inv-count-badge-new { background: #DBEAFE; color: #1D4ED8; }
+.inv-count-badge-oos { background: #FEF3C7; color: #B45309; }
+
+/* Item highlight borders */
+.inv-count-item-new { border-left: 3px solid #3B82F6; }
+.inv-count-item-oos { border-left: 3px solid #F59E0B; }
+
+/* Filter pills in toolbar */
+.inv-count-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 600;
+  padding: 4px 10px; border-radius: 20px;
+  border: 1px solid #E2E8F0; background: #F8FAFC; color: #64748B;
+  cursor: pointer; transition: all 0.15s; white-space: nowrap;
+}
+.inv-count-pill:hover { background: #E2E8F0; }
+.inv-count-pill-new.active { background: #DBEAFE; color: #1D4ED8; border-color: #93C5FD; }
+.inv-count-pill-oos.active { background: #FEF3C7; color: #B45309; border-color: #FCD34D; }
+
 .inv-stepper-btn {
   width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;

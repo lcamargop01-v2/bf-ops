@@ -124,27 +124,59 @@ app.get('/api/inventory/stock', async (c) => {
   const sort = c.req.query('sort') // name, category, sku, qty, last_counted
 
   const includeInactive = c.req.query('include_inactive') === '1'
-  let query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.subcategory, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
-    p.primary_vendor_id, sv.name as primary_vendor_name, p.active as product_active,
-    l.name as location_name, l.code as location_code,
-    u_count.name as last_counted_by_name
-    FROM inventory_stock s
-    JOIN products p ON s.product_id = p.id
-    JOIN locations l ON s.location_id = l.id
-    LEFT JOIN suppliers sv ON p.primary_vendor_id = sv.id
-    LEFT JOIN users u_count ON s.last_counted_by = u_count.id
-    WHERE 1=1` + (includeInactive ? '' : ' AND p.active = 1')
+  const includeAllProducts = c.req.query('include_all_products') === '1'
   const binds: any[] = []
 
-  if (locationId) { query += ' AND s.location_id = ?'; binds.push(parseInt(locationId)) }
+  let query: string
+  if (includeAllProducts && locationId) {
+    // Quick Count mode: LEFT JOIN so products with no stock row still appear
+    // Products with no stock row get qty_on_hand = 0 and a "no_stock_row" flag
+    const locId = parseInt(locationId)
+    query = `SELECT p.id as product_id, p.name as product_name, p.sku, p.category, p.subcategory,
+      p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
+      p.primary_vendor_id, sv.name as primary_vendor_name, p.active as product_active,
+      COALESCE(s.qty_on_hand, 0) as qty_on_hand,
+      COALESCE(s.qty_on_hold, 0) as qty_on_hold,
+      COALESCE(s.qty_reserved, 0) as qty_reserved,
+      COALESCE(s.qty_on_hand, 0) - COALESCE(s.qty_on_hold, 0) - COALESCE(s.qty_reserved, 0) as qty_available,
+      s.reorder_point, s.reorder_qty,
+      s.last_counted_at, s.last_counted_by,
+      u_count.name as last_counted_by_name,
+      CASE WHEN s.id IS NULL THEN 1 ELSE 0 END as no_stock_row,
+      ? as location_id,
+      l.name as location_name, l.code as location_code,
+      s.id as stock_id
+      FROM products p
+      LEFT JOIN inventory_stock s ON s.product_id = p.id AND s.location_id = ?
+      LEFT JOIN locations l ON l.id = ?
+      LEFT JOIN suppliers sv ON p.primary_vendor_id = sv.id
+      LEFT JOIN users u_count ON s.last_counted_by = u_count.id
+      WHERE 1=1`
+    binds.push(locId, locId, locId)
+    if (!includeInactive) query += ' AND p.active = 1'
+  } else {
+    // Normal stock query: INNER JOIN — only show products with stock rows
+    query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.subcategory, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
+      p.primary_vendor_id, sv.name as primary_vendor_name, p.active as product_active,
+      l.name as location_name, l.code as location_code,
+      u_count.name as last_counted_by_name
+      FROM inventory_stock s
+      JOIN products p ON s.product_id = p.id
+      JOIN locations l ON s.location_id = l.id
+      LEFT JOIN suppliers sv ON p.primary_vendor_id = sv.id
+      LEFT JOIN users u_count ON s.last_counted_by = u_count.id
+      WHERE 1=1` + (includeInactive ? '' : ' AND p.active = 1')
+    if (locationId) { query += ' AND s.location_id = ?'; binds.push(parseInt(locationId)) }
+  }
+
   if (category) { query += ' AND p.category = ?'; binds.push(category) }
   if (search) { query += ' AND (p.name LIKE ? OR p.sku LIKE ?)'; binds.push(`%${search}%`, `%${search}%`) }
-  if (lowStockOnly) { query += ' AND s.reorder_point > 0 AND s.qty_on_hand <= s.reorder_point' }
+  if (lowStockOnly) { query += ' AND COALESCE(s.reorder_point, 0) > 0 AND COALESCE(s.qty_on_hand, 0) <= s.reorder_point' }
 
   const orderMap: Record<string, string> = {
     category: 'p.category ASC, p.name ASC',
     sku: 'p.sku ASC',
-    qty: 's.qty_on_hand DESC, p.name ASC',
+    qty: 'COALESCE(s.qty_on_hand, 0) DESC, p.name ASC',
     last_counted: 's.last_counted_at DESC NULLS LAST, p.name ASC'
   }
   query += ' ORDER BY ' + (orderMap[sort || ''] || 'p.name ASC')

@@ -134,6 +134,8 @@ async function invLoadStock() {
     if (invPage === 'count' && invCountSort) url += 'sort=' + invCountSort + '&';
     // Include inactive products
     if (invShowInactive) url += 'include_inactive=1&';
+    // Quick Count: include ALL active products even with no stock row (new / out-of-stock)
+    if (invPage === 'count') url += 'include_all_products=1&';
     var resp = await invAPI.get(url, { headers: invHeaders() });
     invStockData = resp.data.stock || [];
   } catch(e) { console.error('Stock load failed:', e); }
@@ -533,11 +535,17 @@ function invRenderQuickCount() {
   html += '<select class="inv-select" onchange="invCountSort=this.value;invRender()">' + sortHtml + '</select></div>';
   html += '</div>';
 
-  // Row 2: Search + Summary + Submit
+  // Pre-compute counts for new / out-of-stock
+  var _preNewCount = 0, _preOosCount = 0;
+  invStockData.forEach(function(s) { if (s.no_stock_row) _preNewCount++; else if ((s.qty_on_hand || 0) === 0) _preOosCount++; });
+
+  // Row 2: Search + filter pills + Summary + Submit
   html += '<div class="inv-count-toolbar">';
   html += '<input id="invCountSearch" type="text" placeholder="Search products..." class="inv-count-search" oninput="invFilterCountList()">';
   html += '<div class="inv-count-toolbar-right">';
   html += '<span id="invCountSummary" class="inv-count-summary">' + invStockData.length + ' items</span>';
+  if (_preNewCount > 0) html += '<button class="inv-count-pill inv-count-pill-new" data-status="new" onclick="invFilterCountByStatus(\'new\')" title="Show only new products"><i class="fas fa-circle-plus"></i> ' + _preNewCount + ' new</button>';
+  if (_preOosCount > 0) html += '<button class="inv-count-pill inv-count-pill-oos" data-status="oos" onclick="invFilterCountByStatus(\'oos\')" title="Show only out-of-stock"><i class="fas fa-box-open"></i> ' + _preOosCount + ' out of stock</button>';
   if (invUser && invUser.role === 'admin') html += '<button class="inv-btn inv-btn-outline inv-btn-sm" onclick="invShowCleanupReview()" style="color:#DC2626;border-color:#DC2626"><i class="fas fa-broom"></i> Review Deletions</button> ';
   if (invCanEdit('count')) html += '<button class="inv-btn inv-btn-primary" onclick="invSubmitBulkCount()"><i class="fas fa-check"></i> Submit Count</button>';
   html += '</div></div>';
@@ -574,10 +582,21 @@ function invRenderQuickCount() {
         '<i class="fas fa-layer-group"></i> No batches</span>';
     }
 
-    html += '<div class="inv-count-item" data-name="' + escH((s.product_name || '').toLowerCase()) + '" data-sku="' + escH((s.sku || '').toLowerCase()) + '" data-pid="' + s.product_id + '">' +
+    // Visual indicator for new products (no stock row) or out-of-stock
+    var statusBadge = '';
+    var itemExtraClass = '';
+    if (s.no_stock_row) {
+      statusBadge = '<span class="inv-count-badge inv-count-badge-new"><i class="fas fa-circle-plus"></i> NEW</span>';
+      itemExtraClass = ' inv-count-item-new';
+    } else if ((s.qty_on_hand || 0) === 0) {
+      statusBadge = '<span class="inv-count-badge inv-count-badge-oos"><i class="fas fa-box-open"></i> OUT OF STOCK</span>';
+      itemExtraClass = ' inv-count-item-oos';
+    }
+
+    html += '<div class="inv-count-item' + itemExtraClass + '" data-name="' + escH((s.product_name || '').toLowerCase()) + '" data-sku="' + escH((s.sku || '').toLowerCase()) + '" data-pid="' + s.product_id + '" data-status="' + (s.no_stock_row ? 'new' : (s.qty_on_hand || 0) === 0 ? 'oos' : 'stocked') + '">' +
       '<div class="inv-count-item-row">' +
       '<div class="inv-count-item-info">' +
-      '<strong id="invCntName_' + idx + '">' + escH(s.product_name) + '</strong>' +
+      '<strong id="invCntName_' + idx + '">' + escH(s.product_name) + '</strong>' + statusBadge +
       '<span class="inv-muted">' + escH(s.sku || '') + ' · ' + escH(s.unit_type || '') + ' · <span class="inv-cat-badge">' + catLabel + '</span>' + (subLabel ? ' · ' + subLabel : '') + '</span>' +
       lastCountedInfo + batchBadge +
       '</div>' +
@@ -664,12 +683,31 @@ function invMarkChanged(idx) {
 function invFilterCountList() {
   var search = (document.getElementById('invCountSearch').value || '').toLowerCase();
   var items = document.querySelectorAll('.inv-count-item');
+  var activeStatus = document.querySelector('.inv-count-pill.active');
+  var statusFilter = activeStatus ? activeStatus.dataset.status : '';
   items.forEach(function(item) {
     var name = item.dataset.name || '';
     var sku = item.dataset.sku || '';
-    item.style.display = (!search || name.includes(search) || sku.includes(search)) ? '' : 'none';
+    var matchesSearch = !search || name.includes(search) || sku.includes(search);
+    var matchesStatus = !statusFilter || item.dataset.status === statusFilter;
+    item.style.display = (matchesSearch && matchesStatus) ? '' : 'none';
   });
 }
+
+function invFilterCountByStatus(status) {
+  var pills = document.querySelectorAll('.inv-count-pill');
+  var alreadyActive = false;
+  pills.forEach(function(p) {
+    if (p.dataset.status === status && p.classList.contains('active')) alreadyActive = true;
+    p.classList.remove('active');
+  });
+  if (!alreadyActive) {
+    var target = document.querySelector('.inv-count-pill[data-status="' + status + '"]');
+    if (target) target.classList.add('active');
+  }
+  invFilterCountList();
+}
+window.invFilterCountByStatus = invFilterCountByStatus;
 
 async function invSubmitBulkCount() {
   var counts = [];
