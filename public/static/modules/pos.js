@@ -1143,17 +1143,21 @@ function renderCustomerArea() {
 
     el.innerHTML =
       '<div class="pos-customer-selected">' +
-        '<div style="width:36px;height:36px;background:var(--pos-navy);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">' +
-          initials(_s.customer.business_name || _s.customer.contact_name || '?') +
+        '<div id="posCustAvatarLink" class="pos-cust-avatar-link" title="View / Edit Customer">' +
+          '<div style="width:36px;height:36px;background:var(--pos-navy);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">' +
+            initials(_s.customer.business_name || _s.customer.contact_name || '?') +
+          '</div>' +
         '</div>' +
         '<div class="pos-customer-info">' +
-          '<div class="pos-customer-name">' + esc(_s.customer.business_name || _s.customer.contact_name) +
-            ' <a href="#" id="posCustPanelLink" style="font-size:11px;color:var(--pos-navy-light)"><i class="fas fa-external-link-alt"></i></a></div>' +
+          '<div class="pos-customer-name"><a href="#" id="posCustNameLink" class="pos-cust-name-link">' + esc(_s.customer.business_name || _s.customer.contact_name) + '</a>' +
+            ' <a href="#" id="posCustPanelLink" style="font-size:11px;color:var(--pos-navy-light)" title="Quick view"><i class="fas fa-info-circle"></i></a></div>' +
           '<div class="pos-customer-detail">' + details + acctHtml + '</div>' +
         '</div>' +
         '<button class="pos-customer-remove" id="posCustRemoveBtn" title="Remove customer"><i class="fas fa-times"></i></button>' +
       '</div>';
 
+    on('posCustNameLink', 'click', function(e) { e.preventDefault(); openCustomerSheet(_s.customer.id); });
+    on('posCustAvatarLink', 'click', function(e) { e.preventDefault(); openCustomerSheet(_s.customer.id); });
     on('posCustPanelLink', 'click', function(e) { e.preventDefault(); showCustomerPanel(_s.customer.id); });
     on('posCustRemoveBtn', 'click', removeCustomer);
   } else {
@@ -2378,7 +2382,7 @@ function openCustomerSheet(id) {
       id: null, business_name: '', contact_name: '', phone: '', email: '',
       customer_type: 'other', notes: '', tax_exempt: 0, sponsor_discount: 0,
       priority_rank: 0, location_id: null, tags: '', salesperson_id: null, salesperson_name: ''
-    }, [], []);
+    }, [], [], [], {}, {});
     return;
   }
 
@@ -2390,13 +2394,20 @@ function openCustomerSheet(id) {
     var sales = r.data.recentSales || [];
     var rules = r.data.priceRules || [];
     var acct = r.data.account || {};
+    var extra = {
+      standingOrders: r.data.standingOrders || [],
+      lastDelivery: r.data.lastDelivery || null,
+      deliveryZone: r.data.deliveryZone || null,
+      crmOrg: r.data.crmOrg || null
+    };
     renderCustomerSheet(c, addrs, orders.concat(sales).sort(function(a, b) {
       return (b.created_at || '').localeCompare(a.created_at || '');
-    }), rules, acct);
+    }), rules, acct, extra);
   }).catch(function(err) { toast('Failed to load customer: ' + errMsg(err), 'error'); });
 }
 
-function renderCustomerSheet(c, addrs, history, rules, acct) {
+function renderCustomerSheet(c, addrs, history, rules, acct, extra) {
+  extra = extra || {};
   var isNew = !c.id;
   var locOpts = '<option value="">None</option>';
   _s.locations.forEach(function(l) {
@@ -2410,20 +2421,59 @@ function renderCustomerSheet(c, addrs, history, rules, acct) {
     return '<option value="' + t + '"' + (c.customer_type === t ? ' selected' : '') + '>' + t.charAt(0).toUpperCase() + t.slice(1) + '</option>';
   }).join('');
 
+  // Build quick-info summary card (for existing customers)
+  var summaryCard = '';
+  if (!isNew) {
+    var bal = (acct && acct.balance) ? acct.balance : 0;
+    var limit = (acct && acct.credit_limit) ? acct.credit_limit : 0;
+    var balColor = (limit > 0 && bal >= limit) ? '#EF4444' : '#10B981';
+    var lastDel = extra.lastDelivery;
+    var zone = extra.deliveryZone;
+    var standing = extra.standingOrders || [];
+    var totalHistory = (history || []).length;
+
+    summaryCard = '<div class="pos-cust-summary-card">' +
+      '<div class="pos-cust-summary-items">' +
+        '<div class="pos-cust-summary-item">' +
+          '<div class="pos-cust-summary-icon" style="background:#EFF6FF;color:#3B82F6"><i class="fas fa-credit-card"></i></div>' +
+          '<div><div class="pos-cust-summary-label">Balance</div><div class="pos-cust-summary-value" style="color:' + balColor + '">$' + bal.toFixed(2) + (limit > 0 ? ' / $' + limit.toFixed(2) : '') + '</div></div>' +
+        '</div>' +
+        '<div class="pos-cust-summary-item">' +
+          '<div class="pos-cust-summary-icon" style="background:#F0FDF4;color:#22C55E"><i class="fas fa-truck"></i></div>' +
+          '<div><div class="pos-cust-summary-label">Last Delivery</div><div class="pos-cust-summary-value">' + (lastDel ? (lastDel.scheduled_date || lastDel.created_at || '').slice(0, 10) : '<span style="color:#9CA3AF">None</span>') + '</div></div>' +
+        '</div>' +
+        '<div class="pos-cust-summary-item">' +
+          '<div class="pos-cust-summary-icon" style="background:#FEF3C7;color:#D97706"><i class="fas fa-redo"></i></div>' +
+          '<div><div class="pos-cust-summary-label">Standing Orders</div><div class="pos-cust-summary-value">' + (standing.length > 0 ? '<span style="color:#16A34A">' + standing.length + ' active</span>' : '<span style="color:#9CA3AF">None</span>') + '</div></div>' +
+        '</div>' +
+        '<div class="pos-cust-summary-item">' +
+          '<div class="pos-cust-summary-icon" style="background:#FDF2F8;color:#EC4899"><i class="fas fa-receipt"></i></div>' +
+          '<div><div class="pos-cust-summary-label">Recent Orders</div><div class="pos-cust-summary-value">' + totalHistory + '</div></div>' +
+        '</div>' +
+      '</div>' +
+      (zone ? '<div class="pos-cust-summary-zone"><i class="fas fa-map-marker-alt"></i> Zone: <span style="background:' + esc(zone.color || '#6366F1') + ';color:white;padding:1px 8px;border-radius:10px;font-size:11px">' + esc(zone.name) + '</span>' + (zone.delivery_days ? ' &middot; ' + esc(zone.delivery_days) : '') + '</div>' : '') +
+      (c.is_seasonal ? '<div class="pos-cust-summary-zone"><i class="fas fa-calendar-alt"></i> Seasonal: <span class="pos-badge ' + (c.season_status === 'in_season' ? 'pos-badge-green' : c.season_status === 'out_of_season' ? 'pos-badge-red' : 'pos-badge-orange') + '">' + esc(c.season_status || 'unknown') + '</span></div>' : '') +
+    '</div>';
+  }
+
+  var hasStanding = !isNew && (extra.standingOrders || []).length > 0;
+
   var html = '<div class="pos-modal-overlay" id="posCustSheetOverlay">' +
     '<div class="pos-cust-sheet">' +
       '<div class="pos-cust-sheet-header">' +
         '<h3><i class="fas fa-' + (isNew ? 'user-plus' : 'user-edit') + '"></i> ' + (isNew ? 'New Customer' : esc(c.business_name || c.contact_name)) + '</h3>' +
         '<button class="pos-modal-close" id="posCustSheetClose"><i class="fas fa-times"></i></button>' +
       '</div>' +
+      summaryCard +
       '<div class="pos-cust-sheet-body">' +
         '<div class="pos-cust-sheet-tabs">' +
-          '<button class="pos-cust-tab active" data-tab="details"><i class="fas fa-id-card"></i> Details</button>' +
-          '<button class="pos-cust-tab" data-tab="addresses"><i class="fas fa-map-marker-alt"></i> Addresses' + (addrs && addrs.length ? ' (' + addrs.length + ')' : '') + '</button>' +
-          (isNew ? '' : '<button class="pos-cust-tab" data-tab="discounts"><i class="fas fa-tags"></i> Discounts</button>') +
-          (isNew ? '' : '<button class="pos-cust-tab" data-tab="history"><i class="fas fa-receipt"></i> Orders</button>') +
-          (isNew ? '' : '<button class="pos-cust-tab" data-tab="account"><i class="fas fa-credit-card"></i> Account</button>') +
-          (isNew ? '' : '<button class="pos-cust-tab" data-tab="crm"><i class="fas fa-link"></i> CRM</button>') +
+          '<button class="pos-cust-tab active" data-tab="details"><i class="fas fa-id-card"></i> <span class="hide-mobile">Details</span></button>' +
+          '<button class="pos-cust-tab" data-tab="addresses"><i class="fas fa-map-marker-alt"></i> <span class="hide-mobile">Addresses</span>' + (addrs && addrs.length ? ' (' + addrs.length + ')' : '') + '</button>' +
+          (isNew ? '' : '<button class="pos-cust-tab" data-tab="delivery"><i class="fas fa-truck"></i> <span class="hide-mobile">Delivery</span></button>') +
+          (isNew ? '' : '<button class="pos-cust-tab" data-tab="discounts"><i class="fas fa-tags"></i> <span class="hide-mobile">Discounts</span></button>') +
+          (isNew ? '' : '<button class="pos-cust-tab" data-tab="history"><i class="fas fa-receipt"></i> <span class="hide-mobile">Orders</span></button>') +
+          (isNew ? '' : '<button class="pos-cust-tab" data-tab="account"><i class="fas fa-credit-card"></i> <span class="hide-mobile">Account</span></button>') +
+          (isNew ? '' : '<button class="pos-cust-tab" data-tab="crm"><i class="fas fa-link"></i> <span class="hide-mobile">CRM</span></button>') +
         '</div>' +
 
         // === DETAILS TAB ===
@@ -2478,6 +2528,14 @@ function renderCustomerSheet(c, addrs, history, rules, acct) {
               '<label>Tax Exempt</label>' +
               '<label class="pos-cust-toggle"><input type="checkbox" id="posCustTaxExempt"' + (c.tax_exempt ? ' checked' : '') + '> <span>Tax Exempt</span></label>' +
             '</div>' +
+            '<div class="pos-cust-form-group">' +
+              '<label>SMS Opt-In</label>' +
+              '<label class="pos-cust-toggle"><input type="checkbox" id="posCustSmsOptIn"' + (c.sms_opt_in ? ' checked' : '') + '> <span>SMS Opt-In</span></label>' +
+            '</div>' +
+            '<div class="pos-cust-form-group full">' +
+              '<label>SMS Phone <span style="font-weight:400;color:var(--pos-gray-400)">(if different from main)</span></label>' +
+              '<input type="tel" id="posCustSmsPhone" value="' + esc(c.sms_phone || '') + '" placeholder="Leave blank to use main phone">' +
+            '</div>' +
             '<div class="pos-cust-form-group full">' +
               '<label>Tags <span style="font-weight:400;color:var(--pos-gray-400)">(comma separated)</span></label>' +
               '<div class="pos-cust-tags-input-wrap">' +
@@ -2500,6 +2558,111 @@ function renderCustomerSheet(c, addrs, history, rules, acct) {
           '</div>' +
           '<div id="posCustAddrList">' + renderAddrList(addrs, c.id) + '</div>' +
         '</div>' +
+
+        // === DELIVERY TAB (standing orders, delivery prefs, seasonality) ===
+        (isNew ? '' :
+        '<div class="pos-cust-tab-content" data-content="delivery">' +
+          // Standing Orders section
+          (function() {
+            var so = extra.standingOrders || [];
+            var html = '<div class="pos-cust-section"><h4><i class="fas fa-redo"></i> Standing Orders</h4>';
+            if (so.length === 0) {
+              html += '<div style="padding:12px;color:var(--pos-gray-400);font-size:13px">No active standing orders. Set up recurring schedules in the Logistics module.</div>';
+            } else {
+              so.forEach(function(s) {
+                html += '<div class="pos-cust-standing-card">' +
+                  '<div class="pos-cust-standing-header">' +
+                    '<span><i class="fas fa-clipboard-list"></i> Schedule #' + s.id + '</span>' +
+                    '<span class="pos-badge pos-badge-green">' + esc(s.status) + '</span>' +
+                  '</div>' +
+                  (s.zone_name ? '<div style="font-size:12px;color:var(--pos-gray-500);margin-bottom:4px"><i class="fas fa-map-marker-alt"></i> ' + esc(s.zone_name) + (s.zone_delivery_days ? ' (' + esc(s.zone_delivery_days) + ')' : '') + '</div>' : '') +
+                  (s.address_label ? '<div style="font-size:12px;color:var(--pos-gray-500);margin-bottom:6px"><i class="fas fa-home"></i> ' + esc(s.address_label) + (s.address_street ? ' — ' + esc(s.address_street) + ', ' + esc(s.address_city || '') : '') + '</div>' : '') +
+                  '<div style="font-size:12px;margin-bottom:4px;color:var(--pos-gray-500)">Confirm: <strong>' + esc(s.confirm_mode || 'sms') + '</strong>' + (s.auto_confirm ? ' (auto)' : '') + '</div>';
+                if (s.items && s.items.length > 0) {
+                  html += '<table class="pos-table" style="font-size:12px;margin-top:6px"><thead><tr><th>Product</th><th>Qty</th><th>Unit</th></tr></thead><tbody>';
+                  s.items.forEach(function(item) {
+                    html += '<tr><td>' + esc(item.product_name) + '</td><td>' + item.quantity + '</td><td>' + esc(item.unit_type || 'bag') + '</td></tr>';
+                  });
+                  html += '</tbody></table>';
+                }
+                html += '</div>';
+              });
+            }
+            html += '</div>';
+
+            // Delivery Preferences
+            html += '<div class="pos-cust-section" style="margin-top:16px"><h4><i class="fas fa-clipboard-check"></i> Delivery Preferences</h4>' +
+              '<div class="pos-cust-form-grid">' +
+                '<div class="pos-cust-form-group full">' +
+                  '<label>Default Delivery Instructions</label>' +
+                  '<textarea id="posCustDeliveryNotes" rows="3" placeholder="e.g. Leave at gate, call before delivery...">' + esc(c.delivery_notes_default || '') + '</textarea>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+
+            // Seasonality
+            html += '<div class="pos-cust-section" style="margin-top:16px"><h4><i class="fas fa-calendar-alt"></i> Seasonality</h4>' +
+              '<div class="pos-cust-form-grid">' +
+                '<div class="pos-cust-form-group">' +
+                  '<label>Seasonal Customer</label>' +
+                  '<label class="pos-cust-toggle"><input type="checkbox" id="posCustSeasonal"' + (c.is_seasonal ? ' checked' : '') + '> <span>Seasonal</span></label>' +
+                '</div>' +
+                '<div class="pos-cust-form-group">' +
+                  '<label>Season Status</label>' +
+                  '<select id="posCustSeasonStatus">' +
+                    '<option value="unknown"' + ((c.season_status||'unknown')==='unknown'?' selected':'') + '>Unknown</option>' +
+                    '<option value="in_season"' + (c.season_status==='in_season'?' selected':'') + '>In Season</option>' +
+                    '<option value="out_of_season"' + (c.season_status==='out_of_season'?' selected':'') + '>Out of Season</option>' +
+                    '<option value="arriving_soon"' + (c.season_status==='arriving_soon'?' selected':'') + '>Arriving Soon</option>' +
+                    '<option value="departing_soon"' + (c.season_status==='departing_soon'?' selected':'') + '>Departing Soon</option>' +
+                  '</select>' +
+                '</div>' +
+                '<div class="pos-cust-form-group">' +
+                  '<label>Season Start</label>' +
+                  '<div style="display:flex;gap:6px">' +
+                    '<select id="posCustSeasonStartMonth" style="flex:1">' +
+                      '<option value="">Month</option>' +
+                      ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map(function(m,i) {
+                        return '<option value="' + (i+1) + '"' + (c.season_start_month==(i+1)?' selected':'') + '>' + m + '</option>';
+                      }).join('') +
+                    '</select>' +
+                    '<input type="number" id="posCustSeasonStartDay" min="1" max="31" value="' + (c.season_start_day || '') + '" placeholder="Day" style="width:60px">' +
+                  '</div>' +
+                '</div>' +
+                '<div class="pos-cust-form-group">' +
+                  '<label>Season End</label>' +
+                  '<div style="display:flex;gap:6px">' +
+                    '<select id="posCustSeasonEndMonth" style="flex:1">' +
+                      '<option value="">Month</option>' +
+                      ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map(function(m,i) {
+                        return '<option value="' + (i+1) + '"' + (c.season_end_month==(i+1)?' selected':'') + '>' + m + '</option>';
+                      }).join('') +
+                    '</select>' +
+                    '<input type="number" id="posCustSeasonEndDay" min="1" max="31" value="' + (c.season_end_day || '') + '" placeholder="Day" style="width:60px">' +
+                  '</div>' +
+                '</div>' +
+                '<div class="pos-cust-form-group full">' +
+                  '<label>Season Notes</label>' +
+                  '<textarea id="posCustSeasonNotes" rows="2" placeholder="e.g. Snowbird, arrives October...">' + esc(c.season_notes || '') + '</textarea>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+
+            // Last delivery info
+            if (extra.lastDelivery) {
+              var ld = extra.lastDelivery;
+              html += '<div class="pos-cust-section" style="margin-top:16px"><h4><i class="fas fa-truck"></i> Last Delivery</h4>' +
+                '<div style="font-size:13px;padding:8px 0">' +
+                  '<strong>' + esc(ld.order_number || 'Order') + '</strong> — ' + esc(ld.status) +
+                  '<br>Date: ' + esc((ld.scheduled_date || ld.created_at || '').slice(0, 10)) +
+                  (ld.actual_arrival ? '<br>Arrived: ' + esc(ld.actual_arrival.slice(0, 16).replace('T', ' ')) : '') +
+                  (ld.delivery_photo_url ? '<br><a href="' + esc(ld.delivery_photo_url) + '" target="_blank" style="color:var(--pos-navy)"><i class="fas fa-camera"></i> Delivery Photo</a>' : '') +
+                '</div></div>';
+            }
+
+            return html;
+          })() +
+        '</div>') +
 
         // === DISCOUNTS TAB (pricing rules) ===
         (isNew ? '' :
@@ -2673,8 +2836,18 @@ function saveCustomer(id) {
     sponsor_discount: parseFloat(gv('posCustDiscount') || '0'),
     discount_fixed: parseFloat(gv('posCustDiscFixed') || '0'),
     tax_exempt: document.getElementById('posCustTaxExempt') && document.getElementById('posCustTaxExempt').checked ? 1 : 0,
+    sms_opt_in: document.getElementById('posCustSmsOptIn') && document.getElementById('posCustSmsOptIn').checked ? 1 : 0,
+    sms_phone: gv('posCustSmsPhone') || null,
     tags: gv('posCustTags'),
-    notes: gv('posCustNotes')
+    notes: gv('posCustNotes'),
+    delivery_notes_default: gv('posCustDeliveryNotes') || null,
+    is_seasonal: document.getElementById('posCustSeasonal') && document.getElementById('posCustSeasonal').checked ? 1 : 0,
+    season_status: gv('posCustSeasonStatus') || 'unknown',
+    season_start_month: gv('posCustSeasonStartMonth') ? parseInt(gv('posCustSeasonStartMonth')) : null,
+    season_start_day: gv('posCustSeasonStartDay') ? parseInt(gv('posCustSeasonStartDay')) : null,
+    season_end_month: gv('posCustSeasonEndMonth') ? parseInt(gv('posCustSeasonEndMonth')) : null,
+    season_end_day: gv('posCustSeasonEndDay') ? parseInt(gv('posCustSeasonEndDay')) : null,
+    season_notes: gv('posCustSeasonNotes') || null
   };
 
   if (!body.business_name && !body.contact_name) {
@@ -2691,6 +2864,10 @@ function saveCustomer(id) {
       openCustomerSheet(r.data.id);
     } else {
       closeCustomerSheet();
+    }
+    // Refresh the customer in register if they're the selected customer
+    if (id && _s.customer && _s.customer.id === id) {
+      selectCustomer(id);
     }
     loadCustomerList();
     // Refresh tags

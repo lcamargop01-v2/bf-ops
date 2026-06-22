@@ -174,6 +174,52 @@ app.get('/api/pos/customers/:id', async (c) => {
   // CRM org if linked
   const crmOrg = await db.prepare('SELECT id, name, org_type, tags FROM crm_organizations WHERE customer_id = ?').bind(id).first()
 
+  // Standing orders (recurring schedules)
+  let standingOrders: any[] = []
+  try {
+    const schedules = await db.prepare(`
+      SELECT rs.id, rs.status, rs.confirm_mode, rs.auto_confirm, rs.address_id,
+        a.label as address_label, a.street as address_street, a.city as address_city,
+        dz.name as zone_name, dz.color as zone_color, dz.delivery_days as zone_delivery_days
+      FROM recurring_schedules rs
+      LEFT JOIN addresses a ON rs.address_id = a.id
+      LEFT JOIN delivery_zones dz ON a.zone_id = dz.id
+      WHERE rs.customer_id = ? AND rs.status = 'active'
+    `).bind(id).all()
+    for (const sched of (schedules.results || []) as any[]) {
+      const items = await db.prepare(`
+        SELECT rsi.product_id, rsi.quantity, p.name as product_name, p.unit_type, p.sku
+        FROM recurring_schedule_items rsi
+        JOIN products p ON rsi.product_id = p.id
+        WHERE rsi.schedule_id = ?
+      `).bind(sched.id).all()
+      standingOrders.push({ ...sched, items: items.results || [] })
+    }
+  } catch(e) { /* table might not exist locally */ }
+
+  // Last delivery info
+  let lastDelivery: any = null
+  try {
+    lastDelivery = await db.prepare(`
+      SELECT o.id, o.order_number, o.status, o.scheduled_date, o.created_at,
+        rs.actual_arrival, rs.signature_url, rs.delivery_photo_url
+      FROM orders o
+      LEFT JOIN route_stops rs ON rs.order_id = o.id
+      WHERE o.customer_id = ? AND o.status IN ('completed','delivered')
+      ORDER BY COALESCE(rs.actual_arrival, o.scheduled_date, o.created_at) DESC LIMIT 1
+    `).bind(id).first()
+  } catch(e) {}
+
+  // Primary address zone info
+  let deliveryZone: any = null
+  try {
+    const primaryAddr = (addresses.results || []).find((a: any) => a.is_primary) || (addresses.results || [])[0]
+    if (primaryAddr && (primaryAddr as any).zone_id) {
+      deliveryZone = await db.prepare('SELECT id, name, color, delivery_days FROM delivery_zones WHERE id = ?')
+        .bind((primaryAddr as any).zone_id).first()
+    }
+  } catch(e) {}
+
   return c.json({
     customer,
     account: account || { balance: 0, credit_limit: 0, payment_terms: 'COD', status: 'active' },
@@ -181,7 +227,10 @@ app.get('/api/pos/customers/:id', async (c) => {
     recentOrders: recentOrders.results,
     recentSales: recentSales.results,
     priceRules: priceRules.results,
-    crmOrg
+    crmOrg,
+    standingOrders,
+    lastDelivery,
+    deliveryZone
   })
 })
 
@@ -1036,18 +1085,41 @@ app.put('/api/pos/customer-manage/:id', async (c) => {
     UPDATE customers SET
       business_name = ?, contact_name = ?, phone = ?, email = ?,
       customer_type = ?, notes = ?, tax_exempt = ?, sponsor_discount = ?,
-      priority_rank = ?, location_id = ?, tags = ?,
+      discount_fixed = ?, priority_rank = ?, location_id = ?, tags = ?,
       salesperson_id = ?, salesperson_name = ?,
+      sms_opt_in = ?, sms_phone = ?, delivery_notes_default = ?,
+      is_seasonal = ?, season_status = ?,
+      season_start_month = ?, season_start_day = ?,
+      season_end_month = ?, season_end_day = ?, season_notes = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).bind(
     body.business_name || '', body.contact_name || '', body.phone || '', body.email || '',
     body.customer_type || 'other', body.notes || '', body.tax_exempt ? 1 : 0,
-    body.sponsor_discount || 0, body.priority_rank || 0,
-    body.location_id || null, body.tags || '',
+    body.sponsor_discount || 0, body.discount_fixed || 0,
+    body.priority_rank || 0, body.location_id || null, body.tags || '',
     body.salesperson_id || null, body.salesperson_name || '',
+    body.sms_opt_in !== undefined ? (body.sms_opt_in ? 1 : 0) : 1,
+    body.sms_phone ?? null, body.delivery_notes_default ?? null,
+    body.is_seasonal ? 1 : 0, body.season_status || 'unknown',
+    body.season_start_month ?? null, body.season_start_day ?? null,
+    body.season_end_month ?? null, body.season_end_day ?? null, body.season_notes ?? null,
     id
   ).run()
+
+  // Update account terms if provided
+  if (body.payment_terms || body.credit_limit !== undefined) {
+    const acctFields: string[] = []
+    const acctVals: any[] = []
+    if (body.payment_terms) { acctFields.push('payment_terms = ?'); acctVals.push(body.payment_terms) }
+    if (body.credit_limit !== undefined) { acctFields.push('credit_limit = ?'); acctVals.push(body.credit_limit) }
+    if (acctFields.length > 0) {
+      acctFields.push('updated_at = CURRENT_TIMESTAMP')
+      acctVals.push(id)
+      await db.prepare('INSERT INTO customer_accounts (customer_id) VALUES (?) ON CONFLICT(customer_id) DO NOTHING').bind(id).run()
+      await db.prepare(`UPDATE customer_accounts SET ${acctFields.join(', ')} WHERE customer_id = ?`).bind(...acctVals).run()
+    }
+  }
 
   return c.json({ success: true })
 })
@@ -1840,7 +1912,7 @@ app.patch('/api/pos/customer-manage/:id', async (c) => {
   const existing = await db.prepare('SELECT id FROM customers WHERE id = ?').bind(id).first()
   if (!existing) return c.json({ error: 'Customer not found' }, 404)
 
-  const allowed = ['business_name', 'contact_name', 'phone', 'email', 'notes', 'tags', 'customer_type', 'tax_exempt', 'priority_rank', 'sponsor_discount', 'location_id', 'salesperson_id', 'salesperson_name']
+  const allowed = ['business_name', 'contact_name', 'phone', 'email', 'notes', 'tags', 'customer_type', 'tax_exempt', 'priority_rank', 'sponsor_discount', 'discount_fixed', 'location_id', 'salesperson_id', 'salesperson_name', 'sms_phone', 'sms_opt_in', 'delivery_notes_default', 'is_seasonal', 'season_start_month', 'season_start_day', 'season_end_month', 'season_end_day', 'season_status', 'season_notes', 'preferred_truck_id']
   const fields: string[] = []
   const vals: any[] = []
 
