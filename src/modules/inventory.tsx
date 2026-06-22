@@ -1496,11 +1496,12 @@ app.post('/api/inventory/products/recategorize-apply', async (c) => {
     await db.batch(batchStmts.slice(i, i + BATCH_CHUNK))
   }
 
-  // Log the bulk action in audit
+  // Log the bulk action in audit (use first product id to satisfy FK constraint)
+  const firstProduct = allProducts[0]
   const anyStock = await db.prepare('SELECT location_id FROM inventory_stock LIMIT 1').first() as any
-  if (anyStock) {
+  if (anyStock && firstProduct) {
     await auditLog(db, {
-      product_id: 0, location_id: anyStock.location_id, action: 'category_consolidation', qty_change: 0,
+      product_id: firstProduct.id, location_id: anyStock.location_id, action: 'category_consolidation', qty_change: 0,
       reason: `Bulk category consolidation: ${updated} products updated, ${skipped} unchanged.`,
       notes: `Overrides applied: ${Object.keys(overrides).length}`,
       user_id: user.id, user_name: userInfo?.name || user.email
