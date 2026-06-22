@@ -86,6 +86,8 @@ var _shellCurrentSubPage = null;
 function shellSetSubPage(pageId) {
   _shellCurrentSubPage = pageId;
   shellUpdateBottomNav();
+  // Auto-refresh help tips if panel is open
+  if (_helpOpen) refreshHelpContent();
 }
 
 function shellUpdateBottomNav() {
@@ -1366,6 +1368,20 @@ var _helpChatHistory = [];
 
 // Comprehensive quick-tips per module + page
 var HELP_TIPS = {
+  '': {
+    _default: {
+      title: '🏠 Home — Module Picker',
+      tips: [
+        'Tap any module card to open it',
+        'Logistics = deliveries and orders',
+        'Inventory = stock and counts',
+        'Purchasing = supplier orders',
+        'Tasks = your to-do list and alerts',
+        'POS = in-store register',
+        'CRM = customer relationships'
+      ]
+    }
+  },
   _modules: {
     logistics: { title: 'Logistics', desc: 'Deliveries, orders, routes, fleet, and standing order text confirmations.' },
     inventory: { title: 'Inventory', desc: 'Stock levels, counts, transfers between locations.' },
@@ -1646,6 +1662,59 @@ var HELP_TIPS = {
         'Track transfer status: Draft → Packed → Shipped → Received',
         'Print transfer packing list for the driver'
       ]
+    },
+    smart_restock: {
+      title: '🪄 Smart Restock — AI Suggestions',
+      tips: [
+        'AI analyzes stock levels and usage patterns',
+        'Suggests what to reorder before you run out',
+        'Tap "Create PO" to turn a suggestion into a purchase order',
+        'Adjust quantities if the AI got it wrong — it learns over time'
+      ]
+    },
+    batches: {
+      title: '📦 Batches — Track Lot Numbers',
+      tips: [
+        'Every shipment received gets a batch number',
+        'Track which batch is at which location',
+        'Useful for recalls — find exactly where product went',
+        'Batches link to the purchase order they came from'
+      ]
+    },
+    losses: {
+      title: '⚠️ Losses — Damaged & Lost Stock',
+      tips: [
+        'Record products that are damaged, expired, or lost',
+        'Select the reason so you can track patterns',
+        'Stock levels update automatically after recording a loss',
+        'Review loss reports to find problem areas'
+      ]
+    },
+    audit: {
+      title: '📜 Audit Log — Stock History',
+      tips: [
+        'Every stock movement is logged here',
+        'See who did what and when',
+        'Filter by product, user, action type, or date',
+        'Great for investigating discrepancies'
+      ]
+    },
+    snapshots: {
+      title: '📸 Snapshots — Point-in-Time Stock',
+      tips: [
+        'Daily snapshots of stock levels at each location',
+        'Compare today vs. any past date',
+        'Helpful for monthly reports and audits'
+      ]
+    },
+    categories: {
+      title: '🏷️ Categories — Organize Products',
+      tips: [
+        'AI-powered product categorization',
+        'Review suggested categories and approve or override',
+        'Categories: Hay, Shavings, Grain, Shelf Goods',
+        'Proper categories help with reports and restock suggestions'
+      ]
     }
   },
   ordering: {
@@ -1698,6 +1767,15 @@ var HELP_TIPS = {
         'Contact info, payment terms, lead times',
         'See order history with each supplier'
       ]
+    },
+    order_assignments: {
+      title: '👤 Order Assignments — Who Orders What',
+      tips: [
+        'Assign team members to product categories',
+        'Each person handles their assigned categories',
+        'Prevents duplicate orders and confusion',
+        'Change assignments anytime as roles shift'
+      ]
     }
   },
   crm: {
@@ -1745,6 +1823,53 @@ var HELP_TIPS = {
         'Bell icon 🔔 in top bar shows notifications',
         'Red badge on bell = unread notifications'
       ]
+    },
+    dashboard: {
+      title: '📊 Tasks Dashboard',
+      tips: [
+        'Quick overview of your tasks and team activity',
+        'See how many tasks are overdue, in progress, or done',
+        'Auto-tasks appear here from standing orders, seasonality, etc.',
+        'Tap any task card to jump to its details'
+      ]
+    },
+    'my-tasks': {
+      title: '👤 My Tasks — Your To-Do List',
+      tips: [
+        'Tasks assigned specifically to YOU',
+        'Sort by due date, priority, or status',
+        'Tap a task to see full details and notes',
+        'Mark as complete when you finish — your team sees it instantly',
+        'Overdue tasks show in red — handle those first!'
+      ]
+    },
+    'all-tasks': {
+      title: '📋 All Tasks — Team Overview',
+      tips: [
+        'Every task across the whole team',
+        'Filter by person, status, or priority',
+        'Great for managers to see what everyone\'s working on',
+        'Tap "+" to create a new task for someone'
+      ]
+    },
+    'pricing-alerts': {
+      title: '💲 Price Alerts — Cost Changes',
+      tips: [
+        'Alerts when supplier prices change',
+        'Compare old price vs. new price at a glance',
+        'Review and acknowledge price changes',
+        'Helps catch unexpected cost increases early'
+      ]
+    },
+    notifications: {
+      title: '🔔 Notifications — Activity Feed',
+      tips: [
+        'All system notifications in one place',
+        'Standing order replies, task assignments, stock alerts',
+        'Tap to jump to the related item',
+        'Mark all as read with the button at top',
+        'Same as tapping the 🔔 bell in the top bar'
+      ]
     }
   },
   pos: {
@@ -1757,6 +1882,26 @@ var HELP_TIPS = {
         'Apply discounts if needed',
         'Accept payment: cash, card, or account charge',
         'Print or email receipts'
+      ]
+    },
+    register: {
+      title: '💳 Register — Ring Up Sales',
+      tips: [
+        'Search products by name at the top',
+        'Tap a product to add it to the cart',
+        'Change quantity or remove items in the cart',
+        'Pick the customer or leave as "Walk-in"',
+        'Tap "Pay" when ready — choose cash or card',
+        'Surcharges auto-apply for card payments',
+        'Print receipt or send by email/text'
+      ]
+    },
+    dc_register: {
+      title: '🏭 DC Register — Warehouse Sales',
+      tips: [
+        'Same as the retail register but for the warehouse/DC location',
+        'Prices may differ from retail — check the total',
+        'Customer pickup orders processed here'
       ]
     }
   },
@@ -1816,36 +1961,21 @@ function refreshHelpContent() {
 
   var mod = activeModule || '';
   var page = '';
-  // Detect current page from each module's state
-  if (mod === 'logistics' && typeof currentPage !== 'undefined') {
-    // currentPage is a global in logistics.js
-    try { page = window.currentPage || ''; } catch(e) {}
-    // Also try to detect from the logistics module's internal state
-    if (!page) {
-      var scripts = document.querySelectorAll('script');
-      // fallback
-    }
+
+  // Primary: use shell-tracked sub-page (set by shellSetSubPage from all modules)
+  if (_shellCurrentSubPage) {
+    page = _shellCurrentSubPage;
   }
-  // For other modules, try to detect from page title or URL
-  if (!page) {
-    var titleEl = document.querySelector('.topbar-title, #pageTitle, .module-title');
-    if (titleEl) {
-      var titleText = (titleEl.textContent || '').toLowerCase().trim();
-      // Map title back to page ID
-      var pageMap = SHELL_MODULE_PAGES[mod] || [];
-      for (var i = 0; i < pageMap.length; i++) {
-        if (pageMap[i].label.toLowerCase() === titleText) {
-          page = pageMap[i].id;
-          break;
-        }
-      }
-    }
-  }
+  // Fallback: try each module's own page variable
+  if (!page && mod === 'logistics') { try { page = window.currentPage || ''; } catch(e) {} }
+  if (!page && mod === 'inventory') { try { page = window.invPage || ''; } catch(e) {} }
+  if (!page && mod === 'ordering') { try { page = window.poPage || ''; } catch(e) {} }
+  if (!page && mod === 'tasks') { try { page = window.tkPage || ''; } catch(e) {} }
 
   // Get tips for this module/page
   var modTips = HELP_TIPS[mod] || {};
   var pageTips = modTips[page] || modTips._default || null;
-  var modInfo = HELP_TIPS._modules[mod] || { title: mod, desc: '' };
+  var modInfo = mod ? (HELP_TIPS._modules[mod] || { title: mod, desc: '' }) : { title: 'Home', desc: 'Pick a module to get started.' };
 
   var html = '';
 
@@ -2002,7 +2132,15 @@ function helpAskSubmit(e) {
     })
     .catch(function(err) {
       _helpChatHistory = _helpChatHistory.filter(function(m) { return !m.loading; });
-      _helpChatHistory.push({ role: 'assistant', text: 'Sorry, I couldn\'t get an answer. Try again!' });
+      var errMsg = 'Sorry, I couldn\'t get an answer. ';
+      if (err && err.response && err.response.status === 401) {
+        errMsg += 'Your session may have expired — try logging out and back in.';
+      } else if (err && err.message && err.message.indexOf('Network') >= 0) {
+        errMsg += 'Check your internet connection and try again.';
+      } else {
+        errMsg += 'Try again in a moment!';
+      }
+      _helpChatHistory.push({ role: 'assistant', text: errMsg });
       helpRenderChat();
     });
 }

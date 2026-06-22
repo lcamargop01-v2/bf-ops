@@ -879,8 +879,8 @@ GENERAL TIPS:
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        max_tokens: 400,
+        model: 'gpt-5-mini',
+        max_tokens: 800,
         temperature: 0.5,
         messages: [
           { role: 'system', content: systemPrompt },
@@ -890,11 +890,16 @@ GENERAL TIPS:
     })
 
     if (!resp.ok) {
+      const errBody = await resp.text().catch(() => '')
+      console.error('AI help error:', resp.status, errBody)
       return c.json({ answer: 'Sorry, I couldn\'t think of an answer right now. Try again in a moment!' })
     }
 
     const data = await resp.json() as any
-    const answer = data.choices?.[0]?.message?.content?.trim() || 'I\'m not sure about that — ask your manager!'
+    const answer = (data.choices?.[0]?.message?.content || '').trim()
+    if (!answer) {
+      return c.json({ answer: 'I\'m thinking... but I couldn\'t come up with an answer. Try asking in a different way!' })
+    }
     return c.json({ answer })
   } catch (e: any) {
     return c.json({ answer: 'Sorry, something went wrong. Try again!' })
