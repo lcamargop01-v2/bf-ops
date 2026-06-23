@@ -797,15 +797,15 @@ app.post('/api/inventory/batches', async (c) => {
   const user = getUserFromHeader(c)
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const db = c.env.DB
-  const { product_id, location_id, qty, condition, notes, source, batch_number, track_only } = await c.req.json()
+  const { product_id, location_id, qty, condition, notes, source, batch_number, track_only, expiry_date } = await c.req.json()
 
   const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
   const batchNum = batch_number || `B-${Date.now().toString(36).toUpperCase()}`
 
   const result = await db.prepare(
-    `INSERT INTO inventory_batches (product_id, location_id, batch_number, qty, condition, notes, source, received_date, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, date('now'), ?)`
-  ).bind(product_id, location_id, batchNum, qty, condition || 'good', notes || null, source || null, user.id).run()
+    `INSERT INTO inventory_batches (product_id, location_id, batch_number, qty, condition, notes, source, received_date, expiry_date, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, date('now'), ?, ?)`
+  ).bind(product_id, location_id, batchNum, qty, condition || 'good', notes || null, source || null, expiry_date || null, user.id).run()
 
   const batchId = result.meta.last_row_id as number
 

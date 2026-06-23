@@ -406,9 +406,15 @@ function invRenderStockList() {
   html += '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invExportStock()"><i class="fas fa-download"></i> Export</button>';
   html += '</div>';
 
-  html += '<div class="inv-stock-count">' + invStockData.length + ' items' + (invShowInactive ? ' (including inactive)' : '') + '</div>';
+  html += '<div id="invStockListArea">';
+  html += invRenderStockRows();
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
 
-  // Stock table (desktop) / cards (mobile)
+function invRenderStockRows() {
+  var html = '<div class="inv-stock-count">' + invStockData.length + ' items' + (invShowInactive ? ' (including inactive)' : '') + '</div>';
   var _sf = invCanViewFin();
   var _se = invCanEdit('stock');
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
@@ -466,8 +472,6 @@ function invRenderStockList() {
       '</div>' : '') +
       '</div>';
   });
-  html += '</div>';
-
   html += '</div>';
   return html;
 }
@@ -846,7 +850,9 @@ async function invCountViewBatches(productId) {
         body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:white;border:1px solid #E2E8F0;border-radius:10px;border-left:4px solid ' + cc + ';margin-bottom:6px">' +
           '<div style="flex:1;min-width:0">' +
           '<div style="display:flex;align-items:center;gap:6px"><strong style="font-size:14px">' + escH(b.batch_number) + '</strong>' +
-          '<span style="font-size:11px;background:' + cc + '22;color:' + cc + ';padding:2px 8px;border-radius:12px;font-weight:600">' + escH(b.condition) + '</span></div>' +
+          '<span style="font-size:11px;background:' + cc + '22;color:' + cc + ';padding:2px 8px;border-radius:12px;font-weight:600">' + escH(b.condition) + '</span>' +
+          (b.expiry_date ? '<span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 8px;border-radius:12px;font-weight:600;margin-left:4px"><i class="fas fa-calendar-xmark" style="font-size:10px"></i> Exp ' + b.expiry_date + '</span>' : '') +
+          '</div>' +
           (b.notes ? '<div style="font-size:12px;color:#64748B;margin-top:2px">' + escH(b.notes) + '</div>' : '') +
           '</div>' +
           '<div style="text-align:center;min-width:50px"><div style="font-size:22px;font-weight:800;color:#1E293B;line-height:1">' + b.qty + '</div><div style="font-size:10px;color:#94A3B8;text-transform:uppercase">' + escH(b.unit_type || 'units') + '</div></div>' +
@@ -868,8 +874,11 @@ async function invCountViewBatches(productId) {
       '<div><label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:4px">Condition</label>' +
       '<select id="invInlineBatchCond" class="inv-select" style="height:44px">' +
       '<option value="good">✅ Good</option><option value="fair">⚠️ Fair</option><option value="poor">🔶 Poor</option><option value="damaged">❌ Damaged</option></select></div></div>' +
-      '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:4px">Notes <span style="font-weight:400">(optional)</span></label>' +
-      '<input id="invInlineBatchNotes" type="text" class="inv-input" placeholder="e.g. Back of warehouse, pallet #3..."></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">' +
+      '<div><label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:4px"><i class="fas fa-calendar-xmark" style="font-size:10px"></i> Expiration Date</label>' +
+      '<input id="invInlineBatchExpiry" type="date" class="inv-input" style="height:44px"></div>' +
+      '<div><label style="font-size:11px;font-weight:600;color:#64748B;display:block;margin-bottom:4px">Notes <span style="font-weight:400">(optional)</span></label>' +
+      '<input id="invInlineBatchNotes" type="text" class="inv-input" placeholder="e.g. pallet #3" style="height:44px"></div></div>' +
       '<div id="invBatchRemainPreview" style="margin-top:8px;font-size:12px;color:#64748B;text-align:center"></div>' +
       '<button class="inv-btn inv-btn-primary" style="margin-top:10px;width:100%;padding:12px;font-size:14px" onclick="invDoInlineBatch(' + productId + ',' + locId + ')">' +
       '<i class="fas fa-layer-group"></i> Create Batch</button>' +
@@ -917,9 +926,12 @@ async function invDoInlineBatch(productId, locationId) {
   if (!qty || qty <= 0) { invToast('Enter a valid quantity', 'warning'); return; }
 
   try {
+    var expiryEl = document.getElementById('invInlineBatchExpiry');
+    var expiry = expiryEl ? expiryEl.value : null;
     var resp = await invAPI.post('/api/inventory/batches', {
       product_id: productId, location_id: locationId,
       qty: qty, condition: condition, notes: notes || null,
+      expiry_date: expiry || null,
       track_only: true  // Don't increase qty_on_hand — just organizing existing stock
     }, { headers: invHeaders() });
     invToast('Batch ' + (resp.data.batch_number || '') + ' created (' + qty + ' ' + condition + ')');
@@ -1134,13 +1146,101 @@ async function invShipTransfer(id) {
 }
 
 async function invReceiveTransfer(id) {
-  if (!confirm('Receive this transfer? Stock will be added to destination.')) return;
   try {
-    await invAPI.post('/api/inventory/transfers/' + id + '/receive', {}, { headers: invHeaders() });
-    invToast('Transfer received');
-    invRender();
-  } catch(e) { invToast('Receive failed: ' + (e.response?.data?.error || e.message), 'error'); }
+    var resp = await invAPI.get('/api/inventory/transfers/' + id, { headers: invHeaders() });
+    var t = resp.data.transfer;
+    var items = resp.data.items || [];
+
+    var body = '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#1E40AF">' +
+      '<strong><i class="fas fa-info-circle"></i> Verify Received Quantities</strong>' +
+      '<div style="margin-top:4px;color:#64748B">Adjust quantities if actual received differs from shipped. Items not received will be logged as discrepancies.</div></div>';
+
+    body += '<div style="display:flex;gap:10px;margin-bottom:12px;font-size:13px;flex-wrap:wrap">' +
+      '<span><i class="fas fa-arrow-right-from-bracket" style="color:#6366F1"></i> From: <strong>' + escH(t.from_code) + '</strong></span>' +
+      '<span><i class="fas fa-arrow-right-to-bracket" style="color:#059669"></i> To: <strong>' + escH(t.to_code) + '</strong></span></div>';
+
+    items.forEach(function(item, idx) {
+      var shipped = item.qty_shipped || item.qty_requested || 0;
+      body += '<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:white;border:1px solid #E2E8F0;border-radius:10px;margin-bottom:6px">' +
+        '<div style="flex:1;min-width:0">' +
+        '<strong style="font-size:14px">' + escH(item.product_name) + '</strong>' +
+        '<div style="font-size:12px;color:#64748B">' + escH(item.sku || '') + ' · Shipped: <strong>' + shipped + '</strong></div>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:4px">' +
+        '<button class="inv-stepper-btn" onclick="invStepRecvTrf(\'invTrfRecv_' + idx + '\',-1)" style="width:32px;height:32px">−</button>' +
+        '<input type="number" id="invTrfRecv_' + idx + '" class="inv-input" value="' + shipped + '" min="0" max="' + shipped + '"' +
+        ' data-item-id="' + item.id + '" data-shipped="' + shipped + '"' +
+        ' style="width:60px;text-align:center;font-size:16px;font-weight:700;padding:4px" inputmode="numeric"' +
+        ' oninput="invCheckTrfRecvDiff(' + idx + ')">' +
+        '<button class="inv-stepper-btn" onclick="invStepRecvTrf(\'invTrfRecv_' + idx + '\',1)" style="width:32px;height:32px">+</button>' +
+        '</div>' +
+        '<div id="invTrfRecvFlag_' + idx + '" style="width:20px;text-align:center"></div>' +
+        '</div>';
+    });
+
+    body += '<div style="margin-top:12px"><label style="font-size:12px;font-weight:600;color:#64748B">Receiving Notes (optional)</label>' +
+      '<input type="text" id="invTrfRecvNotes" class="inv-input" placeholder="Any issues or notes..." style="margin-top:4px"></div>';
+
+    var footer = '<button class="inv-btn inv-btn-outline" onclick="invCloseModal()">Cancel</button>' +
+      '<button class="inv-btn inv-btn-primary" id="invTrfRecvBtn" onclick="invSubmitTransferReceive(' + id + ',' + items.length + ')"><i class="fas fa-check-double"></i> Confirm Receiving</button>';
+
+    invShowModal('<i class="fas fa-truck-ramp-box"></i> Receive Transfer — ' + escH(t.transfer_number), body, footer);
+
+    // Initial diff check
+    items.forEach(function(item, idx) { invCheckTrfRecvDiff(idx); });
+
+  } catch(e) { invToast('Failed to load transfer: ' + (e.response?.data?.error || e.message), 'error'); }
 }
+
+function invStepRecvTrf(fieldId, delta) {
+  var el = document.getElementById(fieldId);
+  if (!el) return;
+  var val = parseInt(el.value) || 0;
+  var max = parseInt(el.dataset.shipped) || 9999;
+  el.value = Math.max(0, Math.min(max, val + delta));
+  el.dispatchEvent(new Event('input'));
+}
+window.invStepRecvTrf = invStepRecvTrf;
+
+function invCheckTrfRecvDiff(idx) {
+  var el = document.getElementById('invTrfRecv_' + idx);
+  var flag = document.getElementById('invTrfRecvFlag_' + idx);
+  if (!el || !flag) return;
+  var recv = parseInt(el.value) || 0;
+  var shipped = parseInt(el.dataset.shipped) || 0;
+  if (recv < shipped) {
+    flag.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:#D97706" title="Discrepancy: ' + (shipped - recv) + ' short"></i>';
+    el.style.borderColor = '#F59E0B';
+  } else {
+    flag.innerHTML = '<i class="fas fa-check-circle" style="color:#059669"></i>';
+    el.style.borderColor = '';
+  }
+}
+window.invCheckTrfRecvDiff = invCheckTrfRecvDiff;
+
+async function invSubmitTransferReceive(transferId, itemCount) {
+  var btn = document.getElementById('invTrfRecvBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Receiving...'; }
+
+  var receivedItems = [];
+  for (var i = 0; i < itemCount; i++) {
+    var el = document.getElementById('invTrfRecv_' + i);
+    if (el) {
+      receivedItems.push({ id: parseInt(el.dataset.itemId), qty_received: parseInt(el.value) || 0 });
+    }
+  }
+
+  try {
+    await invAPI.post('/api/inventory/transfers/' + transferId + '/receive', { items: receivedItems }, { headers: invHeaders() });
+    invCloseModal();
+    invToast('Transfer received successfully');
+    invRender();
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check-double"></i> Confirm Receiving'; }
+    invToast('Receive failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+window.invSubmitTransferReceive = invSubmitTransferReceive;
 
 async function invCancelTransfer(id) {
   if (!confirm('Cancel this transfer?')) return;
@@ -2858,7 +2958,19 @@ function invFormatDateTime(d) {
 var invSearchTimer = null;
 function invDebounceSearch() {
   clearTimeout(invSearchTimer);
-  invSearchTimer = setTimeout(function() { invRender(); }, 300);
+  invSearchTimer = setTimeout(async function() {
+    // Save search value before API call (input still alive)
+    var si = document.getElementById('invSearchInput');
+    if (si) invStockSearch = si.value;
+    await invLoadStock();
+    // Re-render just the stock list area, preserving the toolbar (and search focus)
+    var listEl = document.getElementById('invStockListArea');
+    if (listEl) {
+      listEl.innerHTML = invRenderStockRows();
+    } else {
+      invRender(); // fallback
+    }
+  }, 300);
 }
 var invBatchSearchTimer = null;
 function invDebounceBatchSearch() {
@@ -2871,10 +2983,48 @@ function invDebounceBatchSearch() {
 var invProdSearchTimer = null;
 function invDebounceProductSearch() {
   clearTimeout(invProdSearchTimer);
-  invProdSearchTimer = setTimeout(function() { invProductsOffset = 0; invRender(); }, 300);
+  invProdSearchTimer = setTimeout(async function() {
+    invProductsOffset = 0;
+    var prodListEl = document.getElementById('invProductListArea');
+    if (prodListEl) {
+      prodListEl.innerHTML = '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
+      var html = await invRenderProductRows();
+      prodListEl = document.getElementById('invProductListArea');
+      if (prodListEl) prodListEl.innerHTML = html;
+    } else {
+      invRender();
+    }
+  }, 300);
 }
 
 async function invRenderProductsPage() {
+  var search = '';
+  var searchEl = document.getElementById('invProdSearchInput');
+  if (searchEl) search = searchEl.value;
+
+  var html = '<div class="inv-stock-page">';
+
+  // Toolbar
+  html += '<div class="inv-toolbar">';
+  html += '<div class="inv-search-box"><i class="fas fa-search"></i><input id="invProdSearchInput" type="text" placeholder="Search products..." value="' + escH(search) + '" oninput="invDebounceProductSearch()"></div>';
+  html += '<select id="invProdCategoryFilter" onchange="invProductsOffset=0;invRender()" class="inv-select"><option value="">All Categories</option>';
+  (invCategoryList || []).forEach(function(c) {
+    var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+    html += '<option value="' + c + '"' + (cat === c ? ' selected' : '') + '>' + label + '</option>';
+  });
+  html += '</select>';
+  html += '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#64748B;cursor:pointer;white-space:nowrap"><input type="checkbox" ' + (invShowInactive ? 'checked' : '') + ' onchange="invShowInactive=this.checked;invProductsOffset=0;invRender()"> Show Inactive</label>';
+  if (invCanEdit('products')) html += '<button class="inv-btn inv-btn-primary inv-btn-sm" onclick="invShowNewProduct()"><i class="fas fa-plus"></i> New Product</button>';
+  html += '</div>';
+
+  html += '<div id="invProductListArea">';
+  html += await invRenderProductRows();
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+async function invRenderProductRows() {
   // Load products with search/filter/pagination
   var search = '';
   var cat = '';
@@ -2897,22 +3047,7 @@ async function invRenderProductsPage() {
     invProductsTotal = 0;
   }
 
-  var html = '<div class="inv-stock-page">';
-
-  // Toolbar
-  html += '<div class="inv-toolbar">';
-  html += '<div class="inv-search-box"><i class="fas fa-search"></i><input id="invProdSearchInput" type="text" placeholder="Search products..." value="' + escH(search) + '" oninput="invDebounceProductSearch()"></div>';
-  html += '<select id="invProdCategoryFilter" onchange="invProductsOffset=0;invRender()" class="inv-select"><option value="">All Categories</option>';
-  (invCategoryList || []).forEach(function(c) {
-    var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
-    html += '<option value="' + c + '"' + (cat === c ? ' selected' : '') + '>' + label + '</option>';
-  });
-  html += '</select>';
-  html += '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#64748B;cursor:pointer;white-space:nowrap"><input type="checkbox" ' + (invShowInactive ? 'checked' : '') + ' onchange="invShowInactive=this.checked;invProductsOffset=0;invRender()"> Show Inactive</label>';
-  if (invCanEdit('products')) html += '<button class="inv-btn inv-btn-primary inv-btn-sm" onclick="invShowNewProduct()"><i class="fas fa-plus"></i> New Product</button>';
-  html += '</div>';
-
-  html += '<div class="inv-stock-count">' + invProductsTotal + ' products (showing ' + invProductsPageData.length + ')</div>';
+  var html = '<div class="inv-stock-count">' + invProductsTotal + ' products (showing ' + invProductsPageData.length + ')</div>';
 
   // Products table (desktop)
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
@@ -2974,7 +3109,6 @@ async function invRenderProductsPage() {
     html += '</div>';
   }
 
-  html += '</div>';
   return html;
 }
 

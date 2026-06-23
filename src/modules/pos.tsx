@@ -2682,10 +2682,15 @@ app.get('/api/pos/all-orders', async (c) => {
       s.sale_type, s.created_at, s.customer_id,
       COALESCE(c.business_name, c.contact_name, 'Walk-in') as customer_name,
       (SELECT COUNT(*) FROM pos_sale_items si WHERE si.sale_id = s.id) as item_count,
-      GROUP_CONCAT(si2.product_name, ', ') as items_summary
+      GROUP_CONCAT(si2.product_name, ', ') as items_summary,
+      s.order_id as linked_order_id,
+      o_linked.order_number as linked_order_number,
+      o_linked.status as linked_order_status,
+      o_linked.scheduled_date as linked_delivery_date
       FROM pos_sales s
       LEFT JOIN customers c ON s.customer_id = c.id
-      LEFT JOIN pos_sale_items si2 ON si2.sale_id = s.id`
+      LEFT JOIN pos_sale_items si2 ON si2.sale_id = s.id
+      LEFT JOIN orders o_linked ON s.order_id = o_linked.id`
     const sp: any[] = []
     const swhere: string[] = ['1=1']
     if (from) { swhere.push('DATE(s.created_at) >= ?'); sp.push(from) }
@@ -2701,7 +2706,7 @@ app.get('/api/pos/all-orders', async (c) => {
     }
   }
 
-  // Delivery Orders
+  // Delivery Orders — exclude orders that originated from POS (they already appear as sales with linked order info)
   if (type !== 'sale') {
     let oq = `SELECT o.id, o.order_number, 'delivery' as source, o.status, o.total_weight as total,
       'delivery' as sale_type, o.created_at, o.customer_id,
@@ -2715,7 +2720,7 @@ app.get('/api/pos/all-orders', async (c) => {
       LEFT JOIN route_stops rs ON rs.order_id = o.id
       LEFT JOIN routes r ON rs.route_id = r.id`
     const op: any[] = []
-    const owhere: string[] = ['1=1']
+    const owhere: string[] = ["1=1", "COALESCE(o.source,'') != 'pos'"]
     if (from) { owhere.push('DATE(o.created_at) >= ?'); op.push(from) }
     if (to) { owhere.push('DATE(o.created_at) <= ?'); op.push(to) }
     if (status) { owhere.push('o.status = ?'); op.push(status) }
@@ -2762,7 +2767,7 @@ app.get('/api/pos/customer-history/:customerId', async (c) => {
       FROM orders o
       LEFT JOIN route_stops rs ON rs.order_id = o.id
       LEFT JOIN routes r ON rs.route_id = r.id
-      WHERE o.customer_id = ? AND o.status != 'cancelled'
+      WHERE o.customer_id = ? AND o.status != 'cancelled' AND COALESCE(o.source,'') != 'pos'
       ORDER BY o.created_at DESC LIMIT ?
     `).bind(customerId, limit).all()
   ])
