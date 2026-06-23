@@ -414,7 +414,8 @@
   width: 100%;
   max-width: 600px;
   max-height: 90vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 20px 60px rgba(0,0,0,0.2);
   transform: translateY(10px);
   transition: transform 0.2s;
@@ -443,13 +444,15 @@
   padding: 4px;
 }
 .inv-modal-close:hover { color: #0F172A; }
-.inv-modal-body { padding: 20px; }
+.inv-modal-body { padding: 20px; overflow-y: auto; flex: 1; min-height: 0; -webkit-overflow-scrolling: touch; }
 .inv-modal-footer {
   padding: 12px 20px;
   border-top: 1px solid #E2E8F0;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  flex-shrink: 0;
+  background: white;
 }
 
 /* ==================== QUICK COUNT ==================== */
@@ -967,8 +970,8 @@
   .inv-modal-overlay { padding: 0; align-items: flex-end; }
   .inv-modal { max-width: 100%; border-radius: 16px 16px 0 0; max-height: 92vh; }
   .inv-modal-header { padding: 14px 16px; }
-  .inv-modal-body { padding: 14px; }
-  .inv-modal-footer { padding: 12px 14px; }
+  .inv-modal-body { padding: 14px 14px 20px; }
+  .inv-modal-footer { padding: 12px 14px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .inv-modal-footer .inv-btn { flex: 1; justify-content: center; }
 
   /* Forms — prevent iOS zoom */

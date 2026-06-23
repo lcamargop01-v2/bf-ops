@@ -1601,6 +1601,34 @@ function invCatLabel(cat) {
   return labels[cat] || (cat || 'shelf_goods').replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
 }
 
+// Handle __new__ category selection — show/hide inline input
+function invHandleCategoryChange(selectId, rowId) {
+  var sel = document.getElementById(selectId);
+  var row = document.getElementById(rowId);
+  if (!sel || !row) return;
+  if (sel.value === '__new__') {
+    row.style.display = 'block';
+    var inp = row.querySelector('input');
+    if (inp) { inp.value = ''; inp.focus(); }
+  } else {
+    row.style.display = 'none';
+  }
+}
+
+// Resolve actual category value from select + optional new-category input
+function invGetCategory(selectId, inputId) {
+  var sel = document.getElementById(selectId);
+  if (!sel) return 'shelf_goods';
+  if (sel.value === '__new__') {
+    var inp = document.getElementById(inputId);
+    var raw = inp ? inp.value.trim() : '';
+    if (!raw) return null; // signal missing
+    // Normalize: lowercase, spaces → underscores, strip non-alphanum
+    return raw.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+  }
+  return sel.value;
+}
+
 function invSubcatLabel(sub) {
   if (!sub) return '—';
   var labels = {
@@ -3135,10 +3163,18 @@ async function invShowEditProduct(productId) {
     if (!p) { invToast('Product not found', 'error'); return; }
 
     var catOpts = '';
+    var catInList = false;
     (invCategoryList || []).forEach(function(c) {
       var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+      if (p.category === c) catInList = true;
       catOpts += '<option value="' + c + '"' + (p.category === c ? ' selected' : '') + '>' + label + '</option>';
     });
+    // If product has a custom category not in the standard list, include it
+    if (p.category && !catInList) {
+      var customLabel = p.category.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+      catOpts = '<option value="' + escH(p.category) + '" selected>' + escH(customLabel) + '</option>' + catOpts;
+    }
+    catOpts += '<option value="__new__">＋ New Category…</option>';
 
     var unitOpts = '';
     ['each','bag','bale','bottle','tub','tube','gallon','box','case','roll','pair','set','lb','oz','bar'].forEach(function(u) {
@@ -3158,7 +3194,7 @@ async function invShowEditProduct(productId) {
     });
 
     body += '<div class="inv-form-row">';
-    body += '<div class="inv-form-group"><label>Category</label><select class="inv-select" id="invEditCategory">' + catOpts + '</select></div>';
+    body += '<div class="inv-form-group"><label>Category</label><select class="inv-select" id="invEditCategory" onchange="invHandleCategoryChange(\'invEditCategory\',\'invEditNewCatRow\')">' + catOpts + '</select><div id="invEditNewCatRow" style="display:none;margin-top:6px"><input type="text" class="inv-input" id="invEditNewCatName" placeholder="Enter new category name" style="font-size:14px"></div></div>';
     body += '<div class="inv-form-group"><label>Subcategory</label><select class="inv-select" id="invEditSubcategory">' + subcatOpts + '</select></div>';
     body += '<div class="inv-form-group"><label>Unit Type</label><select class="inv-select" id="invEditUnit">' + unitOpts + '</select></div>';
     body += '<div class="inv-form-group"><label>Status</label><select class="inv-select" id="invEditActive"><option value="1"' + (p.active ? ' selected' : '') + '>Active</option><option value="0"' + (!p.active ? ' selected' : '') + '>Inactive</option></select></div>';
@@ -3254,10 +3290,12 @@ async function invShowEditProduct(productId) {
 
 async function invSaveProduct(productId) {
   var vendorVal = document.getElementById('invEditPrimaryVendor') ? document.getElementById('invEditPrimaryVendor').value : '';
+  var resolvedCat = invGetCategory('invEditCategory', 'invEditNewCatName');
+  if (resolvedCat === null) { invToast('Please enter a category name', 'error'); return; }
   var data = {
     name: document.getElementById('invEditName').value.trim(),
     sku: document.getElementById('invEditSku').value.trim() || null,
-    category: document.getElementById('invEditCategory').value,
+    category: resolvedCat,
     subcategory: document.getElementById('invEditSubcategory') ? document.getElementById('invEditSubcategory').value || null : null,
     unit_type: document.getElementById('invEditUnit').value,
     active: parseInt(document.getElementById('invEditActive').value),
@@ -3274,6 +3312,10 @@ async function invSaveProduct(productId) {
   try {
     await invAPI.put('/api/inventory/products/' + productId, data, { headers: invHeaders() });
     invToast('Product updated successfully');
+    // Refresh category list if a new category was added
+    if (resolvedCat && invCategoryList.indexOf(resolvedCat) === -1) {
+      invLoadCategories();
+    }
     invCloseModal();
     invRender();
   } catch(e) { invToast('Save failed: ' + (e.response?.data?.error || e.message), 'error'); }
@@ -3331,6 +3373,7 @@ function invShowNewProduct() {
     var label = c.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
     catOpts += '<option value="' + c + '"' + (c === 'shelf_goods' ? ' selected' : '') + '>' + label + '</option>';
   });
+  catOpts += '<option value="__new__">＋ New Category…</option>';
 
   var unitOpts = '';
   ['each','bag','bale','bottle','tub','tube','gallon','box','case','roll','pair','set','lb','oz','bar'].forEach(function(u) {
@@ -3349,7 +3392,7 @@ function invShowNewProduct() {
   });
 
   body += '<div class="inv-form-row">';
-  body += '<div class="inv-form-group"><label>Category</label><select class="inv-select" id="invNewCategory">' + catOpts + '</select></div>';
+  body += '<div class="inv-form-group"><label>Category</label><select class="inv-select" id="invNewCategory" onchange="invHandleCategoryChange(\'invNewCategory\',\'invNewCatRow\')">' + catOpts + '</select><div id="invNewCatRow" style="display:none;margin-top:6px"><input type="text" class="inv-input" id="invNewCatName" placeholder="Enter new category name" style="font-size:14px"></div></div>';
   body += '<div class="inv-form-group"><label>Subcategory</label><select class="inv-select" id="invNewSubcategory">' + newSubcatOpts + '</select></div>';
   body += '<div class="inv-form-group"><label>Unit Type</label><select class="inv-select" id="invNewUnit">' + unitOpts + '</select></div>';
   body += '</div>';
@@ -3384,10 +3427,12 @@ function invShowNewProduct() {
 
 async function invCreateProduct() {
   var newVendorVal = document.getElementById('invNewPrimaryVendor') ? document.getElementById('invNewPrimaryVendor').value : '';
+  var newResolvedCat = invGetCategory('invNewCategory', 'invNewCatName');
+  if (newResolvedCat === null) { invToast('Please enter a category name', 'error'); return; }
   var data = {
     name: document.getElementById('invNewName').value.trim(),
     sku: document.getElementById('invNewSku').value.trim() || null,
-    category: document.getElementById('invNewCategory').value,
+    category: newResolvedCat,
     subcategory: document.getElementById('invNewSubcategory') ? document.getElementById('invNewSubcategory').value || null : null,
     unit_type: document.getElementById('invNewUnit').value,
     price: parseFloat(document.getElementById('invNewPrice').value) || 0,
@@ -3403,6 +3448,10 @@ async function invCreateProduct() {
   try {
     var resp = await invAPI.post('/api/inventory/products', data, { headers: invHeaders() });
     invToast('Product "' + data.name + '" created');
+    // Refresh category list if a new category was added
+    if (newResolvedCat && invCategoryList.indexOf(newResolvedCat) === -1) {
+      invLoadCategories();
+    }
     invCloseModal();
     invRender();
   } catch(e) { invToast('Create failed: ' + (e.response?.data?.error || e.message), 'error'); }
