@@ -2789,4 +2789,141 @@ app.get('/api/pos/customer-history/:customerId', async (c) => {
   return c.json({ history: combined, stats })
 })
 
+// ==================== PETTY CASH ====================
+
+// List petty cash transactions
+app.get('/api/pos/petty-cash', async (c) => {
+  const db = c.env.DB
+  const locationId = c.req.query('location_id')
+  const sessionId = c.req.query('session_id')
+  const status = c.req.query('status')
+  const dateFrom = c.req.query('date_from')
+  const dateTo = c.req.query('date_to')
+
+  let query = `SELECT pc.*, u.name as created_by_user_name, ua.name as approved_by_name, l.name as location_name
+    FROM pos_petty_cash pc
+    LEFT JOIN users u ON pc.created_by = u.id
+    LEFT JOIN users ua ON pc.approved_by = ua.id
+    LEFT JOIN locations l ON pc.location_id = l.id
+    WHERE 1=1`
+  const binds: any[] = []
+
+  if (locationId) { query += ' AND pc.location_id = ?'; binds.push(parseInt(locationId)) }
+  if (sessionId) { query += ' AND pc.session_id = ?'; binds.push(parseInt(sessionId)) }
+  if (status) { query += ' AND pc.status = ?'; binds.push(status) }
+  if (dateFrom) { query += " AND pc.created_at >= ?"; binds.push(dateFrom + ' 00:00:00') }
+  if (dateTo) { query += " AND pc.created_at <= ?"; binds.push(dateTo + ' 23:59:59') }
+
+  query += ' ORDER BY pc.created_at DESC LIMIT 100'
+
+  const result = await db.prepare(query).bind(...binds).all()
+
+  // Get summary for the location
+  const summaryBinds: any[] = []
+  let summaryQ = `SELECT
+    COUNT(*) as total_count,
+    COALESCE(SUM(CASE WHEN status IN ('pending','approved','completed') THEN amount ELSE 0 END), 0) as total_out,
+    COALESCE(SUM(CASE WHEN status IN ('pending','approved','completed') THEN returned_amount ELSE 0 END), 0) as total_returned
+    FROM pos_petty_cash WHERE 1=1`
+  if (locationId) { summaryQ += ' AND location_id = ?'; summaryBinds.push(parseInt(locationId)) }
+  if (sessionId) { summaryQ += ' AND session_id = ?'; summaryBinds.push(parseInt(sessionId)) }
+  if (dateFrom) { summaryQ += " AND created_at >= ?"; summaryBinds.push(dateFrom + ' 00:00:00') }
+  if (dateTo) { summaryQ += " AND created_at <= ?"; summaryBinds.push(dateTo + ' 23:59:59') }
+
+  const summary = await db.prepare(summaryQ).bind(...summaryBinds).first()
+
+  return c.json({ transactions: result.results, summary })
+})
+
+// Create petty cash transaction (cash-out from register)
+app.post('/api/pos/petty-cash', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json() as any
+  const { session_id, location_id, amount, category, recipient, description, created_by, created_by_name } = body
+
+  if (!amount || amount <= 0) return c.json({ error: 'Amount must be positive' }, 400)
+  if (!description) return c.json({ error: 'Description is required' }, 400)
+  if (!location_id) return c.json({ error: 'Location is required' }, 400)
+
+  const result = await db.prepare(
+    `INSERT INTO pos_petty_cash (session_id, location_id, amount, category, recipient, description, created_by, created_by_name, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
+  ).bind(
+    session_id || null, location_id, amount,
+    category || 'misc_purchase', recipient || null,
+    description, created_by, created_by_name || null
+  ).run()
+
+  return c.json({ id: result.meta.last_row_id, success: true })
+})
+
+// Update petty cash (approve, complete with return, void)
+app.put('/api/pos/petty-cash/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json() as any
+  const { action, approved_by, returned_amount, receipt_note } = body
+
+  const existing = await db.prepare('SELECT * FROM pos_petty_cash WHERE id = ?').bind(id).first() as any
+  if (!existing) return c.json({ error: 'Not found' }, 404)
+
+  if (action === 'approve') {
+    if (existing.status !== 'pending') return c.json({ error: 'Can only approve pending transactions' }, 400)
+    await db.prepare('UPDATE pos_petty_cash SET status = ?, approved_by = ? WHERE id = ?')
+      .bind('approved', approved_by || null, id).run()
+  } else if (action === 'complete') {
+    if (existing.status === 'voided' || existing.status === 'completed') return c.json({ error: 'Already ' + existing.status }, 400)
+    await db.prepare('UPDATE pos_petty_cash SET status = ?, returned_amount = ?, receipt_note = ?, completed_at = datetime(\'now\'), returned_at = CASE WHEN ? > 0 THEN datetime(\'now\') ELSE NULL END WHERE id = ?')
+      .bind('completed', returned_amount || 0, receipt_note || null, returned_amount || 0, id).run()
+  } else if (action === 'void') {
+    if (existing.status === 'completed') return c.json({ error: 'Cannot void completed transaction' }, 400)
+    await db.prepare('UPDATE pos_petty_cash SET status = ? WHERE id = ?').bind('voided', id).run()
+  } else {
+    return c.json({ error: 'Invalid action' }, 400)
+  }
+
+  return c.json({ success: true })
+})
+
+// Delete petty cash (only pending)
+app.delete('/api/pos/petty-cash/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const existing = await db.prepare('SELECT * FROM pos_petty_cash WHERE id = ?').bind(id).first() as any
+  if (!existing) return c.json({ error: 'Not found' }, 404)
+  if (existing.status !== 'pending') return c.json({ error: 'Can only delete pending transactions' }, 400)
+  await db.prepare('DELETE FROM pos_petty_cash WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+// Get session cash summary (opening cash - petty cash out + returns)
+app.get('/api/pos/session-cash/:sessionId', async (c) => {
+  const db = c.env.DB
+  const sessionId = parseInt(c.req.param('sessionId'))
+
+  const session = await db.prepare('SELECT * FROM pos_register_sessions WHERE id = ?').bind(sessionId).first() as any
+  if (!session) return c.json({ error: 'Session not found' }, 404)
+
+  const cashSales = await db.prepare(
+    `SELECT COALESCE(SUM(CASE WHEN sp.method = 'cash' THEN sp.amount ELSE 0 END), 0) as total
+     FROM pos_sale_payments sp
+     JOIN pos_sales s ON sp.sale_id = s.id
+     WHERE s.session_id = ? AND s.status != 'voided'`
+  ).bind(sessionId).first() as any
+
+  const pettyOut = await db.prepare(
+    `SELECT COALESCE(SUM(amount), 0) as total_out, COALESCE(SUM(returned_amount), 0) as total_returned
+     FROM pos_petty_cash WHERE session_id = ? AND status != 'voided'`
+  ).bind(sessionId).first() as any
+
+  return c.json({
+    session_id: sessionId,
+    opening_cash: session.opening_cash || 0,
+    cash_sales: cashSales?.total || 0,
+    petty_cash_out: pettyOut?.total_out || 0,
+    petty_cash_returned: pettyOut?.total_returned || 0,
+    expected_drawer: (session.opening_cash || 0) + (cashSales?.total || 0) - (pettyOut?.total_out || 0) + (pettyOut?.total_returned || 0)
+  })
+})
+
 export { app as posApp }

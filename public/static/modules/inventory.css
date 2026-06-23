@@ -213,6 +213,8 @@
 .inv-clickable { cursor: pointer; }
 .inv-row-warning { background: #FFF7ED; }
 .inv-row-warning:hover { background: #FFEDD5 !important; }
+.inv-row-new { background: #EFF6FF; }
+.inv-row-new:hover { background: #DBEAFE !important; }
 
 /* ==================== BADGES ==================== */
 .inv-loc-badge {

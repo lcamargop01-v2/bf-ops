@@ -781,6 +781,11 @@
   .pos-dc-topbar-title { font-size: 14px; }
 }
 
+/* ==================== PETTY CASH ==================== */
+.pc-cat-btn { transition: all 0.15s; }
+.pc-cat-btn:hover { border-color: #F59E0B !important; background: #FFFBEB !important; }
+.pc-cat-btn.pc-cat-active { border-color: #F59E0B !important; background: #FEF3C7 !important; color: #D97706 !important; }
+
 /* ==================== PRINT STYLES ==================== */
 @media print {
   .no-print { display: none !important; }

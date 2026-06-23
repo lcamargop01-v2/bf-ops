@@ -25,6 +25,7 @@ var invBatchSummaryMap = {}; // batch summary per product_id for count page
 var invStockSearch = ''; // persisted stock search across re-renders
 var invStockCatFilter = ''; // persisted category filter across re-renders
 var invShowInactive = false; // toggle for showing inactive products
+var invShowAllProducts = false; // toggle for showing all products including those without stock rows
 
 // Permission helper for edit access (view-only enforcement)
 function invCanEdit(feature) {
@@ -134,8 +135,8 @@ async function invLoadStock() {
     if (invPage === 'count' && invCountSort) url += 'sort=' + invCountSort + '&';
     // Include inactive products
     if (invShowInactive) url += 'include_inactive=1&';
-    // Quick Count: include ALL active products even with no stock row (new / out-of-stock)
-    if (invPage === 'count') url += 'include_all_products=1&';
+    // Quick Count OR stock page "Show All": include ALL active products even with no stock row
+    if (invPage === 'count' || (invPage === 'stock' && invShowAllProducts)) url += 'include_all_products=1&';
     var resp = await invAPI.get(url, { headers: invHeaders() });
     invStockData = resp.data.stock || [];
   } catch(e) { console.error('Stock load failed:', e); }
@@ -402,6 +403,7 @@ function invRenderStockList() {
     html += '<option value="' + c + '"' + (invStockCatFilter === c ? ' selected' : '') + '>' + label + '</option>';
   });
   html += '</select>';
+  if (invSelectedLocation) html += '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#B45309;cursor:pointer;white-space:nowrap;font-weight:' + (invShowAllProducts ? '700' : '400') + '"><input type="checkbox" ' + (invShowAllProducts ? 'checked' : '') + ' onchange="invShowAllProducts=this.checked;invRender()"> <i class="fas fa-boxes-packing"></i> Show All Products</label>';
   html += '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#64748B;cursor:pointer;white-space:nowrap"><input type="checkbox" ' + (invShowInactive ? 'checked' : '') + ' onchange="invShowInactive=this.checked;invRender()"> Inactive</label>';
   html += '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invExportStock()"><i class="fas fa-download"></i> Export</button>';
   html += '</div>';
@@ -414,7 +416,9 @@ function invRenderStockList() {
 }
 
 function invRenderStockRows() {
-  var html = '<div class="inv-stock-count">' + invStockData.length + ' items' + (invShowInactive ? ' (including inactive)' : '') + '</div>';
+  var _oos = 0, _noRow = 0;
+  if (invShowAllProducts) invStockData.forEach(function(s) { if (s.no_stock_row) _noRow++; else if ((s.qty_on_hand || 0) === 0) _oos++; });
+  var html = '<div class="inv-stock-count">' + invStockData.length + ' items' + (invShowInactive ? ' (incl. inactive)' : '') + (invShowAllProducts && _noRow > 0 ? ' &bull; <span style="color:#1D4ED8">' + _noRow + ' not in stock</span>' : '') + (invShowAllProducts && _oos > 0 ? ' &bull; <span style="color:#B45309">' + _oos + ' out of stock</span>' : '') + '</div>';
   var _sf = invCanViewFin();
   var _se = invCanEdit('stock');
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
@@ -426,8 +430,10 @@ function invRenderStockRows() {
     var pNameEsc = escH(s.product_name).replace(/'/g, "\\'");
     var incoming = s.qty_incoming || 0;
     var isInactive = s.product_active === 0;
-    html += '<tr class="' + (isInactive ? 'inv-row-inactive' : lowStock ? 'inv-row-warning' : '') + '">' +
-      '<td class="inv-clickable" onclick="invShowProductDetail(' + s.product_id + ')"><strong>' + escH(s.product_name) + '</strong>' + (isInactive ? ' <span class="inv-cat-badge inv-cat-other" style="font-size:9px">Inactive</span>' : '') + '</td>' +
+    var isNoRow = s.no_stock_row === 1;
+    var isOos = !isNoRow && (s.qty_on_hand || 0) === 0;
+    html += '<tr class="' + (isInactive ? 'inv-row-inactive' : isNoRow ? 'inv-row-new' : lowStock ? 'inv-row-warning' : '') + '">' +
+      '<td class="inv-clickable" onclick="invShowProductDetail(' + s.product_id + ')"><strong>' + escH(s.product_name) + '</strong>' + (isInactive ? ' <span class="inv-cat-badge inv-cat-other" style="font-size:9px">Inactive</span>' : '') + (isNoRow ? ' <span class="inv-count-badge inv-count-badge-new" style="font-size:9px"><i class="fas fa-circle-plus"></i> NOT IN STOCK</span>' : '') + (isOos ? ' <span class="inv-count-badge inv-count-badge-oos" style="font-size:9px"><i class="fas fa-box-open"></i> OUT OF STOCK</span>' : '') + '</td>' +
       '<td class="inv-muted">' + escH(s.sku || '—') + '</td>' +
       '<td><span class="inv-cat-badge inv-cat-' + (s.category || 'shelf_goods') + '">' + escH((s.category || 'shelf_goods').replace(/_/g, ' ')) + '</span>' +
         (s.subcategory ? '<div style="font-size:10px;color:#64748B;margin-top:2px">' + invSubcatLabel(s.subcategory) + '</div>' : '') + '</td>' +
@@ -453,9 +459,14 @@ function invRenderStockRows() {
     var lowStock = s.reorder_point > 0 && s.qty_on_hand <= s.reorder_point;
     var incoming = s.qty_incoming || 0;
     var pNameEsc = escH(s.product_name).replace(/'/g, "\\'");
-    html += '<div class="inv-stock-card' + (lowStock ? ' inv-card-warning' : '') + '" onclick="invShowProductDetail(' + s.product_id + ')">' +
+    var _isNoRow = s.no_stock_row === 1;
+    var _isOos = !_isNoRow && (s.qty_on_hand || 0) === 0;
+    html += '<div class="inv-stock-card' + (lowStock ? ' inv-card-warning' : _isNoRow ? ' inv-count-item-new' : '') + '" onclick="invShowProductDetail(' + s.product_id + ')">' +
       '<div class="inv-stock-card-top">' +
-      '<div><strong>' + escH(s.product_name) + '</strong><br><span class="inv-muted">' + escH(s.sku || '') + (s.primary_vendor_name ? ' \u00b7 ' + escH(s.primary_vendor_name) : '') + '</span></div>' +
+      '<div><strong>' + escH(s.product_name) + '</strong>' +
+      (_isNoRow ? ' <span class="inv-count-badge inv-count-badge-new" style="font-size:9px"><i class="fas fa-circle-plus"></i> NOT IN STOCK</span>' : '') +
+      (_isOos ? ' <span class="inv-count-badge inv-count-badge-oos" style="font-size:9px"><i class="fas fa-box-open"></i> OUT OF STOCK</span>' : '') +
+      '<br><span class="inv-muted">' + escH(s.sku || '') + (s.primary_vendor_name ? ' \u00b7 ' + escH(s.primary_vendor_name) : '') + '</span></div>' +
       '<span class="inv-loc-badge">' + escH(s.location_code) + '</span>' +
       '</div>' +
       '<div class="inv-stock-card-nums">' +

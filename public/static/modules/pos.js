@@ -206,7 +206,9 @@ var _posSidebarItems = [
   { section: 'Resources' },
   { id: 'customers', icon: 'fa-users', label: 'Customers' },
   { id: 'inventory-requests', icon: 'fa-boxes-stacked', label: 'Stock Requests' },
-  { id: 'statements', icon: 'fa-file-invoice-dollar', label: 'Statements' }
+  { id: 'statements', icon: 'fa-file-invoice-dollar', label: 'Statements' },
+  { section: 'Cash Management' },
+  { id: 'petty-cash', icon: 'fa-money-bill-transfer', label: 'Petty Cash' }
 ];
 
 // Logistics render functions called from POS distribution mode
@@ -250,6 +252,7 @@ function renderRegisterView() {
         '<button class="pos-topbar-btn" id="posBtnCust"><i class="fas fa-address-book"></i> <span class="hide-mobile">Customers</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnInvReq"><i class="fas fa-boxes-stacked"></i> <span class="hide-mobile">Stock Req</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnStmts"><i class="fas fa-file-invoice-dollar"></i> <span class="hide-mobile">Statements</span></button>' +
+        '<button class="pos-topbar-btn" id="posBtnPetty" style="color:#F59E0B"><i class="fas fa-money-bill-transfer"></i> <span class="hide-mobile">Petty Cash</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnHeld"><i class="fas fa-pause-circle"></i> <span class="hide-mobile">Held</span> <span id="posHeldBadge" class="pos-held-badge" style="display:none">0</span></button>' +
         '<button class="pos-topbar-btn danger" id="posBtnClose"><i class="fas fa-power-off"></i> <span class="hide-mobile">Close</span></button>' +
       '</div>' +
@@ -260,13 +263,15 @@ function renderRegisterView() {
     '<div id="posViewCustomers" class="pos-view pos-customers"></div>' +
     '<div id="posViewAll-orders" class="pos-view pos-all-orders"></div>' +
     '<div id="posViewInventory-requests" class="pos-view pos-inv-requests"></div>' +
-    '<div id="posViewStatements" class="pos-view pos-statements"></div>';
+    '<div id="posViewStatements" class="pos-view pos-statements"></div>' +
+    '<div id="posViewPetty-cash" class="pos-view pos-petty-cash"></div>';
 
   on('posBtnDash', 'click', function() { switchView('dashboard'); });
   on('posBtnReg', 'click', function() { switchView('register'); });
   on('posBtnHist', 'click', function() { switchView('history'); });
   on('posBtnOrders', 'click', function() { switchView('all-orders'); });
   on('posBtnCust', 'click', function() { switchView('customers'); });
+  on('posBtnPetty', 'click', function() { switchView('petty-cash'); });
   on('posBtnInvReq', 'click', function() { switchView('inventory-requests'); });
   on('posBtnStmts', 'click', function() { switchView('statements'); });
   on('posBtnHeld', 'click', showHeld);
@@ -359,6 +364,7 @@ function _renderDistributionLayout(el, locName) {
           '<div id="posViewAll-orders" class="pos-view pos-all-orders"></div>' +
           '<div id="posViewInventory-requests" class="pos-view pos-inv-requests"></div>' +
           '<div id="posViewStatements" class="pos-view pos-statements"></div>' +
+          '<div id="posViewPetty-cash" class="pos-view pos-petty-cash"></div>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -465,7 +471,7 @@ function switchView(view) {
   else if (view === 'customers') loadCustomerList();
   else if (view === 'inventory-requests') loadInventoryRequests();
   else if (view === 'statements') loadStatements();
-
+  else if (view === 'petty-cash') loadPettyCash();
 }
 
 // ==================== REGISTER CONTENT ====================
@@ -1934,6 +1940,7 @@ function loadDashboard() {
         '<button class="pos-btn pos-dash-tool-btn" id="posDashPromos"><i class="fas fa-bullhorn"></i> Promotions</button>' +
         '<button class="pos-btn pos-dash-tool-btn" id="posDashTax"><i class="fas fa-calculator"></i> Tax Config</button>' +
         '<button class="pos-btn pos-dash-tool-btn" id="posDashReservations"><i class="fas fa-bookmark"></i> Reservations</button>' +
+        '<button class="pos-btn pos-dash-tool-btn" id="posDashPettyCash" style="background:linear-gradient(135deg,#F59E0B,#D97706);color:white"><i class="fas fa-money-bill-transfer"></i> Petty Cash</button>' +
       '</div></div>';
 
     el.innerHTML = html;
@@ -1942,6 +1949,7 @@ function loadDashboard() {
     on('posDashPromos', 'click', openPromotionsManager);
     on('posDashTax', 'click', openTaxSettings);
     on('posDashReservations', 'click', openReservationsList);
+    on('posDashPettyCash', 'click', function() { switchView('petty-cash'); });
 
     // Wire low stock request buttons
     on('posDashRequestStock', 'click', function() {
@@ -4825,6 +4833,270 @@ function openCRMLink(custId) {
   }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
 }
 
+// ==================== PETTY CASH ====================
+var _pettyCashData = [];
+
+function loadPettyCash() {
+  var el = document.getElementById('posViewPetty-cash');
+  if (!el) return;
+  el.innerHTML = '<div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading petty cash...</div>';
+
+  var locId = getLocationId();
+  var sessionId = _s.session ? _s.session.id : '';
+
+  API.get('/pos/petty-cash?location_id=' + locId + (sessionId ? '&session_id=' + sessionId : '')).then(function(r) {
+    _pettyCashData = r.data.transactions || [];
+    var summary = r.data.summary || {};
+    var netOut = (summary.total_out || 0) - (summary.total_returned || 0);
+
+    var html = '<div class="pos-cust-view-header">' +
+      '<div class="pos-cust-view-title"><h2><i class="fas fa-money-bill-transfer" style="color:#F59E0B"></i> Petty Cash</h2>' +
+      '<span style="font-size:12px;color:var(--pos-gray-500)">Session #' + (sessionId || 'All') + ' &bull; ' + esc(getLocationName()) + '</span></div>' +
+      '<div style="display:flex;gap:8px">' +
+        '<button class="pos-btn" id="pcBtnNew" style="background:linear-gradient(135deg,#F59E0B,#D97706);color:white;font-weight:700"><i class="fas fa-arrow-right-from-bracket"></i> Cash Out</button>' +
+        '<button class="pos-btn pos-btn-sm" id="pcBtnRefresh" style="background:var(--pos-navy);color:white"><i class="fas fa-sync"></i></button>' +
+      '</div></div>';
+
+    // Summary cards
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin:16px 0">';
+    html += '<div style="padding:16px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px;border-left:4px solid #F59E0B">' +
+      '<div style="font-size:11px;color:var(--pos-gray-500);text-transform:uppercase;font-weight:600">Total Cash Out</div>' +
+      '<div style="font-size:22px;font-weight:800;color:#D97706">$' + (summary.total_out || 0).toFixed(2) + '</div></div>';
+    html += '<div style="padding:16px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px;border-left:4px solid #10B981">' +
+      '<div style="font-size:11px;color:var(--pos-gray-500);text-transform:uppercase;font-weight:600">Returned</div>' +
+      '<div style="font-size:22px;font-weight:800;color:#10B981">$' + (summary.total_returned || 0).toFixed(2) + '</div></div>';
+    html += '<div style="padding:16px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px;border-left:4px solid ' + (netOut > 0 ? '#EF4444' : '#6B7280') + '">' +
+      '<div style="font-size:11px;color:var(--pos-gray-500);text-transform:uppercase;font-weight:600">Net Out</div>' +
+      '<div style="font-size:22px;font-weight:800;color:' + (netOut > 0 ? '#EF4444' : '#6B7280') + '">$' + netOut.toFixed(2) + '</div></div>';
+    html += '<div style="padding:16px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px;border-left:4px solid var(--pos-navy)">' +
+      '<div style="font-size:11px;color:var(--pos-gray-500);text-transform:uppercase;font-weight:600">Transactions</div>' +
+      '<div style="font-size:22px;font-weight:800;color:var(--pos-navy)">' + (summary.total_count || 0) + '</div></div>';
+    html += '</div>';
+
+    // Transactions list
+    if (_pettyCashData.length === 0) {
+      html += '<div style="text-align:center;padding:40px;color:var(--pos-gray-400)"><i class="fas fa-money-bill-transfer" style="font-size:48px;margin-bottom:12px;display:block"></i>No petty cash transactions yet<br><span style="font-size:12px">Use "Cash Out" to take cash from the register</span></div>';
+    } else {
+      html += '<div style="display:flex;flex-direction:column;gap:10px">';
+      _pettyCashData.forEach(function(tx) {
+        var statusColor = tx.status === 'completed' ? '#10B981' : tx.status === 'voided' ? '#EF4444' : tx.status === 'approved' ? '#3B82F6' : '#F59E0B';
+        var statusIcon = tx.status === 'completed' ? 'fa-check-circle' : tx.status === 'voided' ? 'fa-ban' : tx.status === 'approved' ? 'fa-thumbs-up' : 'fa-clock';
+        var catLabel = _pcCatLabel(tx.category);
+        var catIcon = _pcCatIcon(tx.category);
+
+        html += '<div class="pc-tx-card" style="background:white;border:1px solid var(--pos-gray-200);border-radius:10px;padding:14px 16px;border-left:4px solid ' + statusColor + '">' +
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">' +
+            '<div style="flex:1;min-width:0">' +
+              '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
+                '<i class="fas ' + catIcon + '" style="color:' + statusColor + ';font-size:14px"></i>' +
+                '<span style="font-weight:700;font-size:14px;color:var(--pos-navy)">' + esc(tx.description) + '</span>' +
+              '</div>' +
+              '<div style="display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--pos-gray-500)">' +
+                '<span><i class="fas fa-tag"></i> ' + esc(catLabel) + '</span>' +
+                (tx.recipient ? '<span><i class="fas fa-user"></i> ' + esc(tx.recipient) + '</span>' : '') +
+                '<span><i class="fas fa-user-pen"></i> ' + esc(tx.created_by_name || tx.created_by_user_name || '') + '</span>' +
+                '<span><i class="fas fa-clock"></i> ' + timeAgo(tx.created_at) + '</span>' +
+              '</div>' +
+              (tx.receipt_note ? '<div style="font-size:11px;color:var(--pos-gray-500);margin-top:4px;font-style:italic"><i class="fas fa-receipt"></i> ' + esc(tx.receipt_note) + '</div>' : '') +
+            '</div>' +
+            '<div style="text-align:right;flex-shrink:0">' +
+              '<div style="font-size:20px;font-weight:800;color:#D97706">$' + (tx.amount || 0).toFixed(2) + '</div>' +
+              (tx.returned_amount > 0 ? '<div style="font-size:12px;color:#10B981;font-weight:600">+$' + tx.returned_amount.toFixed(2) + ' back</div>' : '') +
+              '<span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:' + statusColor + ';background:' + statusColor + '15;padding:2px 8px;border-radius:10px;margin-top:4px;text-transform:uppercase"><i class="fas ' + statusIcon + '"></i> ' + tx.status + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;margin-top:10px;border-top:1px solid var(--pos-gray-100);padding-top:10px">';
+
+        // Action buttons based on status
+        if (tx.status === 'pending') {
+          html += '<button class="pos-btn pos-btn-sm" onclick="window.pcComplete(' + tx.id + ')" style="background:#10B981;color:white;font-size:11px"><i class="fas fa-check"></i> Complete</button>';
+          html += '<button class="pos-btn pos-btn-sm" onclick="window.pcVoid(' + tx.id + ')" style="background:var(--pos-gray-200);color:var(--pos-gray-600);font-size:11px"><i class="fas fa-ban"></i> Void</button>';
+        } else if (tx.status === 'approved') {
+          html += '<button class="pos-btn pos-btn-sm" onclick="window.pcComplete(' + tx.id + ')" style="background:#10B981;color:white;font-size:11px"><i class="fas fa-check"></i> Complete</button>';
+          html += '<button class="pos-btn pos-btn-sm" onclick="window.pcVoid(' + tx.id + ')" style="background:var(--pos-gray-200);color:var(--pos-gray-600);font-size:11px"><i class="fas fa-ban"></i> Void</button>';
+        }
+
+        html += '</div></div>';
+      });
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+    on('pcBtnNew', 'click', pcShowCashOutForm);
+    on('pcBtnRefresh', 'click', loadPettyCash);
+  }).catch(function(err) {
+    el.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)"><i class="fas fa-exclamation-triangle"></i> ' + errMsg(err) + '</div>';
+  });
+}
+
+function _pcCatLabel(cat) {
+  var map = { misc_purchase: 'Misc Purchase', warehouse_supplies: 'Warehouse Supplies', employee_expense: 'Employee Expense', vendor_payment: 'Vendor Payment', other: 'Other' };
+  return map[cat] || cat || 'Other';
+}
+function _pcCatIcon(cat) {
+  var map = { misc_purchase: 'fa-bag-shopping', warehouse_supplies: 'fa-warehouse', employee_expense: 'fa-user-tie', vendor_payment: 'fa-handshake', other: 'fa-ellipsis' };
+  return map[cat] || 'fa-ellipsis';
+}
+
+function pcShowCashOutForm() {
+  var user = getUser();
+  var overlay = document.createElement('div');
+  overlay.id = 'pcFormOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  overlay.innerHTML =
+    '<div style="background:white;border-radius:16px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;box-shadow:0 25px 50px rgba(0,0,0,0.25)">' +
+      '<div style="padding:20px 24px;border-bottom:1px solid var(--pos-gray-100);display:flex;align-items:center;justify-content:space-between">' +
+        '<h3 style="margin:0;font-size:18px;display:flex;align-items:center;gap:8px"><i class="fas fa-arrow-right-from-bracket" style="color:#F59E0B"></i> Cash Out from Register</h3>' +
+        '<button onclick="document.getElementById(\'pcFormOverlay\').remove()" style="background:none;border:none;font-size:20px;color:var(--pos-gray-400);cursor:pointer"><i class="fas fa-times"></i></button>' +
+      '</div>' +
+      '<div style="padding:24px">' +
+        '<div style="margin-bottom:16px">' +
+          '<label style="display:block;font-size:12px;font-weight:600;color:var(--pos-gray-600);margin-bottom:4px">Amount ($) <span style="color:#EF4444">*</span></label>' +
+          '<input id="pcAmount" type="number" min="0.01" step="0.01" placeholder="0.00" style="width:100%;padding:12px;border:2px solid var(--pos-gray-200);border-radius:10px;font-size:24px;font-weight:800;color:#D97706;text-align:center;box-sizing:border-box" autofocus>' +
+        '</div>' +
+        '<div style="margin-bottom:16px">' +
+          '<label style="display:block;font-size:12px;font-weight:600;color:var(--pos-gray-600);margin-bottom:4px">Category <span style="color:#EF4444">*</span></label>' +
+          '<div id="pcCatPicker" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+            _pcCatBtn('misc_purchase', 'fa-bag-shopping', 'Misc Purchase', true) +
+            _pcCatBtn('warehouse_supplies', 'fa-warehouse', 'Warehouse Supplies', false) +
+            _pcCatBtn('employee_expense', 'fa-user-tie', 'Employee Expense', false) +
+            _pcCatBtn('vendor_payment', 'fa-handshake', 'Vendor Payment', false) +
+            _pcCatBtn('other', 'fa-ellipsis', 'Other', false) +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-bottom:16px">' +
+          '<label style="display:block;font-size:12px;font-weight:600;color:var(--pos-gray-600);margin-bottom:4px">Recipient / Who Gets the Cash</label>' +
+          '<input id="pcRecipient" type="text" placeholder="e.g. Juan (warehouse), Store supplies" style="width:100%;padding:10px 12px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:14px;box-sizing:border-box">' +
+        '</div>' +
+        '<div style="margin-bottom:20px">' +
+          '<label style="display:block;font-size:12px;font-weight:600;color:var(--pos-gray-600);margin-bottom:4px">Description / What For <span style="color:#EF4444">*</span></label>' +
+          '<textarea id="pcDescription" rows="2" placeholder="e.g. Buy packing tape and zip ties from Home Depot" style="width:100%;padding:10px 12px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box"></textarea>' +
+        '</div>' +
+        '<div style="background:#FEF3C7;border:1px solid #FCD34D;border-radius:10px;padding:12px;margin-bottom:20px;font-size:12px;color:#92400E">' +
+          '<i class="fas fa-info-circle"></i> <strong>Reminder:</strong> Cash will be taken from the register drawer. When the person returns, use "Complete" to record any change returned.' +
+        '</div>' +
+        '<button id="pcSubmitBtn" style="width:100%;padding:14px;background:linear-gradient(135deg,#F59E0B,#D97706);color:white;border:none;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">' +
+          '<i class="fas fa-arrow-right-from-bracket"></i> Take Cash Out' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+
+  // Category picker logic
+  overlay.querySelectorAll('.pc-cat-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      overlay.querySelectorAll('.pc-cat-btn').forEach(function(b) { b.classList.remove('pc-cat-active'); });
+      btn.classList.add('pc-cat-active');
+    });
+  });
+
+  // Submit
+  document.getElementById('pcSubmitBtn').addEventListener('click', function() {
+    var amount = parseFloat(gv('pcAmount'));
+    var activeCat = overlay.querySelector('.pc-cat-btn.pc-cat-active');
+    var category = activeCat ? activeCat.dataset.cat : 'misc_purchase';
+    var recipient = gv('pcRecipient').trim();
+    var description = gv('pcDescription').trim();
+
+    if (!amount || amount <= 0) { toast('Enter a valid amount', 'error'); return; }
+    if (!description) { toast('Enter a description', 'error'); return; }
+
+    var btn = document.getElementById('pcSubmitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+
+    API.post('/pos/petty-cash', {
+      session_id: _s.session ? _s.session.id : null,
+      location_id: getLocationId(),
+      amount: amount,
+      category: category,
+      recipient: recipient || null,
+      description: description,
+      created_by: user ? user.id : null,
+      created_by_name: user ? user.name : null
+    }).then(function() {
+      toast('Cash out recorded — $' + amount.toFixed(2));
+      overlay.remove();
+      loadPettyCash();
+    }).catch(function(err) {
+      toast('Error: ' + errMsg(err), 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-arrow-right-from-bracket"></i> Take Cash Out';
+    });
+  });
+}
+
+function _pcCatBtn(value, icon, label, active) {
+  return '<button class="pc-cat-btn' + (active ? ' pc-cat-active' : '') + '" data-cat="' + value + '" style="padding:10px;border:2px solid var(--pos-gray-200);border-radius:10px;background:white;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--pos-gray-600);transition:all 0.15s">' +
+    '<i class="fas ' + icon + '"></i> ' + label + '</button>';
+}
+
+function pcComplete(id) {
+  var tx = _pettyCashData.find(function(t) { return t.id === id; });
+  if (!tx) return;
+
+  var overlay = document.createElement('div');
+  overlay.id = 'pcCompleteOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  overlay.innerHTML =
+    '<div style="background:white;border-radius:16px;width:100%;max-width:420px;box-shadow:0 25px 50px rgba(0,0,0,0.25)">' +
+      '<div style="padding:20px 24px;border-bottom:1px solid var(--pos-gray-100)">' +
+        '<h3 style="margin:0;font-size:16px"><i class="fas fa-check-circle" style="color:#10B981"></i> Complete Cash Out</h3>' +
+      '</div>' +
+      '<div style="padding:24px">' +
+        '<div style="background:var(--pos-gray-50);border-radius:10px;padding:12px;margin-bottom:16px;font-size:13px">' +
+          '<div style="font-weight:700;color:var(--pos-navy)">' + esc(tx.description) + '</div>' +
+          '<div style="color:var(--pos-gray-500);margin-top:2px">Amount taken: <strong style="color:#D97706">$' + (tx.amount || 0).toFixed(2) + '</strong></div>' +
+          (tx.recipient ? '<div style="color:var(--pos-gray-500)">Given to: ' + esc(tx.recipient) + '</div>' : '') +
+        '</div>' +
+        '<div style="margin-bottom:16px">' +
+          '<label style="display:block;font-size:12px;font-weight:600;color:var(--pos-gray-600);margin-bottom:4px">Change Returned to Register ($)</label>' +
+          '<input id="pcReturnAmt" type="number" min="0" step="0.01" value="0" style="width:100%;padding:10px 12px;border:2px solid var(--pos-gray-200);border-radius:8px;font-size:18px;font-weight:700;text-align:center;color:#10B981;box-sizing:border-box">' +
+          '<div style="font-size:11px;color:var(--pos-gray-400);margin-top:4px">Enter $0 if all cash was spent</div>' +
+        '</div>' +
+        '<div style="margin-bottom:20px">' +
+          '<label style="display:block;font-size:12px;font-weight:600;color:var(--pos-gray-600);margin-bottom:4px">Receipt Note (optional)</label>' +
+          '<input id="pcReceiptNote" type="text" placeholder="e.g. Receipt #4521, Home Depot" style="width:100%;padding:10px 12px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:13px;box-sizing:border-box">' +
+        '</div>' +
+        '<div style="display:flex;gap:8px">' +
+          '<button id="pcDoComplete" style="flex:1;padding:12px;background:#10B981;color:white;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer"><i class="fas fa-check"></i> Complete</button>' +
+          '<button onclick="document.getElementById(\'pcCompleteOverlay\').remove()" style="padding:12px 20px;background:var(--pos-gray-100);color:var(--pos-gray-600);border:none;border-radius:10px;font-size:14px;cursor:pointer">Cancel</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+
+  document.getElementById('pcDoComplete').addEventListener('click', function() {
+    var returned = parseFloat(gv('pcReturnAmt')) || 0;
+    var note = gv('pcReceiptNote').trim();
+    var btn = document.getElementById('pcDoComplete');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+    API.put('/pos/petty-cash/' + id, { action: 'complete', returned_amount: returned, receipt_note: note || null }).then(function() {
+      toast('Cash out completed' + (returned > 0 ? ' — $' + returned.toFixed(2) + ' returned' : ''));
+      overlay.remove();
+      loadPettyCash();
+    }).catch(function(err) {
+      toast('Error: ' + errMsg(err), 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-check"></i> Complete';
+    });
+  });
+}
+
+function pcVoid(id) {
+  if (!confirm('Void this petty cash transaction? The cash should be returned to the register.')) return;
+  API.put('/pos/petty-cash/' + id, { action: 'void' }).then(function() {
+    toast('Transaction voided');
+    loadPettyCash();
+  }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
+}
+
 // ==================== UTILITY ====================
 function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 function escAttr(s) { return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -4854,5 +5126,8 @@ window.posConfirmPurchaseRequest = posConfirmPurchaseRequest;
 window.posDoPurchaseRequest = posDoPurchaseRequest;
 window.openStockCheck = openStockCheck;
 window.showModal = showModal;
+window.pcComplete = pcComplete;
+window.pcVoid = pcVoid;
+window.pcShowCashOutForm = pcShowCashOutForm;
 
 })();
