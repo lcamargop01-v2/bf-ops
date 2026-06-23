@@ -419,6 +419,23 @@ app.post('/api/orders', async (c) => {
         await c.env.DB.prepare('INSERT INTO order_items (order_id, product_id, quantity) VALUES (?, ?, ?)')
           .bind(orderId, item.product_id, item.quantity).run()
       }
+
+      // === INVENTORY: Place holds for manual orders (same as POS delivery) ===
+      // Manual logistics orders default to distribution center (location 2)
+      const holdLocationId = 2
+      for (const item of items) {
+        if (item.product_id && item.quantity > 0) {
+          await c.env.DB.prepare(`
+            UPDATE inventory_stock SET qty_on_hold = qty_on_hold + ?, updated_at = CURRENT_TIMESTAMP
+            WHERE product_id = ? AND location_id = ?
+          `).bind(item.quantity, item.product_id, holdLocationId).run()
+
+          await c.env.DB.prepare(`
+            INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+            VALUES (?, ?, 'hold', 0, 'Manual order created — inventory reserved', 'order', ?, ?, 'system')
+          `).bind(item.product_id, holdLocationId, orderId, 'Order ' + orderNum + ' placed').run()
+        }
+      }
     }
 
     // Store ticket image in separate table to avoid D1 size limits
@@ -789,6 +806,21 @@ app.post('/api/orders/bulk-confirm', async (c) => {
             if (item.product_id) {
               await c.env.DB.prepare('INSERT INTO order_items (order_id, product_id, quantity) VALUES (?, ?, ?)')
                 .bind(orderId, item.product_id, item.quantity || 1).run()
+            }
+          }
+
+          // === INVENTORY: Place holds for bulk-created order items ===
+          const bulkHoldLocId = 2
+          for (const item of o.items) {
+            if (item.product_id && (item.quantity || 1) > 0) {
+              await c.env.DB.prepare(`
+                UPDATE inventory_stock SET qty_on_hold = qty_on_hold + ?, updated_at = CURRENT_TIMESTAMP
+                WHERE product_id = ? AND location_id = ?
+              `).bind(item.quantity || 1, item.product_id, bulkHoldLocId).run()
+              await c.env.DB.prepare(`
+                INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+                VALUES (?, ?, 'hold', 0, 'Bulk order created — inventory reserved', 'order', ?, ?, 'system')
+              `).bind(item.product_id, bulkHoldLocId, orderId, 'Order ' + orderNum).run()
             }
           }
         }
@@ -1511,6 +1543,14 @@ app.post('/api/routes', async (c) => {
 app.put('/api/routes/:id', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
+
+  // Capture previous route status BEFORE update (needed for inventory deduction logic)
+  let prevRouteStatus: string | null = null
+  if (body.status) {
+    const prevRoute = await c.env.DB.prepare('SELECT status FROM routes WHERE id = ?').bind(id).first() as any
+    prevRouteStatus = prevRoute?.status || null
+  }
+
   const fields: string[] = []
   const vals: any[] = []
   for (const key of ['route_number', 'truck_id', 'driver_id', 'status', 'total_miles', 'estimated_time', 'notes', 'date']) {
@@ -1545,6 +1585,71 @@ app.put('/api/routes/:id', async (c) => {
   if (body.truck_id !== undefined || body.driver_id !== undefined) {
     captureRoutePatterns(c.env.DB, parseInt(id), 'modified').catch(() => {})
   }
+
+  // === INVENTORY: Convert holds → deductions when route reaches truck_left or beyond ===
+  // This catches any orders that weren't individually loaded via the warehouse loading flow.
+  // Already-loaded stops (loaded_at IS NOT NULL) had their inventory deducted at load time,
+  // so we ONLY process stops that were NOT warehouse-loaded to avoid double-deduction.
+  const DEDUCT_STATUSES = ['truck_left', 'dispatched', 'in_transit', 'delivered', 'completed']
+  if (body.status && DEDUCT_STATUSES.includes(body.status)) {
+    try {
+      const db = c.env.DB
+      // Check if route was already past truck_left (captured before update above)
+      const alreadyDeducted = prevRouteStatus && DEDUCT_STATUSES.includes(prevRouteStatus)
+
+      if (!alreadyDeducted) {
+        // Find stops that were NOT already loaded by warehouse (loaded_at IS NULL)
+        const unloadedStops = await db.prepare(`
+          SELECT rs.id, rs.order_id, o.order_number, o.status as order_status
+          FROM route_stops rs
+          JOIN orders o ON rs.order_id = o.id
+          WHERE rs.route_id = ? AND rs.loaded_at IS NULL
+          AND o.status NOT IN ('cancelled', 'completed')
+        `).bind(id).all()
+
+        for (const stop of unloadedStops.results as any[]) {
+          const linkedSale = await db.prepare(
+            'SELECT id, location_id FROM pos_sales WHERE order_id = ?'
+          ).bind(stop.order_id).first() as any
+          const locId = linkedSale?.location_id || 2
+
+          const orderItems = await db.prepare(
+            'SELECT oi.quantity, oi.product_id FROM order_items oi WHERE oi.order_id = ?'
+          ).bind(stop.order_id).all()
+
+          for (const item of orderItems.results as any[]) {
+            // Convert hold → deduction: qty_on_hold-- and qty_on_hand--
+            await db.prepare(`
+              UPDATE inventory_stock
+              SET qty_on_hold = MAX(0, qty_on_hold - ?),
+                  qty_on_hand = MAX(0, qty_on_hand - ?),
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE product_id = ? AND location_id = ?
+            `).bind(item.quantity, item.quantity, item.product_id, locId).run()
+
+            await db.prepare(`
+              INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+              VALUES (?, ?, 'shipment', ?, 'Route departed — hold converted to deduction (truck_left)', 'order', ?, ?, 'system')
+            `).bind(
+              item.product_id, locId, -(item.quantity as number),
+              stop.order_id, 'Order ' + (stop.order_number || stop.order_id) + ' route departed'
+            ).run()
+          }
+
+          // Update order status to reflect it's been loaded/shipped
+          await db.prepare(
+            "UPDATE orders SET status = 'loaded', updated_at = datetime('now') WHERE id = ? AND status IN ('new','confirmed','scheduled')"
+          ).bind(stop.order_id).run()
+
+          // Mark stop as loaded so subsequent status transitions don't re-process
+          await db.prepare(
+            "UPDATE route_stops SET loaded_at = datetime('now'), loaded_by = 'route_departure' WHERE id = ? AND loaded_at IS NULL"
+          ).bind(stop.id).run()
+        }
+      }
+    } catch (e) { console.error('Route truck_left inventory deduction error:', e) }
+  }
+
   return c.json({ success: true })
 })
 
@@ -3937,6 +4042,21 @@ app.post('/api/recurring-schedules/:id/generate', async (c) => {
       .bind(orderId, item.product_id, item.quantity).run()
   }
 
+  // === INVENTORY: Place holds for recurring order items ===
+  const holdLocId = 2 // distribution center
+  for (const item of items.results as any[]) {
+    if (item.product_id && item.quantity > 0) {
+      await c.env.DB.prepare(`
+        UPDATE inventory_stock SET qty_on_hold = qty_on_hold + ?, updated_at = CURRENT_TIMESTAMP
+        WHERE product_id = ? AND location_id = ?
+      `).bind(item.quantity, item.product_id, holdLocId).run()
+      await c.env.DB.prepare(`
+        INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+        VALUES (?, ?, 'hold', 0, 'Recurring order generated — inventory reserved', 'order', ?, ?, 'system')
+      `).bind(item.product_id, holdLocId, orderId, 'Recurring order ' + orderNum).run()
+    }
+  }
+
   // Log the generation
   await c.env.DB.prepare(
     'INSERT INTO recurring_order_log (schedule_id, order_id, scheduled_date, status) VALUES (?, ?, ?, ?)'
@@ -3999,6 +4119,21 @@ app.post('/api/recurring-schedules/generate-due', async (c) => {
       for (const item of items.results as any[]) {
         await c.env.DB.prepare('INSERT INTO order_items (order_id, product_id, quantity) VALUES (?, ?, ?)')
           .bind(orderId, item.product_id, item.quantity).run()
+      }
+
+      // === INVENTORY: Place holds for bulk-generated recurring order items ===
+      const bHoldLocId = 2
+      for (const item of items.results as any[]) {
+        if (item.product_id && item.quantity > 0) {
+          await c.env.DB.prepare(`
+            UPDATE inventory_stock SET qty_on_hold = qty_on_hold + ?, updated_at = CURRENT_TIMESTAMP
+            WHERE product_id = ? AND location_id = ?
+          `).bind(item.quantity, item.product_id, bHoldLocId).run()
+          await c.env.DB.prepare(`
+            INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, reference_type, reference_id, notes, user_name)
+            VALUES (?, ?, 'hold', 0, 'Recurring order generated — inventory reserved', 'order', ?, ?, 'system')
+          `).bind(item.product_id, bHoldLocId, orderId, 'Recurring order ' + orderNum).run()
+        }
       }
 
       await c.env.DB.prepare(
