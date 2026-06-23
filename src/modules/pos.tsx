@@ -598,6 +598,59 @@ app.post('/api/pos/sales', async (c) => {
     await db.prepare("UPDATE orders SET source = 'pos' WHERE id = ?").bind(orderId).run()
   }
 
+  // ===== AUTO-CREATE DARTS ENTRY TASK FOR ALDI WAREHOUSE =====
+  // When a delivery order is created from LOX POS, ALDI warehouse needs to enter it into Darts
+  if (orderId && (fulfillment === 'delivery' || fulfillment === 'dc_pickup' || body.delivery_requested)) {
+    try {
+      // Get customer name for the task
+      let custName = 'Walk-in'
+      if (body.customer_id) {
+        const cust = await db.prepare('SELECT business_name, contact_name FROM customers WHERE id = ?').bind(body.customer_id).first<any>()
+        if (cust) custName = cust.business_name || cust.contact_name || 'Customer #' + body.customer_id
+      }
+
+      // Build items summary for task description
+      const itemsSummary = processedItems.map((it: any) => `${it.quantity}x ${it.product_name}`).join(', ')
+      const orderNum = fulfillment === 'dc_pickup' ? 'POS-PU-' + saleNumber : fulfillment === 'delivery' ? 'POS-DLV-' + saleNumber : 'POS-' + saleNumber
+
+      const dartsTaskNumber = 'DARTS-' + Date.now().toString(36).toUpperCase()
+      await db.prepare(`
+        INSERT INTO tasks (task_number, title, description, task_type, priority, status, location_id, ref_type, ref_id, ref_number, customer_id, customer_name, created_by, created_by_name, due_date, tags)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).bind(
+        dartsTaskNumber,
+        '📦 DARTS Entry — ' + custName,
+        `Enter into DARTS system:\n\nOrder: ${orderNum}\nCustomer: ${custName}\nDelivery Date: ${body.delivery_date || 'ASAP'}\nType: ${fulfillment === 'dc_pickup' ? 'Customer Pickup at DC' : 'Delivery'}\nItems: ${itemsSummary}\nTotal: $${total.toFixed(2)}\nSale #: ${saleNumber}\n\nCreated from Loxahatchee POS`,
+        'darts_entry', 'high', 'pending',
+        2, // ALDI warehouse location
+        'order', orderId, orderNum,
+        body.customer_id || null, custName,
+        body.cashier_id || null, body.cashier_name || 'LOX POS',
+        body.delivery_date || null,
+        'darts,pos_delivery,lox'
+      ).run()
+
+      // Create notification for all dispatchers at ALDI
+      const dispatchers = await db.prepare(
+        "SELECT id FROM users WHERE active = 1 AND (role IN ('dispatcher','admin') OR department = 'office')"
+      ).all()
+      for (const d of (dispatchers.results || [])) {
+        await db.prepare(
+          `INSERT INTO notifications (user_id, title, message, notification_type, ref_type, ref_id)
+           VALUES (?, ?, ?, 'task', 'task', ?)`
+        ).bind(
+          (d as any).id,
+          '📦 New DARTS Entry Needed',
+          `${custName} — ${orderNum} — ${itemsSummary.substring(0, 100)}`,
+          orderId
+        ).run()
+      }
+    } catch (e) {
+      // Don't fail the sale if task creation fails
+      console.error('Darts task creation failed:', e)
+    }
+  }
+
   return c.json({
     id: saleId,
     sale_number: saleNumber,
@@ -2787,6 +2840,80 @@ app.get('/api/pos/customer-history/:customerId', async (c) => {
   }
 
   return c.json({ history: combined, stats })
+})
+
+// ==================== DARTS QUEUE ====================
+
+// Get all pending Darts entry tasks
+app.get('/api/pos/darts-queue', async (c) => {
+  const db = c.env.DB
+  const status = c.req.query('status') || 'pending'
+  const includeCompleted = c.req.query('include_completed') === '1'
+
+  let query = `SELECT t.*,
+    o.order_number, o.status as order_status, o.scheduled_date, o.customer_id as order_customer_id,
+    COALESCE(c.business_name, c.contact_name) as customer_display_name,
+    c.phone as customer_phone,
+    (SELECT GROUP_CONCAT(p.name || ' x' || oi.quantity, ', ') FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = t.ref_id) as items_list,
+    (SELECT COUNT(*) FROM order_items oi2 WHERE oi2.order_id = t.ref_id) as item_count,
+    s.sale_number, s.total as sale_total, s.cashier_name
+    FROM tasks t
+    LEFT JOIN orders o ON t.ref_type = 'order' AND t.ref_id = o.id
+    LEFT JOIN customers c ON o.customer_id = c.id
+    LEFT JOIN pos_sales s ON s.order_id = o.id
+    WHERE t.task_type = 'darts_entry'`
+
+  if (!includeCompleted) {
+    if (status === 'all') {
+      query += " AND t.status IN ('pending','in_progress','completed')"
+    } else {
+      query += ` AND t.status = '${status === 'completed' ? 'completed' : 'pending'}'`
+    }
+  }
+  query += ' ORDER BY t.priority DESC, t.created_at DESC LIMIT 100'
+
+  const result = await db.prepare(query).all()
+
+  // Summary counts
+  const counts = await db.prepare(`
+    SELECT
+      COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
+      COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress,
+      COUNT(CASE WHEN status = 'completed' AND completed_at >= datetime('now', '-24 hours') THEN 1 END) as completed_today
+    FROM tasks WHERE task_type = 'darts_entry'
+  `).first() as any
+
+  return c.json({ tasks: result.results, counts })
+})
+
+// Mark a Darts task as completed
+app.put('/api/pos/darts-queue/:taskId/complete', async (c) => {
+  const db = c.env.DB
+  const taskId = parseInt(c.req.param('taskId'))
+  const body = await c.req.json() as any
+  const user = getUserFromHeader(c)
+
+  const task = await db.prepare('SELECT * FROM tasks WHERE id = ? AND task_type = ?').bind(taskId, 'darts_entry').first() as any
+  if (!task) return c.json({ error: 'Darts task not found' }, 404)
+
+  await db.prepare(`
+    UPDATE tasks SET status = 'completed', completed_at = datetime('now'),
+      completed_by = ?, completed_by_name = ?, notes = COALESCE(notes, '') || ?
+    WHERE id = ?
+  `).bind(
+    user?.id || body.completed_by || null,
+    user?.email || body.completed_by_name || null,
+    body.darts_confirmation ? '\n\nDARTS Confirmation: ' + body.darts_confirmation : '',
+    taskId
+  ).run()
+
+  // Mark the linked order as Darts-synced
+  if (task.ref_type === 'order' && task.ref_id) {
+    await db.prepare('UPDATE orders SET darts_synced = 1, darts_synced_at = datetime(\'now\'), darts_synced_by = ? WHERE id = ?')
+      .bind(user?.id || body.completed_by || null, task.ref_id).run()
+  }
+
+  return c.json({ success: true })
 })
 
 // ==================== PETTY CASH ====================

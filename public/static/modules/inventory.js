@@ -3012,6 +3012,9 @@ async function invRenderProductsPage() {
   var search = '';
   var searchEl = document.getElementById('invProdSearchInput');
   if (searchEl) search = searchEl.value;
+  var cat = '';
+  var catEl = document.getElementById('invProdCategoryFilter');
+  if (catEl) cat = catEl.value;
 
   var html = '<div class="inv-stock-page">';
 

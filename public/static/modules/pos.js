@@ -208,7 +208,9 @@ var _posSidebarItems = [
   { id: 'inventory-requests', icon: 'fa-boxes-stacked', label: 'Stock Requests' },
   { id: 'statements', icon: 'fa-file-invoice-dollar', label: 'Statements' },
   { section: 'Cash Management' },
-  { id: 'petty-cash', icon: 'fa-money-bill-transfer', label: 'Petty Cash' }
+  { id: 'petty-cash', icon: 'fa-money-bill-transfer', label: 'Petty Cash' },
+  { section: 'Warehouse' },
+  { id: 'darts-queue', icon: 'fa-satellite-dish', label: 'DARTS Queue' }
 ];
 
 // Logistics render functions called from POS distribution mode
@@ -253,6 +255,7 @@ function renderRegisterView() {
         '<button class="pos-topbar-btn" id="posBtnInvReq"><i class="fas fa-boxes-stacked"></i> <span class="hide-mobile">Stock Req</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnStmts"><i class="fas fa-file-invoice-dollar"></i> <span class="hide-mobile">Statements</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnPetty" style="color:#F59E0B"><i class="fas fa-money-bill-transfer"></i> <span class="hide-mobile">Petty Cash</span></button>' +
+        '<button class="pos-topbar-btn" id="posBtnDarts" style="color:#8B5CF6"><i class="fas fa-satellite-dish"></i> <span class="hide-mobile">DARTS</span> <span id="posDartsBadge" class="pos-held-badge" style="display:none;background:#8B5CF6">0</span></button>' +
         '<button class="pos-topbar-btn" id="posBtnHeld"><i class="fas fa-pause-circle"></i> <span class="hide-mobile">Held</span> <span id="posHeldBadge" class="pos-held-badge" style="display:none">0</span></button>' +
         '<button class="pos-topbar-btn danger" id="posBtnClose"><i class="fas fa-power-off"></i> <span class="hide-mobile">Close</span></button>' +
       '</div>' +
@@ -264,7 +267,8 @@ function renderRegisterView() {
     '<div id="posViewAll-orders" class="pos-view pos-all-orders"></div>' +
     '<div id="posViewInventory-requests" class="pos-view pos-inv-requests"></div>' +
     '<div id="posViewStatements" class="pos-view pos-statements"></div>' +
-    '<div id="posViewPetty-cash" class="pos-view pos-petty-cash"></div>';
+    '<div id="posViewPetty-cash" class="pos-view pos-petty-cash"></div>' +
+    '<div id="posViewDarts-queue" class="pos-view pos-darts-queue"></div>';
 
   on('posBtnDash', 'click', function() { switchView('dashboard'); });
   on('posBtnReg', 'click', function() { switchView('register'); });
@@ -272,6 +276,7 @@ function renderRegisterView() {
   on('posBtnOrders', 'click', function() { switchView('all-orders'); });
   on('posBtnCust', 'click', function() { switchView('customers'); });
   on('posBtnPetty', 'click', function() { switchView('petty-cash'); });
+  on('posBtnDarts', 'click', function() { switchView('darts-queue'); });
   on('posBtnInvReq', 'click', function() { switchView('inventory-requests'); });
   on('posBtnStmts', 'click', function() { switchView('statements'); });
   on('posBtnHeld', 'click', showHeld);
@@ -279,9 +284,10 @@ function renderRegisterView() {
 
   switchView('register');
   loadHeldCount();
+  _loadDartsBadge();
 }
 
-// ==================== DISTRIBUTION CENTER LAYOUT (ALDI) ====================
+// ==================== DISTRIBUTION CENTER LAYOUT (ALDI) ==
 
 // Ensure logistics.js is loaded (for render functions like renderStandingOrders, renderOrders, etc.)
 function _ensureLogisticsLoaded(callback) {
@@ -365,6 +371,7 @@ function _renderDistributionLayout(el, locName) {
           '<div id="posViewInventory-requests" class="pos-view pos-inv-requests"></div>' +
           '<div id="posViewStatements" class="pos-view pos-statements"></div>' +
           '<div id="posViewPetty-cash" class="pos-view pos-petty-cash"></div>' +
+          '<div id="posViewDarts-queue" class="pos-view pos-darts-queue"></div>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -373,6 +380,7 @@ function _renderDistributionLayout(el, locName) {
   _updateDCNavActive('register');
   switchView('register');
   loadHeldCount();
+  _loadDartsBadge();
 }
 
 function _updateDCSidebar() {
@@ -472,6 +480,7 @@ function switchView(view) {
   else if (view === 'inventory-requests') loadInventoryRequests();
   else if (view === 'statements') loadStatements();
   else if (view === 'petty-cash') loadPettyCash();
+  else if (view === 'darts-queue') loadDartsQueue();
 }
 
 // ==================== REGISTER CONTENT ====================
@@ -4833,6 +4842,201 @@ function openCRMLink(custId) {
   }).catch(function(err) { toast('Error: ' + errMsg(err), 'error'); });
 }
 
+// ==================== DARTS QUEUE ====================
+var _dartsData = [];
+var _dartsFilter = 'pending'; // pending, completed, all
+
+function loadDartsQueue() {
+  var el = document.getElementById('posViewDarts-queue');
+  if (!el) return;
+  el.innerHTML = '<div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading DARTS queue...</div>';
+
+  var qp = 'status=' + _dartsFilter;
+  if (_dartsFilter === 'completed' || _dartsFilter === 'all') qp += '&include_completed=1';
+
+  API.get('/pos/darts-queue?' + qp).then(function(r) {
+    _dartsData = r.data.tasks || [];
+    var counts = r.data.counts || {};
+    var pending = (counts.pending || 0) + (counts.in_progress || 0);
+
+    // Update badge in topbar
+    var badge = document.getElementById('posDartsBadge');
+    if (badge) { badge.textContent = pending; badge.style.display = pending > 0 ? '' : 'none'; }
+
+    var html = '<div class="pos-cust-view-header">' +
+      '<div class="pos-cust-view-title"><h2><i class="fas fa-satellite-dish" style="color:#8B5CF6"></i> DARTS Entry Queue</h2>' +
+      '<span style="font-size:12px;color:var(--pos-gray-500)">Delivery orders from LOX POS that need entering into DARTS</span></div>' +
+      '<div style="display:flex;gap:8px;align-items:center">' +
+        '<button class="pos-btn pos-btn-sm" id="dartsRefresh" style="background:var(--pos-navy);color:white"><i class="fas fa-sync"></i></button>' +
+      '</div></div>';
+
+    // Summary cards
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin:12px 0">';
+    html += '<div style="padding:14px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px;border-left:4px solid #EF4444">' +
+      '<div style="font-size:11px;color:var(--pos-gray-500);text-transform:uppercase;font-weight:600">Pending</div>' +
+      '<div style="font-size:28px;font-weight:800;color:#EF4444">' + (counts.pending || 0) + '</div></div>';
+    html += '<div style="padding:14px;background:white;border:1px solid var(--pos-gray-200);border-radius:10px;border-left:4px solid #10B981">' +
+      '<div style="font-size:11px;color:var(--pos-gray-500);text-transform:uppercase;font-weight:600">Done Today</div>' +
+      '<div style="font-size:28px;font-weight:800;color:#10B981">' + (counts.completed_today || 0) + '</div></div>';
+    html += '</div>';
+
+    // Filter tabs
+    html += '<div style="display:flex;gap:6px;margin-bottom:16px">';
+    ['pending','completed','all'].forEach(function(f) {
+      var active = _dartsFilter === f;
+      var label = f === 'pending' ? 'Pending' : f === 'completed' ? 'Completed' : 'All';
+      html += '<button class="pos-btn pos-btn-sm" onclick="window.dartsSetFilter(\'' + f + '\')" style="' +
+        (active ? 'background:#8B5CF6;color:white;font-weight:700' : 'background:var(--pos-gray-100);color:var(--pos-gray-600)') +
+        '">' + label + '</button>';
+    });
+    html += '</div>';
+
+    // Task cards
+    if (_dartsData.length === 0) {
+      html += '<div style="text-align:center;padding:48px;color:var(--pos-gray-400)">' +
+        '<i class="fas fa-check-circle" style="font-size:48px;color:#10B981;display:block;margin-bottom:12px"></i>' +
+        '<div style="font-size:16px;font-weight:600;color:var(--pos-navy)">All caught up!</div>' +
+        '<div style="font-size:13px;margin-top:4px">No pending DARTS entries</div></div>';
+    } else {
+      html += '<div style="display:flex;flex-direction:column;gap:10px">';
+      _dartsData.forEach(function(t) {
+        var isPending = t.status === 'pending' || t.status === 'in_progress';
+        var borderColor = isPending ? '#8B5CF6' : '#10B981';
+        var priorityBadge = t.priority === 'high' || t.priority === 'critical'
+          ? '<span style="background:#FEE2E2;color:#DC2626;padding:2px 6px;border-radius:6px;font-size:10px;font-weight:700"><i class="fas fa-arrow-up"></i> ' + t.priority.toUpperCase() + '</span> '
+          : '';
+
+        html += '<div style="background:white;border:1px solid var(--pos-gray-200);border-radius:12px;padding:16px;border-left:4px solid ' + borderColor + '">';
+
+        // Header row
+        html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">' +
+              priorityBadge +
+              '<span style="font-weight:800;font-size:15px;color:var(--pos-navy)">' + esc(t.customer_name || t.customer_display_name || 'Unknown') + '</span>' +
+              (t.customer_phone ? '<span style="font-size:12px;color:var(--pos-gray-500)"><i class="fas fa-phone"></i> ' + esc(t.customer_phone) + '</span>' : '') +
+            '</div>' +
+            '<div style="font-size:12px;color:var(--pos-gray-500);margin-bottom:8px">' +
+              '<span style="background:#EDE9FE;color:#7C3AED;padding:2px 8px;border-radius:6px;font-weight:600"><i class="fas fa-hashtag"></i> ' + esc(t.ref_number || t.order_number || '') + '</span> ' +
+              (t.sale_number ? '<span style="color:var(--pos-gray-400)">Sale #' + esc(t.sale_number) + '</span> ' : '') +
+              '<span><i class="fas fa-clock"></i> ' + timeAgo(t.created_at) + '</span>' +
+              (t.cashier_name ? ' <span><i class="fas fa-user"></i> ' + esc(t.cashier_name) + '</span>' : '') +
+            '</div>' +
+          '</div>' +
+          '<div style="text-align:right;flex-shrink:0">' +
+            (t.sale_total ? '<div style="font-size:18px;font-weight:800;color:var(--pos-navy)">$' + (t.sale_total || 0).toFixed(2) + '</div>' : '') +
+            (t.scheduled_date ? '<div style="font-size:11px;color:#D97706;font-weight:600"><i class="fas fa-calendar"></i> ' + esc(t.scheduled_date) + '</div>' : '<div style="font-size:11px;color:#EF4444;font-weight:600">ASAP</div>') +
+          '</div>' +
+        '</div>';
+
+        // Items
+        if (t.items_list) {
+          html += '<div style="background:var(--pos-gray-50);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:13px">' +
+            '<div style="font-weight:600;color:var(--pos-gray-600);margin-bottom:4px"><i class="fas fa-boxes-stacked"></i> Items (' + (t.item_count || 0) + ')</div>' +
+            '<div style="color:var(--pos-gray-700)">' + esc(t.items_list) + '</div>' +
+          '</div>';
+        }
+
+        // Order status
+        if (t.order_status) {
+          var osColor = t.order_status === 'new' ? '#F59E0B' : t.order_status === 'confirmed' ? '#3B82F6' : '#10B981';
+          html += '<div style="font-size:11px;margin-bottom:8px">Order Status: <span style="background:' + osColor + '20;color:' + osColor + ';padding:2px 6px;border-radius:4px;font-weight:600">' + esc(t.order_status) + '</span></div>';
+        }
+
+        // Completion info
+        if (t.status === 'completed') {
+          html += '<div style="background:#ECFDF5;border-radius:8px;padding:8px 12px;font-size:12px;color:#047857">' +
+            '<i class="fas fa-check-circle"></i> <strong>Entered into DARTS</strong>' +
+            (t.completed_by_name ? ' by ' + esc(t.completed_by_name) : '') +
+            (t.completed_at ? ' — ' + timeAgo(t.completed_at) : '') +
+          '</div>';
+        }
+
+        // Action buttons
+        if (isPending) {
+          html += '<div style="display:flex;gap:8px;margin-top:10px;border-top:1px solid var(--pos-gray-100);padding-top:10px">' +
+            '<button class="pos-btn" onclick="window.dartsMarkDone(' + t.id + ')" style="flex:1;background:#8B5CF6;color:white;font-weight:700;padding:10px"><i class="fas fa-check-double"></i> Mark Entered in DARTS</button>' +
+          '</div>';
+        }
+
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+    on('dartsRefresh', 'click', loadDartsQueue);
+  }).catch(function(err) {
+    el.innerHTML = '<div class="pos-loading" style="color:var(--pos-red)"><i class="fas fa-exclamation-triangle"></i> ' + errMsg(err) + '</div>';
+  });
+}
+
+function dartsSetFilter(f) {
+  _dartsFilter = f;
+  loadDartsQueue();
+}
+
+function dartsMarkDone(taskId) {
+  var user = getUser();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'dartsCompleteOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  overlay.innerHTML =
+    '<div style="background:white;border-radius:16px;width:100%;max-width:400px;box-shadow:0 25px 50px rgba(0,0,0,0.25)">' +
+      '<div style="padding:20px 24px;border-bottom:1px solid var(--pos-gray-100)">' +
+        '<h3 style="margin:0;font-size:16px"><i class="fas fa-check-double" style="color:#8B5CF6"></i> Confirm DARTS Entry</h3>' +
+      '</div>' +
+      '<div style="padding:24px">' +
+        '<div style="margin-bottom:16px">' +
+          '<label style="display:block;font-size:12px;font-weight:600;color:var(--pos-gray-600);margin-bottom:4px">DARTS Confirmation / Reference (optional)</label>' +
+          '<input id="dartsConfirmRef" type="text" placeholder="e.g. DARTS order #, confirmation code" style="width:100%;padding:10px 12px;border:1px solid var(--pos-gray-200);border-radius:8px;font-size:14px;box-sizing:border-box">' +
+        '</div>' +
+        '<div style="background:#EDE9FE;border:1px solid #C4B5FD;border-radius:10px;padding:12px;margin-bottom:16px;font-size:12px;color:#5B21B6">' +
+          '<i class="fas fa-info-circle"></i> This confirms the order has been entered into the DARTS system at ALDI warehouse.' +
+        '</div>' +
+        '<div style="display:flex;gap:8px">' +
+          '<button id="dartsDoComplete" style="flex:1;padding:12px;background:#8B5CF6;color:white;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer"><i class="fas fa-check-double"></i> Confirm</button>' +
+          '<button onclick="document.getElementById(\'dartsCompleteOverlay\').remove()" style="padding:12px 20px;background:var(--pos-gray-100);color:var(--pos-gray-600);border:none;border-radius:10px;font-size:14px;cursor:pointer">Cancel</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+
+  document.getElementById('dartsDoComplete').addEventListener('click', function() {
+    var ref = gv('dartsConfirmRef').trim();
+    var btn = document.getElementById('dartsDoComplete');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+    API.put('/pos/darts-queue/' + taskId + '/complete', {
+      darts_confirmation: ref || null,
+      completed_by: user ? user.id : null,
+      completed_by_name: user ? user.name : null
+    }).then(function() {
+      toast('DARTS entry confirmed ✓');
+      overlay.remove();
+      loadDartsQueue();
+    }).catch(function(err) {
+      toast('Error: ' + errMsg(err), 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-check-double"></i> Confirm';
+    });
+  });
+}
+
+// Load Darts badge count on startup
+function _loadDartsBadge() {
+  API.get('/pos/darts-queue?status=pending').then(function(r) {
+    var counts = r.data.counts || {};
+    var pending = (counts.pending || 0) + (counts.in_progress || 0);
+    var badge = document.getElementById('posDartsBadge');
+    if (badge) { badge.textContent = pending; badge.style.display = pending > 0 ? '' : 'none'; }
+  }).catch(function() {});
+}
+
 // ==================== PETTY CASH ====================
 var _pettyCashData = [];
 
@@ -5129,5 +5333,7 @@ window.showModal = showModal;
 window.pcComplete = pcComplete;
 window.pcVoid = pcVoid;
 window.pcShowCashOutForm = pcShowCashOutForm;
+window.dartsMarkDone = dartsMarkDone;
+window.dartsSetFilter = dartsSetFilter;
 
 })();
