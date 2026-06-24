@@ -450,8 +450,9 @@ function invRenderStockRows() {
   var _sf = invCanViewFin();
   var _se = invCanEdit('stock');
   var _sp = invCanEditPricing();
+  var _sfp = _sf || _sp;
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
-  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Vendor</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th><th class="text-right">Incoming</th>' + (_sf ? '<th class="text-right">Sell</th><th class="text-right">Cost</th><th class="text-right">Value</th>' : '') + (_se ? '<th></th>' : '') + '</tr></thead><tbody>';
+  html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Vendor</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th><th class="text-right">Incoming</th>' + (_sfp ? '<th class="text-right">Sell</th><th class="text-right">Cost</th>' : '') + (_sf ? '<th class="text-right">Value</th>' : '') + (_se ? '<th></th>' : '') + '</tr></thead><tbody>';
 
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
@@ -472,9 +473,9 @@ function invRenderStockRows() {
       '<td class="text-right">' + (s.qty_on_hold || 0 ? '<span class="inv-hold-badge inv-num-click" onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'on_hold\',\'' + pNameEsc + '\')">' + s.qty_on_hold + '</span>' : '—') + '</td>' +
       '<td class="text-right' + (avail <= 0 ? ' inv-danger' : lowStock ? ' inv-warning' : '') + '"><strong>' + avail.toLocaleString() + '</strong></td>' +
       '<td class="text-right">' + (incoming > 0 ? '<span class="inv-incoming-badge inv-num-click" onclick="event.stopPropagation();invShowIncoming(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\')">' + incoming + '</span>' : '<span class="inv-muted">—</span>') + '</td>' +
-      (_sf ? '<td class="text-right"><span' + (_sp ? ' style="cursor:pointer;text-decoration:underline dotted #059669" onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'price\')" title="Click to edit"' : '') + '>$' + (s.price || 0).toFixed(2) + '</span></td>' +
-      '<td class="text-right inv-muted"><span' + (_sp ? ' style="cursor:pointer;text-decoration:underline dotted #DC2626" onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'cost\')" title="Click to edit"' : '') + '>$' + (s.cost || 0).toFixed(2) + '</span></td>' +
-      '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' : '') +
+      (_sfp ? '<td class="text-right"><span' + (_sp ? ' style="cursor:pointer;text-decoration:underline dotted #059669" onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'price\')" title="Click to edit"' : '') + '>$' + (s.price || 0).toFixed(2) + '</span></td>' +
+      '<td class="text-right inv-muted"><span' + (_sp ? ' style="cursor:pointer;text-decoration:underline dotted #DC2626" onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'cost\')" title="Click to edit"' : '') + '>$' + (s.cost || 0).toFixed(2) + '</span></td>' : '') +
+      (_sf ? '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' : '') +
       (_se ? '<td><button class="inv-btn inv-btn-xs" onclick="invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i></button>' +
       '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i></button></td>' : '') +
       '</tr>';
@@ -503,7 +504,7 @@ function invRenderStockRows() {
       '<div><span class="inv-muted">Available</span><strong class="' + (avail <= 0 ? 'inv-danger' : '') + '">' + avail + '</strong></div>' +
       (s.qty_on_hold > 0 ? '<div onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'on_hold\',\'' + pNameEsc + '\')"><span class="inv-muted">Hold</span><strong class="inv-num-click" style="color:#D97706">' + s.qty_on_hold + '</strong></div>' : '') +
       (incoming > 0 ? '<div onclick="event.stopPropagation();invShowIncoming(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\')"><span class="inv-muted">Incoming</span><strong class="inv-num-click" style="color:#059669">' + incoming + '</strong></div>' : '') +
-      (_sf ? '<div' + (_sp ? ' onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'price\')" style="cursor:pointer"' : '') + '><span class="inv-muted">Sell</span><span>$' + (s.price || 0).toFixed(2) + '</span></div>' +
+      (_sfp ? '<div' + (_sp ? ' onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'price\')" style="cursor:pointer"' : '') + '><span class="inv-muted">Sell</span><span>$' + (s.price || 0).toFixed(2) + '</span></div>' +
       '<div' + (_sp ? ' onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'cost\')" style="cursor:pointer"' : '') + '><span class="inv-muted">Cost</span><span>$' + (s.cost || 0).toFixed(2) + '</span></div>' : '') +
       '</div>' +
       (_se ? '<div class="inv-stock-card-actions">' +
@@ -2991,7 +2992,7 @@ async function invShowProductDetail(productId) {
         var vendorNames = product.vendors.map(function(v) { return escH(v.vendor_name) + (v.is_primary ? ' \u2605' : ''); }).join(', ');
         body += '<div class="inv-product-info-row"><span class="inv-muted">All Vendors</span><span style="font-size:12px">' + vendorNames + '</span></div>';
       }
-      if (invCanViewFin()) {
+      if (invCanViewFin() || invCanEditPricing()) {
         var _cep = invCanEditPricing();
         var _editBtn = function(field, pid) {
           return _cep ? ' <button class="inv-btn inv-btn-xs" style="padding:1px 6px;font-size:10px;background:none;color:#6366F1;border:1px solid #E2E8F0;border-radius:4px;cursor:pointer" onclick="invInlinePriceEdit(' + pid + ',\'' + field + '\')" title="Edit ' + field + '"><i class="fas fa-pen" style="font-size:9px"></i></button>' : '';
@@ -3056,7 +3057,7 @@ async function invShowProductDetail(productId) {
     }
 
     // Cost History section (financial permission required)
-    if (invCanViewFin()) {
+    if (invCanViewFin() || invCanEditPricing()) {
       try {
         var chResp = await invAPI.get('/api/purchasing/cost-history/' + productId, { headers: invHeaders() });
         var costHistory = chResp.data.history || [];
@@ -3123,12 +3124,13 @@ async function invInitStock(locationId) {
 // ==================== EXPORT ====================
 function invExportStock() {
   var _sf = invCanViewFin();
-  var csv = 'Product,SKU,Category,Location,On Hand,On Hold,Reserved,Available,Incoming' + (_sf ? ',Sell Price,Cost,Value' : '') + '\n';
+  var _sfep = _sf || invCanEditPricing();
+  var csv = 'Product,SKU,Category,Location,On Hand,On Hold,Reserved,Available,Incoming' + (_sfep ? ',Sell Price,Cost' : '') + (_sf ? ',Value' : '') + '\n';
   invStockData.forEach(function(s) {
     var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
     csv += '"' + (s.product_name || '') + '","' + (s.sku || '') + '","' + (s.category || '') + '","' + (s.location_name || '') + '",' +
       (s.qty_on_hand || 0) + ',' + (s.qty_on_hold || 0) + ',' + (s.qty_reserved || 0) + ',' + avail + ',' + (s.qty_incoming || 0) +
-      (_sf ? ',' + (s.price || 0) + ',' + (s.cost || 0) + ',' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toFixed(2) : '') + '\n';
+      (_sfep ? ',' + (s.price || 0) + ',' + (s.cost || 0) : '') + (_sf ? ',' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toFixed(2) : '') + '\n';
   });
   var blob = new Blob([csv], { type: 'text/csv' });
   var url = URL.createObjectURL(blob);
@@ -3257,7 +3259,8 @@ async function invRenderProductRows() {
   var _pf = invCanViewFin();
   var _pe = invCanEdit('products');
   var _pp = invCanEditPricing();
-  html += '<thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Vendor</th><th>Unit</th>' + (_pf ? '<th class="text-right">Sell Price</th><th class="text-right">Cost</th><th class="text-right">Margin</th>' : '') + '<th>Status</th>' + (_pe ? '<th></th>' : '') + '</tr></thead><tbody>';
+  var _pfp = _pf || _pp;
+  html += '<thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Vendor</th><th>Unit</th>' + (_pfp ? '<th class="text-right">Sell Price</th><th class="text-right">Cost</th><th class="text-right">Margin</th>' : '') + '<th>Status</th>' + (_pe ? '<th></th>' : '') + '</tr></thead><tbody>';
 
   invProductsPageData.forEach(function(p) {
     var margin = p.price && p.cost ? (((p.price - p.cost) / p.price) * 100).toFixed(1) + '%' : '—';
@@ -3270,7 +3273,7 @@ async function invRenderProductRows() {
         (p.subcategory ? '<div style="font-size:10px;color:#64748B;margin-top:2px">' + invSubcatLabel(p.subcategory) + '</div>' : '') + '</td>' +
       '<td class="inv-muted" style="font-size:13px">' + escH(p.primary_vendor_name || '—') + '</td>' +
       '<td>' + escH(p.unit_type || 'each') + '</td>' +
-      (_pf ? '<td class="text-right"><span' + priceClick + '>$' + (p.price || 0).toFixed(2) + '</span></td>' +
+      (_pfp ? '<td class="text-right"><span' + priceClick + '>$' + (p.price || 0).toFixed(2) + '</span></td>' +
       '<td class="text-right inv-muted"><span' + costClick + '>$' + (p.cost || 0).toFixed(2) + '</span></td>' +
       '<td class="text-right">' + margin + '</td>' : '') +
       '<td>' + (p.active ? '<span class="inv-cat-badge inv-cat-supplement">Active</span>' : '<span class="inv-cat-badge inv-cat-other">Inactive</span>') + '</td>' +
@@ -3289,7 +3292,7 @@ async function invRenderProductRows() {
       (p.active ? '' : '<span class="inv-cat-badge inv-cat-other">Inactive</span>') +
       '</div>' +
       '<div class="inv-stock-card-nums">' +
-      (_pf ? '<div onclick="' + (_pp ? 'event.stopPropagation();invInlinePriceEdit(' + p.id + ',\'price\')' : '') + '" style="' + (_pp ? 'cursor:pointer' : '') + '"><span class="inv-muted">Sell</span><strong>$' + (p.price || 0).toFixed(2) + '</strong></div>' +
+      (_pfp ? '<div onclick="' + (_pp ? 'event.stopPropagation();invInlinePriceEdit(' + p.id + ',\'price\')' : '') + '" style="' + (_pp ? 'cursor:pointer' : '') + '"><span class="inv-muted">Sell</span><strong>$' + (p.price || 0).toFixed(2) + '</strong></div>' +
       '<div onclick="' + (_pp ? 'event.stopPropagation();invInlinePriceEdit(' + p.id + ',\'cost\')' : '') + '" style="' + (_pp ? 'cursor:pointer' : '') + '"><span class="inv-muted">Cost</span><span>$' + (p.cost || 0).toFixed(2) + '</span></div>' +
       '<div><span class="inv-muted">Margin</span><span>' + margin + '</span></div>' : '') +
       '<div><span class="inv-muted">Unit</span><span>' + escH(p.unit_type || 'each') + '</span></div>' +
@@ -3473,7 +3476,7 @@ async function invShowEditProduct(productId) {
     body += '<div class="inv-form-group"><label>Status</label><select class="inv-select" id="invEditActive"><option value="1"' + (p.active ? ' selected' : '') + '>Active</option><option value="0"' + (!p.active ? ' selected' : '') + '>Inactive</option></select></div>';
     body += '</div>';
 
-    if (invCanViewFin()) {
+    if (invCanViewFin() || invCanEditPricing()) {
       var _pricingEditable = invCanEditPricing();
       var _roAttr = _pricingEditable ? '' : ' readonly style="background:#F1F5F9;color:#64748B;cursor:not-allowed"';
       var _lockIcon = _pricingEditable ? '' : ' <i class="fas fa-lock" style="color:#94A3B8;font-size:10px" title="No pricing edit permission"></i>';
@@ -3770,7 +3773,7 @@ function invShowNewProduct() {
   body += '<div class="inv-form-group"><label>Subcategory</label><select class="inv-select" id="invNewSubcategory">' + newSubcatOpts + '</select></div>';
   body += '<div class="inv-form-group"><label>Unit Type</label><select class="inv-select" id="invNewUnit">' + unitOpts + '</select></div>';
   body += '</div>';
-  if (invCanViewFin()) {
+  if (invCanViewFin() || invCanEditPricing()) {
     var _npEditable = invCanEditPricing();
     var _npRo = _npEditable ? '' : ' readonly style="background:#F1F5F9;color:#64748B;cursor:not-allowed"';
     var _npLock = _npEditable ? '' : ' <i class="fas fa-lock" style="color:#94A3B8;font-size:10px" title="No pricing edit permission"></i>';
