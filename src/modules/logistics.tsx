@@ -506,8 +506,8 @@ app.patch('/api/orders/:id/status', async (c) => {
     const db = c.env.DB
     const prevOrder = await db.prepare('SELECT status FROM orders WHERE id = ?').bind(id).first() as any
     const wasLoaded = prevOrder?.status === 'loaded' || prevOrder?.status === 'in_transit'
-    const linkedSale = await db.prepare('SELECT id, location_id FROM pos_sales WHERE order_id = ?').bind(id).first() as any
-    const locId = linkedSale?.location_id || 2
+    const linkedSale = await db.prepare('SELECT id, location_id, source_location_id FROM pos_sales WHERE order_id = ?').bind(id).first() as any
+    const locId = linkedSale?.source_location_id || linkedSale?.location_id || 2
     const orderItems = await db.prepare(
       'SELECT oi.quantity, oi.product_id FROM order_items oi WHERE oi.order_id = ?'
     ).bind(id).all()
@@ -545,8 +545,8 @@ app.delete('/api/orders/:id', async (c) => {
   // === INVENTORY: Release any holds before deleting order ===
   const order = await db.prepare('SELECT status FROM orders WHERE id = ?').bind(id).first() as any
   if (order && !['completed', 'delivered', 'cancelled'].includes(order.status)) {
-    const linkedSale = await db.prepare('SELECT id, location_id FROM pos_sales WHERE order_id = ?').bind(id).first() as any
-    const locId = linkedSale?.location_id || 2
+    const linkedSale = await db.prepare('SELECT id, location_id, source_location_id FROM pos_sales WHERE order_id = ?').bind(id).first() as any
+    const locId = linkedSale?.source_location_id || linkedSale?.location_id || 2
     const orderItems = await db.prepare(
       'SELECT oi.quantity, oi.product_id FROM order_items oi WHERE oi.order_id = ?'
     ).bind(id).all()
@@ -1609,9 +1609,9 @@ app.put('/api/routes/:id', async (c) => {
 
         for (const stop of unloadedStops.results as any[]) {
           const linkedSale = await db.prepare(
-            'SELECT id, location_id FROM pos_sales WHERE order_id = ?'
+            'SELECT id, location_id, source_location_id FROM pos_sales WHERE order_id = ?'
           ).bind(stop.order_id).first() as any
-          const locId = linkedSale?.location_id || 2
+          const locId = linkedSale?.source_location_id || linkedSale?.location_id || 2
 
           const orderItems = await db.prepare(
             'SELECT oi.quantity, oi.product_id FROM order_items oi WHERE oi.order_id = ?'
@@ -5940,10 +5940,10 @@ app.post('/api/warehouse/route-stop/:id/load', async (c) => {
   // === INVENTORY: Convert holds to deductions when product physically leaves the shelf ===
   // Find the source location: check if this order came from POS (has linked pos_sale)
   const linkedSale = await db.prepare(
-    'SELECT id, location_id, fulfillment_type FROM pos_sales WHERE order_id = ?'
+    'SELECT id, location_id, source_location_id, fulfillment_type FROM pos_sales WHERE order_id = ?'
   ).bind(stop.order_id).first() as any
-  // POS orders use sale's location_id; manual logistics orders default to distribution center (loc 2)
-  const inventoryLocationId = linkedSale?.location_id || 2
+  // POS delivery/dc_pickup orders use source_location_id (where inventory was held); fallback to location_id; manual orders default to loc 2
+  const inventoryLocationId = linkedSale?.source_location_id || linkedSale?.location_id || 2
 
   // Log activity & convert inventory holds
   const items = await db.prepare(
@@ -5991,9 +5991,9 @@ app.post('/api/warehouse/route/:id/load-all', async (c) => {
 
     // === INVENTORY: Convert holds to deductions for each order ===
     const linkedSale = await db.prepare(
-      'SELECT id, location_id, fulfillment_type FROM pos_sales WHERE order_id = ?'
+      'SELECT id, location_id, source_location_id, fulfillment_type FROM pos_sales WHERE order_id = ?'
     ).bind(stop.order_id).first() as any
-    const inventoryLocationId = linkedSale?.location_id || 2
+    const inventoryLocationId = linkedSale?.source_location_id || linkedSale?.location_id || 2
 
     const orderItems = await db.prepare(
       'SELECT oi.quantity, p.id as product_id FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?'
