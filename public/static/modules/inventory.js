@@ -33,6 +33,10 @@ var invScanLastKey = 0;
 var invScanTimer = null;
 var invScanListenerBound = false;
 
+// Auto-save state for quick count
+var invCountAutoSaveTimers = {}; // idx -> timeout
+var invCountSavedCount = 0; // how many saved this session
+
 // Permission helper for edit access (view-only enforcement)
 function invCanEdit(feature) {
   var fn = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
@@ -217,6 +221,8 @@ async function invRender() {
     root = document.getElementById('inventory-app'); if (!root) return;
     root.innerHTML = invRenderNav() + html;
   } else if (invPage === 'count') {
+    invCountSavedCount = 0; // Reset saved counter for new count session
+    invCountAutoSaveTimers = {}; // Clear any pending timers
     await invLoadStock();
     // Load batch summary for current location
     if (invSelectedLocation) {
@@ -593,7 +599,7 @@ function invRenderQuickCount() {
   var _preNewCount = 0, _preOosCount = 0;
   invStockData.forEach(function(s) { if (s.no_stock_row) _preNewCount++; else if ((s.qty_on_hand || 0) === 0) _preOosCount++; });
 
-  // Row 2: Search + filter pills + Summary + Submit
+  // Row 2: Search + filter pills + Summary + auto-save info
   html += '<div class="inv-count-toolbar">';
   html += '<input id="invCountSearch" type="text" placeholder="Search products..." class="inv-count-search" oninput="invFilterCountList()">';
   html += '<div class="inv-count-toolbar-right">';
@@ -602,8 +608,9 @@ function invRenderQuickCount() {
   if (_preOosCount > 0) html += '<button class="inv-count-pill inv-count-pill-oos" data-status="oos" onclick="invFilterCountByStatus(\'oos\')" title="Show only out-of-stock"><i class="fas fa-box-open"></i> ' + _preOosCount + ' out of stock</button>';
   if (invCanEdit('count')) html += '<button class="inv-btn inv-btn-outline inv-btn-sm" onclick="invShowNewProduct()" style="color:#6366F1;border-color:#6366F1"><i class="fas fa-plus"></i> Add Product</button> ';
   if (invUser && invUser.role === 'admin') html += '<button class="inv-btn inv-btn-outline inv-btn-sm" onclick="invShowCleanupReview()" style="color:#DC2626;border-color:#DC2626"><i class="fas fa-broom"></i> Review Deletions</button> ';
-  if (invCanEdit('count')) html += '<button class="inv-btn inv-btn-primary" onclick="invSubmitBulkCount()"><i class="fas fa-check"></i> Submit Count</button>';
   html += '</div></div>';
+  // Auto-save info banner
+  if (invCanEdit('count')) html += '<div class="inv-count-autosave-banner"><i class="fas fa-bolt"></i> Counts auto-save as you go — no submit button needed</div>';
   html += '</div>'; // end header
 
   // Count list
@@ -659,9 +666,11 @@ function invRenderQuickCount() {
       '<span class="inv-count-current">was: ' + (s.qty_on_hand || 0) + '</span>' +
       '<div class="inv-count-stepper">' +
       '<button class="inv-stepper-btn" onclick="invStepCount(' + idx + ',-1)">−</button>' +
-      '<input type="number" id="invCount_' + idx + '" class="inv-count-field" value="' + (s.qty_on_hand || 0) + '" data-original="' + (s.qty_on_hand || 0) + '" data-product="' + s.product_id + '" inputmode="numeric" onchange="invMarkChanged(' + idx + ')">' +
+      '<input type="number" id="invCount_' + idx + '" class="inv-count-field" value="' + (s.qty_on_hand || 0) + '" data-original="' + (s.qty_on_hand || 0) + '" data-product="' + s.product_id + '" inputmode="numeric" onchange="invAutoSaveCount(' + idx + ')" oninput="invAutoSaveCount(' + idx + ')">' +
       '<button class="inv-stepper-btn" onclick="invStepCount(' + idx + ',1)">+</button>' +
-      '</div></div></div>' +
+      '</div>' +
+      '<span id="invCountStatus_' + idx + '" class="inv-count-status"></span>' +
+      '</div></div>' +
       // Expand toggle
       '<button class="inv-count-expand-btn" onclick="invToggleCountEdit(' + idx + ')" title="Edit product"><i class="fas fa-pen-to-square"></i></button>' +
       // Expandable edit panel (hidden by default)
@@ -713,7 +722,7 @@ function invStepCount(idx, delta) {
   var val = parseInt(input.value) || 0;
   val = Math.max(0, val + delta);
   input.value = val;
-  invMarkChanged(idx);
+  invAutoSaveCount(idx);
 }
 
 function invMarkChanged(idx) {
@@ -727,11 +736,114 @@ function invMarkChanged(idx) {
   } else {
     item.classList.remove('inv-count-changed');
   }
-  // Update changed count summary
+  invUpdateCountSummary();
+}
+
+function invUpdateCountSummary() {
   var changed = document.querySelectorAll('.inv-count-changed').length;
+  var unsaved = document.querySelectorAll('.inv-count-unsaved').length;
   var summary = document.getElementById('invCountSummary');
   if (summary) {
-    summary.innerHTML = invStockData.length + ' items' + (changed > 0 ? ' · <strong style="color:#059669">' + changed + ' changed</strong>' : '');
+    var parts = [invStockData.length + ' items'];
+    if (invCountSavedCount > 0) parts.push('<strong style="color:#059669"><i class="fas fa-check"></i> ' + invCountSavedCount + ' saved</strong>');
+    if (unsaved > 0) parts.push('<strong style="color:#D97706">' + unsaved + ' unsaved</strong>');
+    else if (changed > 0) parts.push('<strong style="color:#2563EB">' + changed + ' changed</strong>');
+    summary.innerHTML = parts.join(' · ');
+  }
+}
+
+// Auto-save a single count item after a short debounce
+function invAutoSaveCount(idx) {
+  var input = document.getElementById('invCount_' + idx);
+  if (!input) return;
+  var original = parseInt(input.dataset.original) || 0;
+  var current = parseInt(input.value) || 0;
+  var item = input.closest('.inv-count-item');
+
+  // Visual: mark as changed immediately
+  if (current !== original) {
+    item.classList.add('inv-count-changed');
+    item.classList.add('inv-count-unsaved');
+  } else {
+    item.classList.remove('inv-count-changed');
+    item.classList.remove('inv-count-unsaved');
+  }
+  invUpdateCountSummary();
+
+  // Cancel any pending debounce for this item
+  if (invCountAutoSaveTimers[idx]) clearTimeout(invCountAutoSaveTimers[idx]);
+
+  // If value hasn't actually changed from original, no need to save
+  if (current === original) {
+    invCountSetStatus(idx, '');
+    return;
+  }
+
+  // Debounce: save after 800ms of inactivity (fast enough for steppers, allows manual typing)
+  invCountAutoSaveTimers[idx] = setTimeout(function() {
+    invCountSaveSingle(idx);
+  }, 800);
+}
+
+async function invCountSaveSingle(idx) {
+  var input = document.getElementById('invCount_' + idx);
+  if (!input) return;
+  var productId = parseInt(input.dataset.product);
+  var original = parseInt(input.dataset.original) || 0;
+  var newQty = parseInt(input.value) || 0;
+  if (newQty === original) return; // No change
+
+  var item = input.closest('.inv-count-item');
+  invCountSetStatus(idx, 'saving');
+
+  try {
+    await invAPI.post('/api/inventory/count', {
+      product_id: productId,
+      location_id: parseInt(invSelectedLocation),
+      new_qty: newQty,
+      notes: 'Quick Count (auto-save)'
+    }, { headers: invHeaders() });
+
+    // Success: update the original baseline so re-saving won't fire again
+    input.dataset.original = newQty;
+    item.classList.remove('inv-count-changed');
+    item.classList.remove('inv-count-unsaved');
+    invCountSavedCount++;
+    invCountSetStatus(idx, 'saved');
+    invUpdateCountSummary();
+
+    // Update the "was: X" label
+    var wasLabel = item.querySelector('.inv-count-current');
+    if (wasLabel) wasLabel.textContent = 'was: ' + newQty;
+
+    // Clear saved indicator after 3s
+    setTimeout(function() {
+      invCountSetStatus(idx, '');
+    }, 3000);
+  } catch(e) {
+    if (e && e.__viewOnly) return;
+    invCountSetStatus(idx, 'error');
+    invToast('Save failed for item: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+
+function invCountSetStatus(idx, status) {
+  var indicator = document.getElementById('invCountStatus_' + idx);
+  if (!indicator) return;
+  if (status === 'saving') {
+    indicator.innerHTML = '<i class="fas fa-spinner fa-spin" style="color:#2563EB"></i>';
+    indicator.title = 'Saving...';
+  } else if (status === 'saved') {
+    indicator.innerHTML = '<i class="fas fa-check-circle" style="color:#059669"></i>';
+    indicator.title = 'Saved';
+  } else if (status === 'error') {
+    indicator.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:#DC2626"></i>';
+    indicator.title = 'Save failed — tap to retry';
+    indicator.onclick = function() { invCountSaveSingle(idx); };
+  } else {
+    indicator.innerHTML = '';
+    indicator.title = '';
+    indicator.onclick = null;
   }
 }
 
