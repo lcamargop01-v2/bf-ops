@@ -3302,6 +3302,112 @@ async function invRenderProductRows() {
   return html;
 }
 
+// ==================== CAMERA BARCODE SCANNER ====================
+
+var _invHtml5QrLoaded = false;
+var _invHtml5QrLoading = false;
+
+function invLoadBarcodeLib(callback) {
+  if (_invHtml5QrLoaded) { callback(); return; }
+  if (_invHtml5QrLoading) {
+    // Wait for existing load
+    var checkInterval = setInterval(function() {
+      if (_invHtml5QrLoaded) { clearInterval(checkInterval); callback(); }
+    }, 100);
+    return;
+  }
+  _invHtml5QrLoading = true;
+  var script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
+  script.onload = function() { _invHtml5QrLoaded = true; _invHtml5QrLoading = false; callback(); };
+  script.onerror = function() { _invHtml5QrLoading = false; invToast('Failed to load barcode scanner library', 'error'); };
+  document.head.appendChild(script);
+}
+
+function invOpenCameraScanner(targetInputId) {
+  invLoadBarcodeLib(function() {
+    // Create scanner overlay
+    var overlay = document.createElement('div');
+    overlay.id = 'invBarcodeScanOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+    overlay.innerHTML =
+      '<div style="background:white;border-radius:16px;width:92%;max-width:480px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.5)">' +
+        '<div style="padding:16px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #E2E8F0">' +
+          '<h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px"><i class="fas fa-camera" style="color:#8B5CF6"></i> Scan Barcode</h3>' +
+          '<button onclick="invStopCameraScanner()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#64748B;padding:4px 8px"><i class="fas fa-times"></i></button>' +
+        '</div>' +
+        '<div id="invBarcodeScanReader" style="width:100%"></div>' +
+        '<div style="padding:12px 20px;text-align:center;font-size:13px;color:#64748B;border-top:1px solid #E2E8F0">' +
+          '<i class="fas fa-info-circle"></i> Point camera at the barcode on the product' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+
+    // Dismiss on background click
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) invStopCameraScanner(); });
+
+    // Start the camera scanner
+    try {
+      var html5QrCode = new Html5Qrcode('invBarcodeScanReader');
+      window._invActiveScanner = html5QrCode;
+      window._invScanTargetInput = targetInputId;
+
+      var config = {
+        fps: 10,
+        qrbox: { width: 280, height: 120 },
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.CODE_93,
+          Html5QrcodeSupportedFormats.ITF
+        ]
+      };
+
+      html5QrCode.start(
+        { facingMode: 'environment' },
+        config,
+        function onScanSuccess(decodedText) {
+          // Got a barcode — fill input and close
+          var inp = document.getElementById(window._invScanTargetInput);
+          if (inp) {
+            inp.value = decodedText;
+            inp.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          invScanBeep(true);
+          invToast('<i class="fas fa-check-circle"></i> Barcode scanned: ' + escH(decodedText), 'success');
+          invStopCameraScanner();
+        },
+        function onScanFailure() { /* ignore continuous scan failures */ }
+      ).catch(function(err) {
+        console.error('Camera scanner error:', err);
+        invToast('Camera error: ' + (err.message || err), 'error');
+        invStopCameraScanner();
+      });
+    } catch(e) {
+      console.error('Scanner init error:', e);
+      invToast('Failed to start scanner: ' + e.message, 'error');
+      invStopCameraScanner();
+    }
+  });
+}
+window.invOpenCameraScanner = invOpenCameraScanner;
+
+function invStopCameraScanner() {
+  if (window._invActiveScanner) {
+    window._invActiveScanner.stop().then(function() {
+      window._invActiveScanner.clear();
+    }).catch(function() {});
+    window._invActiveScanner = null;
+  }
+  var overlay = document.getElementById('invBarcodeScanOverlay');
+  if (overlay) overlay.remove();
+}
+window.invStopCameraScanner = invStopCameraScanner;
+
 // ==================== EDIT PRODUCT MODAL ====================
 
 async function invShowEditProduct(productId) {
@@ -3335,7 +3441,7 @@ async function invShowEditProduct(productId) {
     body += '<div class="inv-form-group" style="flex:1"><label>SKU</label><input type="text" class="inv-input" id="invEditSku" value="' + escH(p.sku || '') + '"></div>';
     body += '</div>';
     body += '<div class="inv-form-row">';
-    body += '<div class="inv-form-group"><label><i class="fas fa-barcode" style="color:#8B5CF6"></i> Barcode / UPC</label><input type="text" class="inv-input" id="invEditBarcode" value="' + escH(p.barcode || '') + '" placeholder="Scan or type barcode"></div>';
+    body += '<div class="inv-form-group"><label><i class="fas fa-barcode" style="color:#8B5CF6"></i> Barcode / UPC</label><div style="display:flex;gap:6px"><input type="text" class="inv-input" id="invEditBarcode" value="' + escH(p.barcode || '') + '" placeholder="Scan or type barcode" style="flex:1"><button type="button" class="inv-btn inv-btn-outline inv-btn-sm" onclick="invOpenCameraScanner(\'invEditBarcode\')" style="white-space:nowrap;color:#8B5CF6;border-color:#8B5CF6"><i class="fas fa-camera"></i> Scan</button></div></div>';
     body += '</div>';
 
     var subcatOpts = '<option value="">— None —</option>';
@@ -3538,7 +3644,7 @@ function invShowNewProduct() {
   body += '<div class="inv-form-group" style="flex:1"><label>SKU</label><input type="text" class="inv-input" id="invNewSku" placeholder="Optional"></div>';
   body += '</div>';
   body += '<div class="inv-form-row">';
-  body += '<div class="inv-form-group"><label><i class="fas fa-barcode" style="color:#8B5CF6"></i> Barcode / UPC</label><input type="text" class="inv-input" id="invNewBarcode" placeholder="Scan or type barcode"></div>';
+  body += '<div class="inv-form-group"><label><i class="fas fa-barcode" style="color:#8B5CF6"></i> Barcode / UPC</label><div style="display:flex;gap:6px"><input type="text" class="inv-input" id="invNewBarcode" placeholder="Scan or type barcode" style="flex:1"><button type="button" class="inv-btn inv-btn-outline inv-btn-sm" onclick="invOpenCameraScanner(\'invNewBarcode\')" style="white-space:nowrap;color:#8B5CF6;border-color:#8B5CF6"><i class="fas fa-camera"></i> Scan</button></div></div>';
   body += '</div>';
   var newSubcatOpts = '<option value="">— None —</option>';
   var newSubcatList = ['feed','supplement','dewormer','fly_control','grooming','hoof_care','first_aid','tack','blankets','treats','barn_equipment','fencing','riding_apparel','pet_supplies','cleaning','poultry','farm_supplies','tools','gift','general'];

@@ -656,29 +656,47 @@ function posScanBeep(success) {
   } catch(e) { /* audio not available */ }
 }
 
+var _posHtml5QrLoaded = false;
+var _posHtml5QrLoading = false;
+
+function posLoadBarcodeLib(callback) {
+  if (_posHtml5QrLoaded || (typeof Html5Qrcode !== 'undefined')) { _posHtml5QrLoaded = true; callback(); return; }
+  if (_posHtml5QrLoading) {
+    var iv = setInterval(function() { if (_posHtml5QrLoaded) { clearInterval(iv); callback(); } }, 100);
+    return;
+  }
+  _posHtml5QrLoading = true;
+  var script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
+  script.onload = function() { _posHtml5QrLoaded = true; _posHtml5QrLoading = false; callback(); };
+  script.onerror = function() { _posHtml5QrLoading = false; posToast('Failed to load barcode scanner library', 'error'); };
+  document.head.appendChild(script);
+}
+
 function posShowScanModal() {
-  // Manual barcode entry modal (also works for camera-based scanning in future)
   var overlay = document.createElement('div');
   overlay.className = 'pos-modal-overlay';
   overlay.id = 'posScanOverlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
   overlay.innerHTML =
-    '<div style="background:white;border-radius:16px;padding:24px;width:90%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">' +
+    '<div style="background:white;border-radius:16px;padding:24px;width:92%;max-width:480px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">' +
     '<h3 style="margin:0 0 16px;font-size:18px;display:flex;align-items:center;gap:8px"><i class="fas fa-barcode" style="color:#8B5CF6"></i> Scan / Enter Barcode</h3>' +
-    '<input type="text" id="posScanInput" autofocus placeholder="Scan barcode or type manually..." ' +
+    '<div id="posCameraScanReader" style="display:none;width:100%;margin-bottom:12px;border-radius:8px;overflow:hidden"></div>' +
+    '<div id="posCameraBtnRow" style="margin-bottom:12px;text-align:center">' +
+    '<button onclick="posStartCameraScan()" class="pos-btn" style="padding:10px 20px;background:#8B5CF6;color:white;border:none;border-radius:8px;font-weight:600;font-size:15px"><i class="fas fa-camera"></i> Open Camera Scanner</button>' +
+    '</div>' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px"><hr style="flex:1;border:none;border-top:1px solid #E2E8F0"><span style="color:#94A3B8;font-size:12px;font-weight:600">OR TYPE MANUALLY</span><hr style="flex:1;border:none;border-top:1px solid #E2E8F0"></div>' +
+    '<input type="text" id="posScanInput" placeholder="Type barcode number..." ' +
     'style="width:100%;padding:14px 16px;border:2px solid #E2E8F0;border-radius:10px;font-size:18px;text-align:center;letter-spacing:2px;box-sizing:border-box" ' +
     'inputmode="numeric">' +
-    '<p style="margin:10px 0 0;font-size:13px;color:#64748B;text-align:center"><i class="fas fa-info-circle"></i> Point scanner at barcode, or type and press Enter</p>' +
     '<div style="display:flex;gap:8px;margin-top:16px">' +
-    '<button onclick="document.getElementById(\'posScanOverlay\').remove()" class="pos-btn pos-btn-clear" style="flex:1;padding:10px">Cancel</button>' +
-    '<button onclick="posDoManualScan()" class="pos-btn" style="flex:1;padding:10px;background:#8B5CF6;color:white;border:none;border-radius:8px;font-weight:600"><i class="fas fa-search"></i> Lookup</button>' +
+    '<button onclick="posCloseScanModal()" class="pos-btn pos-btn-clear" style="flex:1;padding:10px">Cancel</button>' +
+    '<button onclick="posDoManualScan()" class="pos-btn" style="flex:1;padding:10px;background:#059669;color:white;border:none;border-radius:8px;font-weight:600"><i class="fas fa-search"></i> Lookup</button>' +
     '</div></div>';
 
   document.body.appendChild(overlay);
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) posCloseScanModal(); });
 
-  overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
-
-  // Handle Enter in manual scan input
   setTimeout(function() {
     var inp = document.getElementById('posScanInput');
     if (inp) {
@@ -689,6 +707,73 @@ function posShowScanModal() {
     }
   }, 50);
 }
+
+function posStartCameraScan() {
+  posLoadBarcodeLib(function() {
+    var readerEl = document.getElementById('posCameraScanReader');
+    var btnRow = document.getElementById('posCameraBtnRow');
+    if (!readerEl) return;
+    readerEl.style.display = 'block';
+    if (btnRow) btnRow.innerHTML = '<button onclick="posStopCameraScan()" class="pos-btn" style="padding:8px 16px;background:#DC2626;color:white;border:none;border-radius:8px;font-weight:600;font-size:13px"><i class="fas fa-stop"></i> Stop Camera</button>';
+
+    try {
+      var html5QrCode = new Html5Qrcode('posCameraScanReader');
+      window._posActiveScanner = html5QrCode;
+
+      html5QrCode.start(
+        { facingMode: 'environment' },
+        {
+          fps: 10,
+          qrbox: { width: 280, height: 120 },
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.UPC_E,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.CODE_93,
+            Html5QrcodeSupportedFormats.ITF
+          ]
+        },
+        function onScanSuccess(decodedText) {
+          posScanBeep(true);
+          posStopCameraScan();
+          posCloseScanModal();
+          posLookupBarcode(decodedText);
+        },
+        function onScanFailure() { /* ignore */ }
+      ).catch(function(err) {
+        posToast('Camera error: ' + (err.message || err), 'error');
+        posStopCameraScan();
+      });
+    } catch(e) {
+      posToast('Scanner error: ' + e.message, 'error');
+    }
+  });
+}
+window.posStartCameraScan = posStartCameraScan;
+
+function posStopCameraScan() {
+  if (window._posActiveScanner) {
+    window._posActiveScanner.stop().then(function() {
+      window._posActiveScanner.clear();
+    }).catch(function() {});
+    window._posActiveScanner = null;
+  }
+  var readerEl = document.getElementById('posCameraScanReader');
+  if (readerEl) { readerEl.style.display = 'none'; readerEl.innerHTML = ''; }
+  var btnRow = document.getElementById('posCameraBtnRow');
+  if (btnRow) btnRow.innerHTML = '<button onclick="posStartCameraScan()" class="pos-btn" style="padding:10px 20px;background:#8B5CF6;color:white;border:none;border-radius:8px;font-weight:600;font-size:15px"><i class="fas fa-camera"></i> Open Camera Scanner</button>';
+}
+window.posStopCameraScan = posStopCameraScan;
+
+function posCloseScanModal() {
+  posStopCameraScan();
+  var overlay = document.getElementById('posScanOverlay');
+  if (overlay) overlay.remove();
+}
+window.posCloseScanModal = posCloseScanModal;
 
 function posDoManualScan() {
   var inp = document.getElementById('posScanInput');
