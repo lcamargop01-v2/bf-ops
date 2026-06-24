@@ -1721,7 +1721,7 @@ function buildSaleBody(status) {
     delivery_address_id: _s.deliveryAddrId || null,
     fulfillment: _s.deliveryReq || 'local',
     source_location_id: (_s.deliveryReq === 'dc_pickup' || _s.deliveryReq === 'delivery')
-      ? (getOtherLocation() ? getOtherLocation().id : null)
+      ? (isDCMode() ? getLocationId() : (getOtherLocation() ? getOtherLocation().id : null))
       : (_s.deliveryReq === 'reserve_retail' ? (getOtherLocation() ? getOtherLocation().id : null) : null),
     cashier_id: user ? user.id : null,
     cashier_name: user ? user.name : '',
