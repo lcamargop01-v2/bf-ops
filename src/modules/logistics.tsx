@@ -446,6 +446,72 @@ app.post('/api/orders', async (c) => {
       } catch (e) { console.error('Failed to store ticket image:', e) }
     }
 
+    // ===== AUTO-CREATE DARTS ENTRY TASK =====
+    // All delivery orders need DARTS entry at the warehouse
+    try {
+      let custName = 'Customer'
+      if (customer_id) {
+        const cust = await c.env.DB.prepare('SELECT business_name, contact_name FROM customers WHERE id = ?').bind(customer_id).first<any>()
+        if (cust) custName = cust.business_name || cust.contact_name || 'Customer #' + customer_id
+      }
+
+      // Build items summary
+      let itemsSummary = ''
+      if (items && items.length > 0) {
+        const productIds = items.map((i: any) => i.product_id).filter(Boolean)
+        if (productIds.length > 0) {
+          const placeholders = productIds.map(() => '?').join(',')
+          const products = await c.env.DB.prepare(`SELECT id, name FROM products WHERE id IN (${placeholders})`).bind(...productIds).all()
+          const pMap: Record<number, string> = {}
+          for (const p of products.results as any[]) pMap[p.id] = p.name
+          itemsSummary = items.map((i: any) => `${i.quantity}x ${pMap[i.product_id] || 'Product #' + i.product_id}`).join(', ')
+        }
+      }
+
+      // Get creator name
+      let creatorName = 'Logistics'
+      if (body.created_by) {
+        const creator = await c.env.DB.prepare('SELECT name FROM users WHERE id = ?').bind(body.created_by).first<any>()
+        if (creator) creatorName = creator.name
+      }
+
+      const dartsTaskNumber = 'DARTS-' + Date.now().toString(36).toUpperCase()
+      await c.env.DB.prepare(`
+        INSERT INTO tasks (task_number, title, description, task_type, priority, status, location_id, ref_type, ref_id, ref_number, customer_id, customer_name, created_by, created_by_name, due_date, tags)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).bind(
+        dartsTaskNumber,
+        '📦 DARTS Entry — ' + custName,
+        `Enter into DARTS system:\n\nOrder: ${orderNum}\nCustomer: ${custName}\nDelivery Date: ${scheduled_date || 'ASAP'}\nItems: ${itemsSummary || 'See order details'}\nInstructions: ${special_instructions || 'None'}\n\nCreated by ${creatorName} via Logistics`,
+        'darts_entry', 'high', 'pending',
+        2, // ALDI warehouse location
+        'order', orderId, orderNum,
+        customer_id || null, custName,
+        body.created_by || null, creatorName,
+        scheduled_date || null,
+        'darts,logistics_order'
+      ).run()
+
+      // Notify dispatchers
+      const dispatchers = await c.env.DB.prepare(
+        "SELECT id FROM users WHERE active = 1 AND (role IN ('dispatcher','admin') OR department = 'office')"
+      ).all()
+      for (const d of (dispatchers.results || [])) {
+        await c.env.DB.prepare(
+          `INSERT INTO notifications (user_id, title, message, notification_type, ref_type, ref_id)
+           VALUES (?, ?, ?, 'task', 'task', ?)`
+        ).bind(
+          (d as any).id,
+          '📦 New DARTS Entry Needed',
+          `${custName} — ${orderNum} — ${(itemsSummary || 'See order').substring(0, 100)}`,
+          orderId
+        ).run()
+      }
+    } catch (e) {
+      // Don't fail the order if DARTS task creation fails
+      console.error('DARTS task creation failed for logistics order:', e)
+    }
+
     return c.json({ id: orderId, order_number: orderNum }, 201)
   } catch (e: any) {
     const msg = e.message || String(e)
