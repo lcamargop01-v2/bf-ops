@@ -414,6 +414,15 @@ function invRenderDashboard() {
     html += '</div></div>';
   }
 
+  // Admin tools
+  if (typeof window.currentUser !== 'undefined' && window.currentUser && window.currentUser.role === 'admin') {
+    html += '<div class="inv-section" style="margin-top:16px;border-top:1px solid #E5E7EB;padding-top:16px">';
+    html += '<h3 class="inv-section-title"><i class="fas fa-tools" style="color:#6B7280"></i> Admin Tools</h3>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    html += '<button class="inv-btn inv-btn-sm inv-btn-outline" onclick="invRecalculateHolds()" title="Recalculate qty_on_hold and qty_reserved from actual pending orders. Fixes drift from cancelled/modified orders."><i class="fas fa-calculator"></i> Recalculate Holds</button>';
+    html += '</div></div>';
+  }
+
   html += '</div>';
   return html;
 }
@@ -3120,6 +3129,37 @@ async function invInitStock(locationId) {
     invRender();
   } catch(e) { invToast('Init failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
+
+// ==================== RECALCULATE HOLDS ====================
+async function invRecalculateHolds() {
+  // First do a dry run to show what would change
+  try {
+    var dryResp = await invAPI.post('/api/inventory/recalculate-holds', { dry_run: true }, { headers: invHeaders() });
+    var data = dryResp.data;
+    if (data.changes_needed === 0) {
+      invToast('All holds and reservations are already correct!', 'success');
+      return;
+    }
+    var msg = data.changes_needed + ' product(s) have incorrect hold/reserved values.\n\n';
+    var sample = (data.changes || []).slice(0, 5);
+    sample.forEach(function(c) {
+      msg += '• Product #' + c.product_id + ': hold ' + c.old_hold + '→' + c.new_hold;
+      if (c.reserved_diff !== 0) msg += ', reserved ' + c.old_reserved + '→' + c.new_reserved;
+      msg += '\n';
+    });
+    if (data.changes_needed > 5) msg += '... and ' + (data.changes_needed - 5) + ' more\n';
+    msg += '\nApply corrections?';
+
+    if (!confirm(msg)) return;
+
+    var resp = await invAPI.post('/api/inventory/recalculate-holds', { dry_run: false }, { headers: invHeaders() });
+    invToast('Fixed ' + resp.data.changes_needed + ' stock records', 'success');
+    invRender();
+  } catch(e) {
+    invToast('Recalculation failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+window.invRecalculateHolds = invRecalculateHolds;
 
 // ==================== EXPORT ====================
 function invExportStock() {

@@ -2764,5 +2764,181 @@ app.post('/api/inventory/smart-restock/create-transfer', async (c) => {
   return c.json({ success: true, transfer_id: transferId, transfer_number: num })
 })
 
+// ==================== RECALCULATE HOLDS & RESERVATIONS ====================
+// Admin endpoint that recalculates qty_on_hold and qty_reserved from actual order data.
+// This fixes drift that occurs when orders are modified/cancelled without proper hold adjustments.
+
+app.post('/api/inventory/recalculate-holds', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  if (user.role !== 'admin') return c.json({ error: 'Admin only' }, 403)
+
+  const body = await c.req.json().catch(() => ({})) as any
+  const dryRun = body.dry_run !== false // default to dry run for safety
+
+  try {
+    // === Calculate expected qty_on_hold per product per location ===
+
+    // 1. Manual/logistics orders (held at ALDI warehouse, location 2)
+    const manualHolds = await db.prepare(`
+      SELECT oi.product_id, 2 as location_id, SUM(oi.quantity) as hold_qty
+      FROM order_items oi
+      JOIN orders o ON oi.order_id = o.id
+      LEFT JOIN pos_sales ps ON ps.order_id = o.id
+      WHERE o.status IN ('new', 'confirmed', 'scheduled')
+        AND ps.id IS NULL
+      GROUP BY oi.product_id
+    `).all()
+
+    // 2. POS hold/draft sales
+    const posHolds = await db.prepare(`
+      SELECT psi.product_id, psi.location_id, SUM(psi.quantity) as hold_qty
+      FROM pos_sale_items psi
+      JOIN pos_sales ps ON psi.sale_id = ps.id
+      WHERE ps.status IN ('hold', 'draft')
+      GROUP BY psi.product_id, psi.location_id
+    `).all()
+
+    // 3. POS delivery orders (completed sale, order still pending)
+    const deliveryHolds = await db.prepare(`
+      SELECT psi.product_id, psi.location_id, SUM(psi.quantity) as hold_qty
+      FROM pos_sale_items psi
+      JOIN pos_sales ps ON psi.sale_id = ps.id
+      LEFT JOIN orders o ON ps.order_id = o.id
+      WHERE ps.status = 'completed'
+        AND ps.fulfillment_type IN ('delivery', 'dc_pickup')
+        AND (o.id IS NULL OR o.status IN ('new', 'confirmed', 'scheduled'))
+      GROUP BY psi.product_id, psi.location_id
+    `).all()
+
+    // 4. Manual inventory_holds table
+    const invHolds = await db.prepare(`
+      SELECT product_id, location_id, SUM(qty) as hold_qty
+      FROM inventory_holds
+      WHERE released_at IS NULL
+      GROUP BY product_id, location_id
+    `).all()
+
+    // Merge all hold sources into a map: { "productId:locationId": totalHold }
+    const holdMap: Record<string, number> = {}
+    const addHold = (pid: number, lid: number, qty: number) => {
+      const key = `${pid}:${lid}`
+      holdMap[key] = (holdMap[key] || 0) + qty
+    }
+
+    for (const r of (manualHolds.results || []) as any[]) addHold(r.product_id, r.location_id, r.hold_qty)
+    for (const r of (posHolds.results || []) as any[]) addHold(r.product_id, r.location_id, r.hold_qty)
+    for (const r of (deliveryHolds.results || []) as any[]) addHold(r.product_id, r.location_id, r.hold_qty)
+    for (const r of (invHolds.results || []) as any[]) addHold(r.product_id, r.location_id, r.hold_qty)
+
+    // === Calculate expected qty_reserved per product per location ===
+    const reservations = await db.prepare(`
+      SELECT product_id, location_id, SUM(qty) as reserved_qty
+      FROM inventory_reservations
+      WHERE status = 'active'
+      GROUP BY product_id, location_id
+    `).all()
+
+    const reserveMap: Record<string, number> = {}
+    for (const r of (reservations.results || []) as any[]) {
+      reserveMap[`${(r as any).product_id}:${(r as any).location_id}`] = (r as any).reserved_qty
+    }
+
+    // === Get all current inventory_stock rows ===
+    const allStock = await db.prepare(
+      'SELECT product_id, location_id, qty_on_hold, qty_reserved FROM inventory_stock'
+    ).all()
+
+    const changes: any[] = []
+    const stmts: { sql: string; binds: any[] }[] = []
+
+    for (const row of (allStock.results || []) as any[]) {
+      const key = `${row.product_id}:${row.location_id}`
+      const expectedHold = holdMap[key] || 0
+      const expectedReserved = reserveMap[key] || 0
+      const currentHold = row.qty_on_hold || 0
+      const currentReserved = row.qty_reserved || 0
+
+      if (expectedHold !== currentHold || expectedReserved !== currentReserved) {
+        changes.push({
+          product_id: row.product_id,
+          location_id: row.location_id,
+          old_hold: currentHold,
+          new_hold: expectedHold,
+          hold_diff: expectedHold - currentHold,
+          old_reserved: currentReserved,
+          new_reserved: expectedReserved,
+          reserved_diff: expectedReserved - currentReserved
+        })
+
+        if (!dryRun) {
+          stmts.push({
+            sql: 'UPDATE inventory_stock SET qty_on_hold = ?, qty_reserved = ?, updated_at = datetime("now") WHERE product_id = ? AND location_id = ?',
+            binds: [expectedHold, expectedReserved, row.product_id, row.location_id]
+          })
+        }
+      }
+    }
+
+    // Also check holdMap keys that might not have stock rows yet
+    for (const key of Object.keys(holdMap)) {
+      const [pid, lid] = key.split(':').map(Number)
+      const exists = (allStock.results || []).some((r: any) => r.product_id === pid && r.location_id === lid)
+      if (!exists && holdMap[key] > 0) {
+        changes.push({
+          product_id: pid,
+          location_id: lid,
+          old_hold: 0,
+          new_hold: holdMap[key],
+          hold_diff: holdMap[key],
+          old_reserved: 0,
+          new_reserved: reserveMap[key] || 0,
+          reserved_diff: reserveMap[key] || 0,
+          note: 'no stock row — needs INSERT'
+        })
+        if (!dryRun) {
+          stmts.push({
+            sql: 'INSERT OR IGNORE INTO inventory_stock (product_id, location_id, qty_on_hand, qty_on_hold, qty_reserved) VALUES (?, ?, 0, ?, ?)',
+            binds: [pid, lid, holdMap[key], reserveMap[key] || 0]
+          })
+        }
+      }
+    }
+
+    // Execute updates in batches of 50
+    if (!dryRun && stmts.length > 0) {
+      for (let i = 0; i < stmts.length; i += 50) {
+        const batch = stmts.slice(i, i + 50)
+        await db.batch(batch.map(s => db.prepare(s.sql).bind(...s.binds)))
+      }
+
+      // Audit log — use first changed product for FK, or skip if no changes
+      const userName = (await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any)?.name || 'Admin'
+      const firstChange = changes[0]
+      if (firstChange) {
+        await db.prepare(
+          `INSERT INTO inventory_audit (product_id, location_id, action, qty_change, reason, notes, user_name)
+           VALUES (?, ?, 'recalculate_holds', ?, 'Admin recalculated holds/reservations', ?, ?)`
+        ).bind(firstChange.product_id, firstChange.location_id, changes.length, `Fixed ${changes.length} inventory_stock rows`, userName).run()
+      }
+    }
+
+    return c.json({
+      success: true,
+      dry_run: dryRun,
+      total_stock_rows: (allStock.results || []).length,
+      changes_needed: changes.length,
+      changes: changes.slice(0, 50), // Limit response size
+      total_changes: changes.length,
+      message: dryRun
+        ? `Dry run complete. ${changes.length} rows need correction. POST with { "dry_run": false } to apply.`
+        : `Applied ${changes.length} corrections.`
+    })
+  } catch (e: any) {
+    return c.json({ error: 'Recalculation failed: ' + e.message }, 500)
+  }
+})
+
 export default app
 export { app as inventoryApp, takeSnapshot }
