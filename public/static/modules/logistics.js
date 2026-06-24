@@ -8,10 +8,18 @@ var currentPage = 'dashboard';
 var sidebarOpen = false;
 
 // ==================== VIEW-ONLY ENFORCEMENT ====================
+// Cross-module features: these features exist in both logistics and POS modules.
+// Users with edit access in EITHER module should be allowed to edit.
+var _crossModuleFeatures = ['customers'];
+
 // Check if user has edit access for the current logistics page
 function logCanEdit(feature) {
   var fn = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
-  return fn('logistics', feature || currentPage);
+  var resolved = feature || currentPage;
+  if (fn('logistics', resolved)) return true;
+  // Cross-module check: if this feature exists in POS too, allow POS editors
+  if (_crossModuleFeatures.indexOf(resolved) !== -1 && fn('pos', resolved)) return true;
+  return false;
 }
 
 // Guard function: call at the top of any data-modifying action
@@ -29,7 +37,11 @@ API.interceptors.request.use(function(config) {
   var method = (config.method || 'get').toLowerCase();
   if (method === 'get') return config; // reads always allowed
   // Check if user has edit permission for current page
-  if (!logCanEdit()) {
+  // Also check URL-based feature detection for cross-module writes
+  var urlFeature = null;
+  var url = config.url || '';
+  if (url.indexOf('/customers') !== -1 || url.indexOf('/addresses') !== -1) urlFeature = 'customers';
+  if (!logCanEdit() && !(urlFeature && logCanEdit(urlFeature))) {
     showToast('View only — changes are not allowed', 'warning');
     return Promise.reject({ __viewOnly: true, message: 'View-only mode: write operations blocked' });
   }
