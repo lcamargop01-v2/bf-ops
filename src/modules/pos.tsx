@@ -254,6 +254,61 @@ app.get('/api/pos/customers/:id', async (c) => {
   })
 })
 
+// ==================== CUSTOMER PURCHASE HISTORY (for reorder) ====================
+app.get('/api/pos/customer-history/:customerId', async (c) => {
+  const db = c.env.DB
+  const customerId = parseInt(c.req.param('customerId'))
+  const locationId = c.req.query('location_id')
+
+  // Get all products this customer has ever purchased — from both POS sales and logistics orders
+  // Aggregate: total times ordered, total qty, last order date
+  const history = await db.prepare(`
+    SELECT
+      p.id as product_id,
+      p.name,
+      p.sku,
+      p.category,
+      p.price,
+      p.cost,
+      p.tax_rate,
+      p.active,
+      COALESCE(pos.times_ordered, 0) + COALESCE(ord.times_ordered, 0) as times_ordered,
+      COALESCE(pos.total_qty, 0) + COALESCE(ord.total_qty, 0) as total_qty,
+      MAX(COALESCE(pos.last_ordered, ''), COALESCE(ord.last_ordered, '')) as last_ordered,
+      COALESCE(pos.avg_qty, 0) as pos_avg_qty,
+      COALESCE(stk.qty_available, 0) as stock
+    FROM products p
+    LEFT JOIN (
+      SELECT si.product_id,
+        COUNT(DISTINCT si.sale_id) as times_ordered,
+        SUM(si.quantity) as total_qty,
+        MAX(s.created_at) as last_ordered,
+        ROUND(AVG(si.quantity), 1) as avg_qty
+      FROM pos_sale_items si
+      JOIN pos_sales s ON s.id = si.sale_id
+      WHERE s.customer_id = ? AND s.status NOT IN ('voided', 'hold')
+      GROUP BY si.product_id
+    ) pos ON pos.product_id = p.id
+    LEFT JOIN (
+      SELECT oi.product_id,
+        COUNT(DISTINCT oi.order_id) as times_ordered,
+        SUM(oi.quantity) as total_qty,
+        MAX(o.created_at) as last_ordered
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE o.customer_id = ? AND o.status NOT IN ('cancelled')
+      GROUP BY oi.product_id
+    ) ord ON ord.product_id = p.id
+    LEFT JOIN inventory_stock stk ON stk.product_id = p.id AND stk.location_id = ?
+    WHERE (pos.product_id IS NOT NULL OR ord.product_id IS NOT NULL)
+      AND p.active = 1
+    ORDER BY times_ordered DESC, last_ordered DESC
+    LIMIT 50
+  `).bind(customerId, customerId, locationId ? parseInt(locationId) : 1).all()
+
+  return c.json(history.results || [])
+})
+
 // ==================== PRICE CHECK (get effective price for customer + product) ====================
 app.get('/api/pos/price-check', async (c) => {
   const db = c.env.DB

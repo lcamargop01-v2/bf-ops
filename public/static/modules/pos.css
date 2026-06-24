@@ -786,6 +786,79 @@
 .pc-cat-btn:hover { border-color: #F59E0B !important; background: #FFFBEB !important; }
 .pc-cat-btn.pc-cat-active { border-color: #F59E0B !important; background: #FEF3C7 !important; color: #D97706 !important; }
 
+/* ==================== REORDER FROM HISTORY ==================== */
+.pos-reorder-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 700;
+  background: linear-gradient(135deg, #EEF2FF, #E0E7FF); color: #4338CA;
+  border: 1px solid #C7D2FE; cursor: pointer; transition: all 0.15s;
+  vertical-align: middle; white-space: nowrap;
+}
+.pos-reorder-btn:hover { background: linear-gradient(135deg, #E0E7FF, #C7D2FE); border-color: #A5B4FC; }
+.pos-reorder-btn i { font-size: 10px; }
+
+.pos-reorder-search-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+}
+.pos-reorder-list {
+  max-height: 55vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+}
+.pos-reorder-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; background: var(--pos-gray-50); border: 1px solid var(--pos-gray-200);
+  border-radius: 8px; transition: all 0.12s;
+}
+.pos-reorder-item:hover { border-color: var(--pos-navy-light); background: #F0F4FF; }
+.pos-reorder-item-info { flex: 1; min-width: 0; }
+.pos-reorder-item-name {
+  font-size: 13px; font-weight: 600; color: var(--pos-gray-800);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pos-reorder-item-meta {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 3px; font-size: 11px; color: var(--pos-gray-500);
+}
+.pos-reorder-item-meta span { display: inline-flex; align-items: center; gap: 3px; }
+.pos-reorder-item-meta i { font-size: 10px; }
+.pos-reorder-stock.ok { color: #059669; }
+.pos-reorder-stock.low { color: #D97706; }
+.pos-reorder-stock.out { color: var(--pos-red); font-weight: 700; }
+
+.pos-reorder-item-actions {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+}
+.pos-reorder-price {
+  font-size: 13px; font-weight: 700; color: var(--pos-gray-800); white-space: nowrap;
+}
+.pos-reorder-qty-row {
+  display: flex; align-items: center; gap: 2px;
+}
+.pos-reorder-qty-btn {
+  width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--pos-gray-200);
+  background: white; font-size: 14px; font-weight: 700; color: var(--pos-gray-600);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.1s;
+}
+.pos-reorder-qty-btn:active { background: var(--pos-green); color: white; border-color: var(--pos-green); }
+.pos-reorder-qty {
+  width: 40px; height: 28px; text-align: center; border: 1px solid var(--pos-gray-200);
+  border-radius: 6px; font-size: 14px; font-weight: 700; color: var(--pos-gray-800);
+}
+.pos-reorder-qty:focus { border-color: var(--pos-navy); outline: none; }
+.pos-reorder-add-btn {
+  padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 700;
+  background: var(--pos-navy); color: white; border: none; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px; transition: all 0.12s;
+  white-space: nowrap;
+}
+.pos-reorder-add-btn:hover { background: var(--pos-navy-dark, #1a2742); }
+.pos-reorder-add-btn.pos-reorder-added {
+  background: var(--pos-green) !important; pointer-events: none;
+}
+@media (max-width: 600px) {
+  .pos-reorder-item { flex-direction: column; align-items: stretch; gap: 8px; }
+  .pos-reorder-item-actions { justify-content: space-between; }
+}
+
 /* ==================== PRINT STYLES ==================== */
 @media print {
   .no-print { display: none !important; }

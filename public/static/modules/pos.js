@@ -1410,7 +1410,8 @@ function renderCustomerArea() {
         '</div>' +
         '<div class="pos-customer-info">' +
           '<div class="pos-customer-name"><a href="#" id="posCustNameLink" class="pos-cust-name-link">' + esc(_s.customer.business_name || _s.customer.contact_name) + '</a>' +
-            ' <a href="#" id="posCustPanelLink" style="font-size:11px;color:var(--pos-navy-light)" title="Quick view"><i class="fas fa-info-circle"></i></a></div>' +
+            ' <a href="#" id="posCustPanelLink" style="font-size:11px;color:var(--pos-navy-light)" title="Quick view"><i class="fas fa-info-circle"></i></a>' +
+            ' <button id="posCustReorderBtn" class="pos-reorder-btn" title="Reorder from history"><i class="fas fa-clock-rotate-left"></i> Reorder</button></div>' +
           '<div class="pos-customer-detail">' + details + acctHtml + '</div>' +
         '</div>' +
         '<button class="pos-customer-remove" id="posCustRemoveBtn" title="Remove customer"><i class="fas fa-times"></i></button>' +
@@ -1419,6 +1420,7 @@ function renderCustomerArea() {
     on('posCustNameLink', 'click', function(e) { e.preventDefault(); openCustomerSheet(_s.customer.id); });
     on('posCustAvatarLink', 'click', function(e) { e.preventDefault(); openCustomerSheet(_s.customer.id); });
     on('posCustPanelLink', 'click', function(e) { e.preventDefault(); showCustomerPanel(_s.customer.id); });
+    on('posCustReorderBtn', 'click', function() { showReorderHistory(_s.customer.id); });
     on('posCustRemoveBtn', 'click', removeCustomer);
   } else {
     el.innerHTML =
@@ -1612,6 +1614,128 @@ function showCustomerPanel(id) {
     });
   });
 }
+
+// ==================== REORDER FROM CUSTOMER HISTORY ====================
+function showReorderHistory(customerId) {
+  var locId = getLocationId();
+  showModal('<i class="fas fa-clock-rotate-left"></i> Reorder — ' + esc(_s.customer ? (_s.customer.business_name || _s.customer.contact_name) : 'Customer'),
+    '<div id="posReorderContent"><div class="pos-loading"><i class="fas fa-spinner fa-spin"></i> Loading purchase history...</div></div>', '');
+
+  API.get('/pos/customer-history/' + customerId + '?location_id=' + locId).then(function(r) {
+    var items = r.data || [];
+    var content = document.getElementById('posReorderContent');
+    if (!content) return;
+
+    if (items.length === 0) {
+      content.innerHTML = '<div style="text-align:center;padding:30px;color:var(--pos-gray-400)">' +
+        '<i class="fas fa-inbox" style="font-size:36px;display:block;margin-bottom:12px"></i>' +
+        '<p style="font-size:14px;margin:0">No purchase history yet</p>' +
+        '<p style="font-size:12px;margin:4px 0 0">This customer hasn\'t placed any orders.</p></div>';
+      return;
+    }
+
+    var html = '<div class="pos-reorder-search-row">' +
+      '<input type="text" id="posReorderSearch" class="pos-search-input" placeholder="Filter products..." style="flex:1;font-size:13px;padding:8px 12px">' +
+      '<span style="font-size:12px;color:var(--pos-gray-400);white-space:nowrap">' + items.length + ' products</span></div>';
+
+    html += '<div class="pos-reorder-list" id="posReorderList">';
+    items.forEach(function(item, idx) {
+      var stockClass = item.stock <= 0 ? 'out' : item.stock <= 10 ? 'low' : 'ok';
+      var stockLabel = item.stock <= 0 ? 'OUT' : item.stock;
+      var lastDate = item.last_ordered ? item.last_ordered.slice(0, 10) : 'Unknown';
+      var avgQty = item.pos_avg_qty ? Math.round(item.pos_avg_qty) : 1;
+
+      html += '<div class="pos-reorder-item" data-idx="' + idx + '" data-pid="' + item.product_id + '" data-name="' + esc((item.name || '').toLowerCase()) + '" data-sku="' + esc((item.sku || '').toLowerCase()) + '">' +
+        '<div class="pos-reorder-item-info">' +
+          '<div class="pos-reorder-item-name">' + esc(item.name) + '</div>' +
+          '<div class="pos-reorder-item-meta">' +
+            '<span title="Times ordered"><i class="fas fa-repeat"></i> ' + item.times_ordered + 'x</span>' +
+            '<span title="Total qty purchased"><i class="fas fa-cubes"></i> ' + item.total_qty + ' total</span>' +
+            '<span title="Last ordered"><i class="fas fa-calendar"></i> ' + lastDate + '</span>' +
+            '<span class="pos-reorder-stock ' + stockClass + '" title="Current stock">' + stockLabel + ' in stock</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="pos-reorder-item-actions">' +
+          '<div class="pos-reorder-price">$' + (item.price || 0).toFixed(2) + '</div>' +
+          '<div class="pos-reorder-qty-row">' +
+            '<button class="pos-reorder-qty-btn" data-action="minus" data-idx="' + idx + '">−</button>' +
+            '<input type="number" id="posReorderQty_' + idx + '" class="pos-reorder-qty" value="' + avgQty + '" min="1" inputmode="numeric">' +
+            '<button class="pos-reorder-qty-btn" data-action="plus" data-idx="' + idx + '">+</button>' +
+          '</div>' +
+          '<button class="pos-reorder-add-btn" data-idx="' + idx + '" data-pid="' + item.product_id + '"><i class="fas fa-plus"></i> Add</button>' +
+        '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+
+    content.innerHTML = html;
+
+    // Store items for event handlers
+    content._reorderItems = items;
+
+    // Search filter
+    var searchEl = document.getElementById('posReorderSearch');
+    if (searchEl) {
+      searchEl.addEventListener('input', function() {
+        var q = (this.value || '').toLowerCase();
+        document.querySelectorAll('.pos-reorder-item').forEach(function(el) {
+          var name = el.dataset.name || '';
+          var sku = el.dataset.sku || '';
+          el.style.display = (!q || name.includes(q) || sku.includes(q)) ? '' : 'none';
+        });
+      });
+      searchEl.focus();
+    }
+
+    // Delegated event handling for the reorder list
+    var list = document.getElementById('posReorderList');
+    if (list) {
+      list.addEventListener('click', function(e) {
+        var addBtn = e.target.closest('.pos-reorder-add-btn');
+        if (addBtn) {
+          var pidAdd = parseInt(addBtn.dataset.pid);
+          var idxAdd = parseInt(addBtn.dataset.idx);
+          var qtyInput = document.getElementById('posReorderQty_' + idxAdd);
+          var qty = parseInt(qtyInput ? qtyInput.value : '1') || 1;
+          var item = content._reorderItems[idxAdd];
+          if (item) {
+            _s.productCache[pidAdd] = {
+              name: item.name, sku: item.sku, category: item.category,
+              price: item.price, cost: item.cost, tax_rate: item.tax_rate, stock: item.stock
+            };
+            // Add to cart with desired qty
+            for (var q = 0; q < qty; q++) addToCart(pidAdd, _s.productCache[pidAdd]);
+            // Visual feedback
+            addBtn.innerHTML = '<i class="fas fa-check"></i> Added!';
+            addBtn.classList.add('pos-reorder-added');
+            setTimeout(function() {
+              addBtn.innerHTML = '<i class="fas fa-plus"></i> Add';
+              addBtn.classList.remove('pos-reorder-added');
+            }, 1500);
+          }
+          return;
+        }
+        // Qty stepper buttons
+        var qtyBtn = e.target.closest('.pos-reorder-qty-btn');
+        if (qtyBtn) {
+          var idxQ = parseInt(qtyBtn.dataset.idx);
+          var input = document.getElementById('posReorderQty_' + idxQ);
+          if (input) {
+            var val = parseInt(input.value) || 1;
+            if (qtyBtn.dataset.action === 'minus') val = Math.max(1, val - 1);
+            else val += 1;
+            input.value = val;
+          }
+          return;
+        }
+      });
+    }
+  }).catch(function(err) {
+    var content = document.getElementById('posReorderContent');
+    if (content) content.innerHTML = '<div style="text-align:center;padding:20px;color:var(--pos-red)"><i class="fas fa-exclamation-triangle"></i> Failed to load history: ' + esc(err.message || 'Unknown error') + '</div>';
+  });
+}
+window.showReorderHistory = showReorderHistory;
 
 // ==================== HOLD SALE ====================
 function holdSale() {
