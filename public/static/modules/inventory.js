@@ -27,6 +27,12 @@ var invStockCatFilter = ''; // persisted category filter across re-renders
 var invShowInactive = false; // toggle for showing inactive products
 var invShowAllProducts = false; // toggle for showing all products including those without stock rows
 
+// Barcode scanner state for quick count
+var invScanBuffer = '';
+var invScanLastKey = 0;
+var invScanTimer = null;
+var invScanListenerBound = false;
+
 // Permission helper for edit access (view-only enforcement)
 function invCanEdit(feature) {
   var fn = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
@@ -76,6 +82,11 @@ window._inventoryCleanup = function() {
   invPage = 'dashboard';
   invStockData = [];
   invSummary = {};
+  // Remove barcode scanner listener
+  if (invScanListenerBound) {
+    document.removeEventListener('keydown', invHandleScanKeydown);
+    invScanListenerBound = false;
+  }
 };
 
 // ==================== DATA LOADING ====================
@@ -180,6 +191,12 @@ async function invRender() {
   root.innerHTML = '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
   console.log('[Inventory] rendering page:', invPage);
 
+  // Remove barcode scanner listener when leaving count page
+  if (invPage !== 'count' && invScanListenerBound) {
+    document.removeEventListener('keydown', invHandleScanKeydown);
+    invScanListenerBound = false;
+  }
+
   try {
   if (invPage === 'dashboard') {
     await invLoadDashboard();
@@ -203,6 +220,11 @@ async function invRender() {
       } catch(e) { invBatchSummaryMap = {}; }
     }
     root.innerHTML = invRenderNav() + invRenderQuickCount();
+    // Attach barcode scanner listener for quick count page
+    if (!invScanListenerBound) {
+      invScanListenerBound = true;
+      document.addEventListener('keydown', invHandleScanKeydown);
+    }
   } else if (invPage === 'transfers') {
     root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i></div>';
     var html = await invRenderTransfers();
@@ -609,11 +631,11 @@ function invRenderQuickCount() {
       itemExtraClass = ' inv-count-item-oos';
     }
 
-    html += '<div class="inv-count-item' + itemExtraClass + '" data-name="' + escH((s.product_name || '').toLowerCase()) + '" data-sku="' + escH((s.sku || '').toLowerCase()) + '" data-pid="' + s.product_id + '" data-status="' + (s.no_stock_row ? 'new' : (s.qty_on_hand || 0) === 0 ? 'oos' : 'stocked') + '">' +
+    html += '<div class="inv-count-item' + itemExtraClass + '" data-name="' + escH((s.product_name || '').toLowerCase()) + '" data-sku="' + escH((s.sku || '').toLowerCase()) + '" data-barcode="' + escH((s.barcode || '').toLowerCase()) + '" data-pid="' + s.product_id + '" data-status="' + (s.no_stock_row ? 'new' : (s.qty_on_hand || 0) === 0 ? 'oos' : 'stocked') + '">' +
       '<div class="inv-count-item-row">' +
       '<div class="inv-count-item-info">' +
       '<strong id="invCntName_' + idx + '">' + escH(s.product_name) + '</strong>' + statusBadge +
-      '<span class="inv-muted">' + escH(s.sku || '') + ' · ' + escH(s.unit_type || '') + ' · <span class="inv-cat-badge">' + catLabel + '</span>' + (subLabel ? ' · ' + subLabel : '') + '</span>' +
+      '<span class="inv-muted">' + escH(s.sku || '') + ' · ' + escH(s.unit_type || '') + ' · <span class="inv-cat-badge">' + catLabel + '</span>' + (subLabel ? ' · ' + subLabel : '') + (s.barcode ? ' · <i class="fas fa-barcode" style="color:#8B5CF6;font-size:10px" title="' + escH(s.barcode) + '"></i>' : '') + '</span>' +
       lastCountedInfo + batchBadge +
       '</div>' +
       '<div class="inv-count-item-input">' +
@@ -704,7 +726,8 @@ function invFilterCountList() {
   items.forEach(function(item) {
     var name = item.dataset.name || '';
     var sku = item.dataset.sku || '';
-    var matchesSearch = !search || name.includes(search) || sku.includes(search);
+    var barcode = item.dataset.barcode || '';
+    var matchesSearch = !search || name.includes(search) || sku.includes(search) || barcode.includes(search);
     var matchesStatus = !statusFilter || item.dataset.status === statusFilter;
     item.style.display = (matchesSearch && matchesStatus) ? '' : 'none';
   });
@@ -724,6 +747,131 @@ function invFilterCountByStatus(status) {
   invFilterCountList();
 }
 window.invFilterCountByStatus = invFilterCountByStatus;
+
+// ==================== BARCODE SCANNER (Quick Count) ====================
+// Detects barcode scanner input (rapid keystrokes + Enter) and scrolls to matching product.
+
+function invHandleScanKeydown(e) {
+  // Only process when on count page
+  if (invPage !== 'count') return;
+
+  // Ignore if focus is in a text input (user is manually typing a count or search)
+  var tag = (e.target.tagName || '').toLowerCase();
+  var isCountField = e.target.classList && e.target.classList.contains('inv-count-field');
+  var isCountSearch = e.target.id === 'invCountSearch';
+  var isEditField = (tag === 'input' || tag === 'textarea' || tag === 'select');
+  // Allow scanner to work even when typing, but only intercept if buffer is fast
+  if (isEditField && !isCountSearch && !isCountField) return;
+
+  var now = Date.now();
+  var timeSinceLast = now - invScanLastKey;
+
+  if (e.key === 'Enter') {
+    var buf = invScanBuffer.trim();
+    if (buf.length >= 4 && timeSinceLast < 200) {
+      e.preventDefault();
+      e.stopPropagation();
+      invScanBuffer = '';
+      invScanLastKey = 0;
+      // Clear search if it contains barcode text
+      var si = document.getElementById('invCountSearch');
+      if (si && si.value === buf) si.value = '';
+      invScanFindProduct(buf);
+    } else {
+      invScanBuffer = '';
+      invScanLastKey = 0;
+    }
+    return;
+  }
+
+  if (e.key.length !== 1) return;
+
+  if (timeSinceLast > 200) {
+    invScanBuffer = '';
+  }
+  invScanBuffer += e.key;
+  invScanLastKey = now;
+
+  clearTimeout(invScanTimer);
+  invScanTimer = setTimeout(function() { invScanBuffer = ''; }, 300);
+}
+
+function invScanFindProduct(code) {
+  var codeLower = code.toLowerCase();
+
+  // First: try to find by data-barcode attribute (exact match)
+  var items = document.querySelectorAll('.inv-count-item');
+  var found = null;
+  var foundIdx = -1;
+  for (var i = 0; i < items.length; i++) {
+    var bc = items[i].dataset.barcode || '';
+    if (bc === codeLower) {
+      found = items[i];
+      foundIdx = i;
+      break;
+    }
+  }
+
+  // Fallback: try matching by SKU
+  if (!found) {
+    for (var i = 0; i < items.length; i++) {
+      var sku = items[i].dataset.sku || '';
+      if (sku === codeLower) {
+        found = items[i];
+        foundIdx = i;
+        break;
+      }
+    }
+  }
+
+  if (found) {
+    // Clear any active status filters so the item is visible
+    var activeFilter = document.querySelector('.inv-count-pill.active');
+    if (activeFilter) { activeFilter.classList.remove('active'); }
+    // Clear search filter
+    var searchEl = document.getElementById('invCountSearch');
+    if (searchEl) searchEl.value = '';
+    // Show all items first
+    items.forEach(function(item) { item.style.display = ''; });
+
+    // Scroll to the item
+    found.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // Highlight with animation
+    found.classList.add('inv-count-scanned');
+    setTimeout(function() { found.classList.remove('inv-count-scanned'); }, 2500);
+
+    // Focus the count input and increment by 1
+    var countInput = found.querySelector('.inv-count-field');
+    if (countInput) {
+      countInput.focus();
+      countInput.select();
+    }
+
+    invToast('<i class="fas fa-barcode"></i> Found: ' + (found.querySelector('strong') ? found.querySelector('strong').textContent : code), 'success');
+    invScanBeep(true);
+  } else {
+    invToast('<i class="fas fa-times-circle"></i> No product found for barcode: ' + escH(code), 'error');
+    invScanBeep(false);
+    // Put the code in search to help user find it
+    var searchEl = document.getElementById('invCountSearch');
+    if (searchEl) { searchEl.value = code; invFilterCountList(); searchEl.focus(); }
+  }
+}
+
+function invScanBeep(success) {
+  try {
+    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = success ? 880 : 220;
+    gain.gain.value = 0.15;
+    osc.start();
+    osc.stop(ctx.currentTime + (success ? 0.1 : 0.3));
+  } catch(e) {}
+}
 
 async function invSubmitBulkCount() {
   var counts = [];
@@ -3186,6 +3334,9 @@ async function invShowEditProduct(productId) {
     body += '<div class="inv-form-group" style="flex:2"><label>Product Name</label><input type="text" class="inv-input" id="invEditName" value="' + escH(p.name) + '"></div>';
     body += '<div class="inv-form-group" style="flex:1"><label>SKU</label><input type="text" class="inv-input" id="invEditSku" value="' + escH(p.sku || '') + '"></div>';
     body += '</div>';
+    body += '<div class="inv-form-row">';
+    body += '<div class="inv-form-group"><label><i class="fas fa-barcode" style="color:#8B5CF6"></i> Barcode / UPC</label><input type="text" class="inv-input" id="invEditBarcode" value="' + escH(p.barcode || '') + '" placeholder="Scan or type barcode"></div>';
+    body += '</div>';
 
     var subcatOpts = '<option value="">— None —</option>';
     var subcatList = ['feed','supplement','dewormer','fly_control','grooming','hoof_care','first_aid','tack','blankets','treats','barn_equipment','fencing','riding_apparel','pet_supplies','cleaning','poultry','farm_supplies','tools','gift','general'];
@@ -3295,6 +3446,7 @@ async function invSaveProduct(productId) {
   var data = {
     name: document.getElementById('invEditName').value.trim(),
     sku: document.getElementById('invEditSku').value.trim() || null,
+    barcode: document.getElementById('invEditBarcode') ? document.getElementById('invEditBarcode').value.trim() || null : null,
     category: resolvedCat,
     subcategory: document.getElementById('invEditSubcategory') ? document.getElementById('invEditSubcategory').value || null : null,
     unit_type: document.getElementById('invEditUnit').value,
@@ -3385,6 +3537,9 @@ function invShowNewProduct() {
   body += '<div class="inv-form-group" style="flex:2"><label>Product Name *</label><input type="text" class="inv-input" id="invNewName" placeholder="Enter product name"></div>';
   body += '<div class="inv-form-group" style="flex:1"><label>SKU</label><input type="text" class="inv-input" id="invNewSku" placeholder="Optional"></div>';
   body += '</div>';
+  body += '<div class="inv-form-row">';
+  body += '<div class="inv-form-group"><label><i class="fas fa-barcode" style="color:#8B5CF6"></i> Barcode / UPC</label><input type="text" class="inv-input" id="invNewBarcode" placeholder="Scan or type barcode"></div>';
+  body += '</div>';
   var newSubcatOpts = '<option value="">— None —</option>';
   var newSubcatList = ['feed','supplement','dewormer','fly_control','grooming','hoof_care','first_aid','tack','blankets','treats','barn_equipment','fencing','riding_apparel','pet_supplies','cleaning','poultry','farm_supplies','tools','gift','general'];
   newSubcatList.forEach(function(sc) {
@@ -3432,6 +3587,7 @@ async function invCreateProduct() {
   var data = {
     name: document.getElementById('invNewName').value.trim(),
     sku: document.getElementById('invNewSku').value.trim() || null,
+    barcode: document.getElementById('invNewBarcode') ? document.getElementById('invNewBarcode').value.trim() || null : null,
     category: newResolvedCat,
     subcategory: document.getElementById('invNewSubcategory') ? document.getElementById('invNewSubcategory').value || null : null,
     unit_type: document.getElementById('invNewUnit').value,

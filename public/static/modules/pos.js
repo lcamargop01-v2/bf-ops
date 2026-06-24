@@ -38,7 +38,12 @@ var _s = {
   mergeTarget: null, // first customer selected for merge
   fees: [], // loaded from /api/pos/fees
   appliedFuelSurcharge: 0,
-  appliedCCFee: 0
+  appliedCCFee: 0,
+  // Barcode scanner state
+  scanBuffer: '',
+  scanLastKey: 0,
+  scanTimer: null,
+  scanListenerBound: false
 };
 
 // ==================== INIT ====================
@@ -70,6 +75,11 @@ window._posCleanup = function() {
   _s.customer = null;
   _s.view = 'register';
   _s.productCache = {};
+  // Remove barcode scanner listener
+  if (_s.scanListenerBound) {
+    document.removeEventListener('keydown', posHandleScanKeydown);
+    _s.scanListenerBound = false;
+  }
   // Restore logistics navigate if we overrode it in DC mode
   if (_origLogisticsNavigate) {
     window.navigate = _origLogisticsNavigate;
@@ -537,15 +547,158 @@ function renderRegisterContent() {
   }
 
   on('posScanBtn', 'click', function() {
-    var code = prompt('Enter barcode / SKU:');
-    if (code && searchInput) { searchInput.value = code; searchProducts(code); }
+    posShowScanModal();
   });
+
+  // Attach global barcode scanner listener (once)
+  if (!_s.scanListenerBound) {
+    _s.scanListenerBound = true;
+    document.addEventListener('keydown', posHandleScanKeydown);
+  }
 
   renderCategories();
   searchProducts('');
   renderCustomerArea();
   renderCartFooter();
 }
+
+// ==================== BARCODE SCANNER ====================
+// Barcode scanners act like rapid keyboards: chars typed fast + Enter at end.
+// We detect this pattern: if keystrokes arrive < 60ms apart and end with Enter,
+// and the accumulated string is 4+ chars, treat it as a barcode scan.
+
+function posHandleScanKeydown(e) {
+  // Only process when on register view with active session
+  if (!_s.session) return;
+  if (_s.view !== 'register') return;
+
+  // Ignore if focus is in a non-search text input, textarea, or select
+  var tag = (e.target.tagName || '').toLowerCase();
+  var isSearchInput = e.target.id === 'posProductSearch';
+  var isTypingField = (tag === 'input' && e.target.type !== 'button' && e.target.type !== 'submit') || tag === 'textarea' || tag === 'select';
+
+  // If user is typing in search box, don't intercept (search already handles barcode via API)
+  // But DO intercept Enter if buffer looks like a fast scan
+  if (isTypingField && !isSearchInput) return;
+
+  var now = Date.now();
+  var timeSinceLast = now - _s.scanLastKey;
+
+  if (e.key === 'Enter') {
+    var buf = _s.scanBuffer.trim();
+    if (buf.length >= 4 && timeSinceLast < 200) {
+      // Looks like a barcode scan — intercept
+      e.preventDefault();
+      e.stopPropagation();
+      _s.scanBuffer = '';
+      _s.scanLastKey = 0;
+      // Clear search input if it has the barcode text
+      var si = document.getElementById('posProductSearch');
+      if (si && si.value === buf) si.value = '';
+      posLookupBarcode(buf);
+    } else {
+      _s.scanBuffer = '';
+      _s.scanLastKey = 0;
+    }
+    return;
+  }
+
+  // Only accumulate printable single characters
+  if (e.key.length !== 1) { return; }
+
+  // If more than 200ms since last key, start fresh buffer
+  if (timeSinceLast > 200) {
+    _s.scanBuffer = '';
+  }
+  _s.scanBuffer += e.key;
+  _s.scanLastKey = now;
+
+  // Auto-clear buffer after 300ms of no typing (manual typing, not scanner)
+  clearTimeout(_s.scanTimer);
+  _s.scanTimer = setTimeout(function() { _s.scanBuffer = ''; }, 300);
+}
+
+function posLookupBarcode(code) {
+  // Show scanning indicator
+  posToast('<i class="fas fa-barcode"></i> Scanning: ' + esc(code) + '...', 'info', 1500);
+
+  API.get('/pos/barcode/' + encodeURIComponent(code) + '?location_id=' + getLocationId()).then(function(r) {
+    var p = r.data;
+    if (p && p.id) {
+      // Cache product and add to cart
+      _s.productCache[p.id] = { name: p.name, sku: p.sku, category: p.category, price: p.price, cost: p.cost, tax_rate: p.tax_rate, stock: p.qty_available };
+      addToCart(p.id, _s.productCache[p.id]);
+      posToast('<i class="fas fa-check-circle"></i> ' + esc(p.name) + ' added', 'success', 2000);
+      // Try beep sound
+      posScanBeep(true);
+    }
+  }).catch(function(err) {
+    var msg = err.response && err.response.data ? err.response.data.error : 'Barcode not found';
+    posToast('<i class="fas fa-times-circle"></i> ' + esc(msg), 'error', 3000);
+    posScanBeep(false);
+    // Fall back to search
+    var si = document.getElementById('posProductSearch');
+    if (si) { si.value = code; searchProducts(code); si.focus(); }
+  });
+}
+
+function posScanBeep(success) {
+  try {
+    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = success ? 880 : 220;
+    gain.gain.value = 0.15;
+    osc.start();
+    osc.stop(ctx.currentTime + (success ? 0.1 : 0.3));
+  } catch(e) { /* audio not available */ }
+}
+
+function posShowScanModal() {
+  // Manual barcode entry modal (also works for camera-based scanning in future)
+  var overlay = document.createElement('div');
+  overlay.className = 'pos-modal-overlay';
+  overlay.id = 'posScanOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML =
+    '<div style="background:white;border-radius:16px;padding:24px;width:90%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">' +
+    '<h3 style="margin:0 0 16px;font-size:18px;display:flex;align-items:center;gap:8px"><i class="fas fa-barcode" style="color:#8B5CF6"></i> Scan / Enter Barcode</h3>' +
+    '<input type="text" id="posScanInput" autofocus placeholder="Scan barcode or type manually..." ' +
+    'style="width:100%;padding:14px 16px;border:2px solid #E2E8F0;border-radius:10px;font-size:18px;text-align:center;letter-spacing:2px;box-sizing:border-box" ' +
+    'inputmode="numeric">' +
+    '<p style="margin:10px 0 0;font-size:13px;color:#64748B;text-align:center"><i class="fas fa-info-circle"></i> Point scanner at barcode, or type and press Enter</p>' +
+    '<div style="display:flex;gap:8px;margin-top:16px">' +
+    '<button onclick="document.getElementById(\'posScanOverlay\').remove()" class="pos-btn pos-btn-clear" style="flex:1;padding:10px">Cancel</button>' +
+    '<button onclick="posDoManualScan()" class="pos-btn" style="flex:1;padding:10px;background:#8B5CF6;color:white;border:none;border-radius:8px;font-weight:600"><i class="fas fa-search"></i> Lookup</button>' +
+    '</div></div>';
+
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+
+  // Handle Enter in manual scan input
+  setTimeout(function() {
+    var inp = document.getElementById('posScanInput');
+    if (inp) {
+      inp.focus();
+      inp.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); posDoManualScan(); }
+      });
+    }
+  }, 50);
+}
+
+function posDoManualScan() {
+  var inp = document.getElementById('posScanInput');
+  if (!inp) return;
+  var code = inp.value.trim();
+  if (!code) return;
+  document.getElementById('posScanOverlay')?.remove();
+  posLookupBarcode(code);
+}
+window.posDoManualScan = posDoManualScan;
 
 // ==================== CATEGORIES ====================
 function renderCategories() {
@@ -3811,13 +3964,20 @@ function renderCustAccount(acct) {
   '</div>';
 }
 function toast(msg, type) {
-  if (typeof window.shellToast === 'function') { window.shellToast(msg, type || 'success'); return; }
+  posToast(msg, type, 3000);
+}
+
+function posToast(msg, type, duration) {
+  duration = duration || 3000;
+  var bgMap = { error: '#DC2626', success: '#059669', info: '#3B82F6', warning: '#D97706' };
+  var iconMap = { error: 'fa-exclamation-circle', success: 'fa-check-circle', info: 'fa-info-circle', warning: 'fa-exclamation-triangle' };
+  var bg = bgMap[type] || bgMap.success;
+  var icon = iconMap[type] || iconMap.success;
   var el = document.createElement('div');
-  var bg = type === 'error' ? '#DC2626' : '#059669';
-  el.style.cssText = 'position:fixed;bottom:20px;right:20px;background:' + bg + ';color:white;padding:12px 20px;border-radius:10px;font-size:14px;font-weight:600;z-index:99999;max-width:400px';
-  el.innerHTML = '<i class="fas ' + (type === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle') + '"></i> ' + msg;
+  el.style.cssText = 'position:fixed;bottom:20px;right:20px;background:' + bg + ';color:white;padding:12px 20px;border-radius:10px;font-size:14px;font-weight:600;z-index:99999;max-width:400px;transition:opacity 0.3s';
+  el.innerHTML = '<i class="fas ' + icon + '"></i> ' + msg;
   document.body.appendChild(el);
-  setTimeout(function() { el.style.opacity = '0'; setTimeout(function() { el.remove(); }, 300); }, 3000);
+  setTimeout(function() { el.style.opacity = '0'; setTimeout(function() { el.remove(); }, 300); }, duration);
 }
 
 // ==================== TAX REPORT ====================

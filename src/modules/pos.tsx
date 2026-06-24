@@ -50,7 +50,7 @@ app.get('/api/pos/products', async (c) => {
   const limit = parseInt(c.req.query('limit') || '50')
 
   let query = `
-    SELECT p.id, p.name, p.sku, p.category, p.price, p.cost, p.tax_rate,
+    SELECT p.id, p.name, p.sku, p.barcode, p.category, p.price, p.cost, p.tax_rate,
            COALESCE(s.qty_available, 0) as qty_available,
            COALESCE(s.qty_on_hand, 0) as qty_on_hand,
            COALESCE(s.qty_on_hold, 0) as qty_on_hold,
@@ -62,8 +62,8 @@ app.get('/api/pos/products', async (c) => {
   const params: any[] = [locationId]
 
   if (search) {
-    query += ' AND (p.name LIKE ? OR p.sku LIKE ?)'
-    params.push(`%${search}%`, `%${search}%`)
+    query += ' AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode = ?)'
+    params.push(`%${search}%`, `%${search}%`, search)
   }
   if (category) {
     query += ' AND p.category = ?'
@@ -75,6 +75,26 @@ app.get('/api/pos/products', async (c) => {
 
   const result = await db.prepare(query).bind(...params).all()
   return c.json(result.results)
+})
+
+// ==================== BARCODE LOOKUP (fast exact match) ====================
+app.get('/api/pos/barcode/:code', async (c) => {
+  const db = c.env.DB
+  const code = c.req.param('code')
+  const locationId = c.req.query('location_id') || '1'
+
+  const product = await db.prepare(`
+    SELECT p.id, p.name, p.sku, p.barcode, p.category, p.price, p.cost, p.tax_rate,
+           COALESCE(s.qty_available, 0) as qty_available,
+           COALESCE(s.qty_on_hand, 0) as qty_on_hand
+    FROM products p
+    LEFT JOIN inventory_stock s ON s.product_id = p.id AND s.location_id = ?
+    WHERE p.active = 1 AND p.barcode = ?
+    LIMIT 1
+  `).bind(locationId, code).first()
+
+  if (!product) return c.json({ error: 'No product found for barcode: ' + code }, 404)
+  return c.json(product)
 })
 
 // ==================== PRODUCT CATEGORIES (for POS quick filters) ====================

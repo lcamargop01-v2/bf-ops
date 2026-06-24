@@ -132,7 +132,7 @@ app.get('/api/inventory/stock', async (c) => {
     // Quick Count mode: LEFT JOIN so products with no stock row still appear
     // Products with no stock row get qty_on_hand = 0 and a "no_stock_row" flag
     const locId = parseInt(locationId)
-    query = `SELECT p.id as product_id, p.name as product_name, p.sku, p.category, p.subcategory,
+    query = `SELECT p.id as product_id, p.name as product_name, p.sku, p.barcode, p.category, p.subcategory,
       p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
       p.primary_vendor_id, sv.name as primary_vendor_name, p.active as product_active,
       COALESCE(s.qty_on_hand, 0) as qty_on_hand,
@@ -156,7 +156,7 @@ app.get('/api/inventory/stock', async (c) => {
     if (!includeInactive) query += ' AND p.active = 1'
   } else {
     // Normal stock query: INNER JOIN — only show products with stock rows
-    query = `SELECT s.*, p.name as product_name, p.sku, p.category, p.subcategory, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
+    query = `SELECT s.*, p.name as product_name, p.sku, p.barcode, p.category, p.subcategory, p.unit_type, p.price, p.cost, p.weight_per_unit, p.pallet_qty,
       p.primary_vendor_id, sv.name as primary_vendor_name, p.active as product_active,
       l.name as location_name, l.code as location_code,
       u_count.name as last_counted_by_name
@@ -170,7 +170,7 @@ app.get('/api/inventory/stock', async (c) => {
   }
 
   if (category) { query += ' AND p.category = ?'; binds.push(category) }
-  if (search) { query += ' AND (p.name LIKE ? OR p.sku LIKE ?)'; binds.push(`%${search}%`, `%${search}%`) }
+  if (search) { query += ' AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode = ?)'; binds.push(`%${search}%`, `%${search}%`, search) }
   if (lowStockOnly) { query += ' AND COALESCE(s.reorder_point, 0) > 0 AND COALESCE(s.qty_on_hand, 0) <= s.reorder_point' }
 
   const orderMap: Record<string, string> = {
@@ -1473,7 +1473,7 @@ app.get('/api/inventory/products', async (c) => {
   const binds: any[] = []
 
   if (!includeInactive) { conditions.push('p.active = 1') }
-  if (search) { conditions.push('(p.name LIKE ? OR p.sku LIKE ?)'); binds.push(`%${search}%`, `%${search}%`) }
+  if (search) { conditions.push('(p.name LIKE ? OR p.sku LIKE ? OR p.barcode = ?)'); binds.push(`%${search}%`, `%${search}%`, search) }
   if (category) { conditions.push('p.category = ?'); binds.push(category) }
 
   if (conditions.length) query += ' WHERE ' + conditions.join(' AND ')
@@ -1487,7 +1487,7 @@ app.get('/api/inventory/products', async (c) => {
   const countBinds: any[] = []
   const countConditions: string[] = []
   if (!includeInactive) { countConditions.push('active = 1') }
-  if (search) { countConditions.push('(name LIKE ? OR sku LIKE ?)'); countBinds.push(`%${search}%`, `%${search}%`) }
+  if (search) { countConditions.push('(name LIKE ? OR sku LIKE ? OR barcode = ?)'); countBinds.push(`%${search}%`, `%${search}%`, search) }
   if (category) { countConditions.push('category = ?'); countBinds.push(category) }
   if (countConditions.length) countQuery += ' WHERE ' + countConditions.join(' AND ')
   const countResult = await db.prepare(countQuery).bind(...countBinds).first() as any
@@ -1670,7 +1670,7 @@ app.put('/api/inventory/products/:id', async (c) => {
   if (!product) return c.json({ error: 'Product not found' }, 404)
 
   // Fields that can be updated
-  const allowedFields = ['name', 'sku', 'category', 'subcategory', 'unit_type', 'price', 'cost', 'weight_per_unit',
+  const allowedFields = ['name', 'sku', 'barcode', 'category', 'subcategory', 'unit_type', 'price', 'cost', 'weight_per_unit',
     'active', 'tax_rate', 'pallet_qty', 'pallet_weight', 'length_in', 'width_in', 'height_in',
     'stackable', 'max_stack', 'bag_length_in', 'bag_width_in', 'bag_height_in', 'primary_vendor_id']
 
@@ -1717,10 +1717,10 @@ app.post('/api/inventory/products', async (c) => {
   if (!body.name) return c.json({ error: 'Product name is required' }, 400)
 
   const result = await db.prepare(
-    `INSERT INTO products (name, sku, category, subcategory, unit_type, price, cost, weight_per_unit, active, tax_rate, pallet_qty, primary_vendor_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO products (name, sku, barcode, category, subcategory, unit_type, price, cost, weight_per_unit, active, tax_rate, pallet_qty, primary_vendor_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    body.name, body.sku || null, body.category || 'shelf_goods', body.subcategory || null,
+    body.name, body.sku || null, body.barcode || null, body.category || 'shelf_goods', body.subcategory || null,
     body.unit_type || 'each',
     body.price || 0, body.cost || 0, body.weight_per_unit || 0,
     body.active !== undefined ? body.active : 1, body.tax_rate || 0, body.pallet_qty || 0,

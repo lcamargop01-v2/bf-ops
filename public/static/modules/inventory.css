@@ -639,6 +639,18 @@
 .inv-count-item-new { border-left: 3px solid #3B82F6; }
 .inv-count-item-oos { border-left: 3px solid #F59E0B; }
 
+/* Barcode scan highlight animation */
+.inv-count-scanned {
+  animation: invScanFlash 0.6s ease-out 3;
+  border-left: 4px solid #8B5CF6 !important;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.3) !important;
+}
+@keyframes invScanFlash {
+  0% { background-color: rgba(139, 92, 246, 0.2); }
+  50% { background-color: rgba(139, 92, 246, 0.08); }
+  100% { background-color: transparent; }
+}
+
 /* Filter pills in toolbar */
 .inv-count-pill {
   display: inline-flex; align-items: center; gap: 4px;
