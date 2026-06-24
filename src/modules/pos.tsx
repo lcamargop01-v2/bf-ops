@@ -619,8 +619,20 @@ app.post('/api/pos/sales', async (c) => {
   }
 
   // ===== AUTO-CREATE DARTS ENTRY TASK FOR ALDI WAREHOUSE =====
-  // When a delivery order is created from LOX POS, ALDI warehouse needs to enter it into Darts
-  if (orderId && (fulfillment === 'delivery' || fulfillment === 'dc_pickup' || body.delivery_requested)) {
+  // DARTS task is created when:
+  //   1. Any delivery/dc_pickup/delivery_requested order (all locations)
+  //   2. ANY sale by a sales rep (their orders always need warehouse import)
+  const isDeliveryOrder = orderId && (fulfillment === 'delivery' || fulfillment === 'dc_pickup' || body.delivery_requested)
+
+  // Check if cashier is a sales rep — their sales always need DARTS entry
+  let cashierRole = ''
+  if (body.cashier_id) {
+    const cashierUser = await db.prepare('SELECT role FROM users WHERE id = ?').bind(body.cashier_id).first<any>()
+    if (cashierUser) cashierRole = cashierUser.role || ''
+  }
+  const isSalesRepSale = cashierRole === 'sales rep'
+
+  if (isDeliveryOrder || isSalesRepSale) {
     try {
       // Get customer name for the task
       let custName = 'Walk-in'
@@ -631,7 +643,20 @@ app.post('/api/pos/sales', async (c) => {
 
       // Build items summary for task description
       const itemsSummary = processedItems.map((it: any) => `${it.quantity}x ${it.product_name}`).join(', ')
-      const orderNum = fulfillment === 'dc_pickup' ? 'POS-PU-' + saleNumber : fulfillment === 'delivery' ? 'POS-DLV-' + saleNumber : 'POS-' + saleNumber
+
+      // Determine reference type and number
+      const hasOrder = !!orderId
+      const refType = hasOrder ? 'order' : 'pos_sale'
+      const refId = hasOrder ? orderId : saleId
+      const refNumber = hasOrder
+        ? (fulfillment === 'dc_pickup' ? 'POS-PU-' + saleNumber : fulfillment === 'delivery' ? 'POS-DLV-' + saleNumber : 'POS-' + saleNumber)
+        : 'SALE-' + saleNumber
+
+      // Build type description
+      let typeDesc = fulfillment === 'dc_pickup' ? 'Customer Pickup at DC'
+        : fulfillment === 'delivery' ? 'Delivery'
+        : fulfillment === 'local' ? 'Walk-in / Local Pickup'
+        : fulfillment || 'Sale'
 
       const dartsTaskNumber = 'DARTS-' + Date.now().toString(36).toUpperCase()
       await db.prepare(`
@@ -640,14 +665,14 @@ app.post('/api/pos/sales', async (c) => {
       `).bind(
         dartsTaskNumber,
         '📦 DARTS Entry — ' + custName,
-        `Enter into DARTS system:\n\nOrder: ${orderNum}\nCustomer: ${custName}\nDelivery Date: ${body.delivery_date || 'ASAP'}\nType: ${fulfillment === 'dc_pickup' ? 'Customer Pickup at DC' : 'Delivery'}\nItems: ${itemsSummary}\nTotal: $${total.toFixed(2)}\nSale #: ${saleNumber}\n\nCreated from Loxahatchee POS`,
+        `Enter into DARTS system:\n\n${hasOrder ? 'Order' : 'Sale'}: ${refNumber}\nCustomer: ${custName}\n${body.delivery_date ? 'Delivery Date: ' + body.delivery_date + '\n' : ''}Type: ${typeDesc}\nItems: ${itemsSummary}\nTotal: $${total.toFixed(2)}\nSale #: ${saleNumber}\nCashier: ${body.cashier_name || 'POS'}\n\nCreated from POS${isSalesRepSale && !isDeliveryOrder ? ' (Sales Rep order — auto-flagged for DARTS)' : ''}`,
         'darts_entry', 'high', 'pending',
         2, // ALDI warehouse location
-        'order', orderId, orderNum,
+        refType, refId, refNumber,
         body.customer_id || null, custName,
-        body.cashier_id || null, body.cashier_name || 'LOX POS',
+        body.cashier_id || null, body.cashier_name || 'POS',
         body.delivery_date || null,
-        'darts,pos_delivery,lox'
+        isSalesRepSale ? 'darts,sales_rep,pos' : 'darts,pos_delivery,lox'
       ).run()
 
       // Create notification for all dispatchers at ALDI
@@ -661,8 +686,8 @@ app.post('/api/pos/sales', async (c) => {
         ).bind(
           (d as any).id,
           '📦 New DARTS Entry Needed',
-          `${custName} — ${orderNum} — ${itemsSummary.substring(0, 100)}`,
-          orderId
+          `${custName} — ${refNumber} — ${itemsSummary.substring(0, 100)}`,
+          refId
         ).run()
       }
     } catch (e) {
