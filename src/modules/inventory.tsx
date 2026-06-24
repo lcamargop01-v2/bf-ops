@@ -16,6 +16,20 @@ function getUserFromHeader(c: any): any {
   } catch { return null }
 }
 
+// Check if a user has edit-level permission for a specific module/feature
+// Admin role always returns true. For other roles, checks role_permissions table.
+async function hasPermission(db: D1Database, userRole: string, module: string, feature: string, level: string = 'edit'): Promise<boolean> {
+  if (userRole === 'admin') return true
+  try {
+    const row = await db.prepare(
+      'SELECT access_level FROM role_permissions WHERE role_name = ? AND module = ? AND feature = ?'
+    ).bind(userRole, module, feature).first() as any
+    if (!row) return false
+    if (level === 'view') return row.access_level === 'view' || row.access_level === 'edit'
+    return row.access_level === 'edit'
+  } catch { return false }
+}
+
 async function auditLog(db: D1Database, params: {
   product_id: number, location_id: number, action: string, qty_change: number,
   qty_before?: number, qty_after?: number, reason?: string,
@@ -1669,6 +1683,15 @@ app.put('/api/inventory/products/:id', async (c) => {
   const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first() as any
   if (!product) return c.json({ error: 'Product not found' }, 404)
 
+  // Check pricing permission — strip price/cost/tax fields if user lacks 'pricing' edit permission
+  const pricingFields = ['price', 'cost', 'tax_rate']
+  const canEditPricing = await hasPermission(db, user.role, 'inventory', 'pricing', 'edit')
+  if (!canEditPricing) {
+    for (const pf of pricingFields) {
+      delete body[pf]
+    }
+  }
+
   // Fields that can be updated
   const allowedFields = ['name', 'sku', 'barcode', 'category', 'subcategory', 'unit_type', 'price', 'cost', 'weight_per_unit',
     'active', 'tax_rate', 'pallet_qty', 'pallet_weight', 'length_in', 'width_in', 'height_in',
@@ -2413,6 +2436,52 @@ app.patch('/api/inventory/products/:id/quick-update', async (c) => {
   }
 
   return c.json({ success: true, changes })
+})
+
+// Quick inline pricing update (price, cost, tax_rate) — requires 'pricing' edit permission
+app.patch('/api/inventory/products/:id/pricing', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  // Permission check
+  const canEdit = await hasPermission(db, user.role, 'inventory', 'pricing', 'edit')
+  if (!canEdit) return c.json({ error: 'You do not have permission to edit pricing' }, 403)
+
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first() as any
+  if (!product) return c.json({ error: 'Product not found' }, 404)
+
+  const pricingFields = ['price', 'cost', 'tax_rate']
+  const sets: string[] = []
+  const vals: any[] = []
+  const changeDetails: string[] = []
+  for (const f of pricingFields) {
+    if (body[f] !== undefined) {
+      const newVal = parseFloat(body[f]) || 0
+      if (newVal !== (product[f] || 0)) {
+        sets.push(`${f} = ?`)
+        vals.push(newVal)
+        changeDetails.push(`${f}: ${product[f] || 0} → ${newVal}`)
+      }
+    }
+  }
+  if (!sets.length) return c.json({ success: true, message: 'No changes' })
+
+  vals.push(id)
+  await db.prepare(`UPDATE products SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run()
+
+  // Audit log
+  const userInfo = await db.prepare('SELECT name FROM users WHERE id = ?').bind(user.id).first() as any
+  const anyStock = await db.prepare('SELECT location_id FROM inventory_stock WHERE product_id = ? LIMIT 1').bind(id).first() as any
+  await db.prepare(
+    `INSERT INTO inventory_audit (product_id, location_id, action, qty_change, qty_after, user_id, user_name, notes)
+     VALUES (?, ?, 'pricing_updated', 0, 0, ?, ?, ?)`
+  ).bind(id, anyStock?.location_id ?? 1, user.id, userInfo?.name ?? 'System', `Pricing update: ${changeDetails.join(', ')}`).run()
+
+  const updated = await db.prepare('SELECT id, name, price, cost, tax_rate FROM products WHERE id = ?').bind(id).first()
+  return c.json({ success: true, product: updated, changes: changeDetails.join(', ') })
 })
 
 // ==================== SMART RESTOCK (DEMAND ANALYSIS) ====================

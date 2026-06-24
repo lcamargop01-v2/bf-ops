@@ -575,6 +575,7 @@ const MODULE_FEATURES: Record<string, { id: string; label: string }[]> = {
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'stock', label: 'Stock' },
     { id: 'products', label: 'Products' },
+    { id: 'pricing', label: 'Pricing' },
     { id: 'count', label: 'Count' },
     { id: 'transfers', label: 'Transfers' },
     { id: 'batches', label: 'Batches' },

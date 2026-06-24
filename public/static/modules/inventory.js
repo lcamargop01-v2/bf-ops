@@ -45,6 +45,12 @@ function invCanViewFin() {
   return fn();
 }
 
+// Permission helper for pricing edit access (price, cost, tax_rate)
+function invCanEditPricing() {
+  var fn = typeof window.canEdit === 'function' ? window.canEdit : function() { return true; };
+  return fn('inventory', 'pricing');
+}
+
 // ==================== AUTH BRIDGE ====================
 function invGetToken() {
   return localStorage.getItem('bf_ops_token') || localStorage.getItem('bf_token') || '';
@@ -443,6 +449,7 @@ function invRenderStockRows() {
   var html = '<div class="inv-stock-count">' + invStockData.length + ' items' + (invShowInactive ? ' (incl. inactive)' : '') + (invShowAllProducts && _noRow > 0 ? ' &bull; <span style="color:#1D4ED8">' + _noRow + ' not in stock</span>' : '') + (invShowAllProducts && _oos > 0 ? ' &bull; <span style="color:#B45309">' + _oos + ' out of stock</span>' : '') + '</div>';
   var _sf = invCanViewFin();
   var _se = invCanEdit('stock');
+  var _sp = invCanEditPricing();
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
   html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Vendor</th><th>Location</th><th class="text-right">On Hand</th><th class="text-right">Hold</th><th class="text-right">Avail</th><th class="text-right">Incoming</th>' + (_sf ? '<th class="text-right">Sell</th><th class="text-right">Cost</th><th class="text-right">Value</th>' : '') + (_se ? '<th></th>' : '') + '</tr></thead><tbody>';
 
@@ -465,8 +472,8 @@ function invRenderStockRows() {
       '<td class="text-right">' + (s.qty_on_hold || 0 ? '<span class="inv-hold-badge inv-num-click" onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'on_hold\',\'' + pNameEsc + '\')">' + s.qty_on_hold + '</span>' : '—') + '</td>' +
       '<td class="text-right' + (avail <= 0 ? ' inv-danger' : lowStock ? ' inv-warning' : '') + '"><strong>' + avail.toLocaleString() + '</strong></td>' +
       '<td class="text-right">' + (incoming > 0 ? '<span class="inv-incoming-badge inv-num-click" onclick="event.stopPropagation();invShowIncoming(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\')">' + incoming + '</span>' : '<span class="inv-muted">—</span>') + '</td>' +
-      (_sf ? '<td class="text-right">$' + (s.price || 0).toFixed(2) + '</td>' +
-      '<td class="text-right inv-muted">$' + (s.cost || 0).toFixed(2) + '</td>' +
+      (_sf ? '<td class="text-right"><span' + (_sp ? ' style="cursor:pointer;text-decoration:underline dotted #059669" onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'price\')" title="Click to edit"' : '') + '>$' + (s.price || 0).toFixed(2) + '</span></td>' +
+      '<td class="text-right inv-muted"><span' + (_sp ? ' style="cursor:pointer;text-decoration:underline dotted #DC2626" onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'cost\')" title="Click to edit"' : '') + '>$' + (s.cost || 0).toFixed(2) + '</span></td>' +
       '<td class="text-right">$' + ((s.qty_on_hand || 0) * (s.cost || s.price || 0)).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' : '') +
       (_se ? '<td><button class="inv-btn inv-btn-xs" onclick="invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i></button>' +
       '<button class="inv-btn inv-btn-xs inv-btn-request" onclick="invShowRequestOrder(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\',\'' + escH(s.unit_type || 'each') + '\')"><i class="fas fa-hand"></i></button></td>' : '') +
@@ -496,8 +503,8 @@ function invRenderStockRows() {
       '<div><span class="inv-muted">Available</span><strong class="' + (avail <= 0 ? 'inv-danger' : '') + '">' + avail + '</strong></div>' +
       (s.qty_on_hold > 0 ? '<div onclick="event.stopPropagation();invStockDrilldown(' + s.product_id + ',' + s.location_id + ',\'on_hold\',\'' + pNameEsc + '\')"><span class="inv-muted">Hold</span><strong class="inv-num-click" style="color:#D97706">' + s.qty_on_hold + '</strong></div>' : '') +
       (incoming > 0 ? '<div onclick="event.stopPropagation();invShowIncoming(' + s.product_id + ',' + s.location_id + ',\'' + pNameEsc + '\')"><span class="inv-muted">Incoming</span><strong class="inv-num-click" style="color:#059669">' + incoming + '</strong></div>' : '') +
-      (_sf ? '<div><span class="inv-muted">Sell</span><span>$' + (s.price || 0).toFixed(2) + '</span></div>' +
-      '<div><span class="inv-muted">Cost</span><span>$' + (s.cost || 0).toFixed(2) + '</span></div>' : '') +
+      (_sf ? '<div' + (_sp ? ' onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'price\')" style="cursor:pointer"' : '') + '><span class="inv-muted">Sell</span><span>$' + (s.price || 0).toFixed(2) + '</span></div>' +
+      '<div' + (_sp ? ' onclick="event.stopPropagation();invInlinePriceEdit(' + s.product_id + ',\'cost\')" style="cursor:pointer"' : '') + '><span class="inv-muted">Cost</span><span>$' + (s.cost || 0).toFixed(2) + '</span></div>' : '') +
       '</div>' +
       (_se ? '<div class="inv-stock-card-actions">' +
       '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="event.stopPropagation();invShowQuickAdjust(' + s.product_id + ',' + s.location_id + ')"><i class="fas fa-pen"></i> Adjust</button>' +
@@ -2985,11 +2992,17 @@ async function invShowProductDetail(productId) {
         body += '<div class="inv-product-info-row"><span class="inv-muted">All Vendors</span><span style="font-size:12px">' + vendorNames + '</span></div>';
       }
       if (invCanViewFin()) {
-        body += '<div class="inv-product-info-row"><span class="inv-muted">Sell Price</span><strong style="color:#059669">$' + (product.price || 0).toFixed(2) + '</strong></div>';
-        body += '<div class="inv-product-info-row"><span class="inv-muted">Cost</span><strong style="color:#DC2626">$' + (product.cost || 0).toFixed(2) + '</strong></div>';
-        body += '<div class="inv-product-info-row"><span class="inv-muted">Margin</span><span>' + margin + '%</span></div>';
+        var _cep = invCanEditPricing();
+        var _editBtn = function(field, pid) {
+          return _cep ? ' <button class="inv-btn inv-btn-xs" style="padding:1px 6px;font-size:10px;background:none;color:#6366F1;border:1px solid #E2E8F0;border-radius:4px;cursor:pointer" onclick="invInlinePriceEdit(' + pid + ',\'' + field + '\')" title="Edit ' + field + '"><i class="fas fa-pen" style="font-size:9px"></i></button>' : '';
+        };
+        body += '<div class="inv-product-info-row"><span class="inv-muted">Sell Price</span><span><strong style="color:#059669" id="invDetailPrice">$' + (product.price || 0).toFixed(2) + '</strong>' + _editBtn('price', productId) + '</span></div>';
+        body += '<div class="inv-product-info-row"><span class="inv-muted">Cost</span><span><strong style="color:#DC2626" id="invDetailCost">$' + (product.cost || 0).toFixed(2) + '</strong>' + _editBtn('cost', productId) + '</span></div>';
+        body += '<div class="inv-product-info-row"><span class="inv-muted">Margin</span><span id="invDetailMargin">' + margin + '%</span></div>';
+        body += '<div class="inv-product-info-row"><span class="inv-muted">Tax Rate</span><span><span id="invDetailTaxRate">' + (product.tax_rate || 0) + '%</span>' + _editBtn('tax_rate', productId) + '</span></div>';
+      } else {
+        body += '<div class="inv-product-info-row"><span class="inv-muted">Tax Rate</span><span>' + (product.tax_rate || 0) + '%</span></div>';
       }
-      body += '<div class="inv-product-info-row"><span class="inv-muted">Tax Rate</span><span>' + ((product.tax_rate || 0) * 100).toFixed(1) + '%</span></div>';
       body += '<div class="inv-product-info-row"><span class="inv-muted">Status</span><span class="inv-cat-badge ' + (product.active ? 'inv-cat-supplement' : 'inv-cat-other') + '">' + (product.active ? 'Active' : 'Inactive') + '</span></div>';
       body += '</div>';
     }
@@ -3243,10 +3256,13 @@ async function invRenderProductRows() {
   html += '<div class="inv-table-wrap inv-desktop-only"><table class="inv-table inv-table-hover">';
   var _pf = invCanViewFin();
   var _pe = invCanEdit('products');
+  var _pp = invCanEditPricing();
   html += '<thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Vendor</th><th>Unit</th>' + (_pf ? '<th class="text-right">Sell Price</th><th class="text-right">Cost</th><th class="text-right">Margin</th>' : '') + '<th>Status</th>' + (_pe ? '<th></th>' : '') + '</tr></thead><tbody>';
 
   invProductsPageData.forEach(function(p) {
     var margin = p.price && p.cost ? (((p.price - p.cost) / p.price) * 100).toFixed(1) + '%' : '—';
+    var priceClick = _pp ? ' style="cursor:pointer;text-decoration:underline dotted #059669" onclick="event.stopPropagation();invInlinePriceEdit(' + p.id + ',\'price\')" title="Click to edit"' : '';
+    var costClick = _pp ? ' style="cursor:pointer;text-decoration:underline dotted #DC2626" onclick="event.stopPropagation();invInlinePriceEdit(' + p.id + ',\'cost\')" title="Click to edit"' : '';
     html += '<tr class="' + (!p.active ? 'inv-row-inactive' : '') + '">' +
       '<td class="inv-clickable" onclick="invShowProductDetail(' + p.id + ')"><strong>' + escH(p.name) + '</strong></td>' +
       '<td class="inv-muted">' + escH(p.sku || '—') + '</td>' +
@@ -3254,8 +3270,8 @@ async function invRenderProductRows() {
         (p.subcategory ? '<div style="font-size:10px;color:#64748B;margin-top:2px">' + invSubcatLabel(p.subcategory) + '</div>' : '') + '</td>' +
       '<td class="inv-muted" style="font-size:13px">' + escH(p.primary_vendor_name || '—') + '</td>' +
       '<td>' + escH(p.unit_type || 'each') + '</td>' +
-      (_pf ? '<td class="text-right">$' + (p.price || 0).toFixed(2) + '</td>' +
-      '<td class="text-right inv-muted">$' + (p.cost || 0).toFixed(2) + '</td>' +
+      (_pf ? '<td class="text-right"><span' + priceClick + '>$' + (p.price || 0).toFixed(2) + '</span></td>' +
+      '<td class="text-right inv-muted"><span' + costClick + '>$' + (p.cost || 0).toFixed(2) + '</span></td>' +
       '<td class="text-right">' + margin + '</td>' : '') +
       '<td>' + (p.active ? '<span class="inv-cat-badge inv-cat-supplement">Active</span>' : '<span class="inv-cat-badge inv-cat-other">Inactive</span>') + '</td>' +
       (_pe ? '<td><button class="inv-btn inv-btn-xs" onclick="invShowEditProduct(' + p.id + ')" title="Edit"><i class="fas fa-pen"></i></button></td>' : '') +
@@ -3273,8 +3289,8 @@ async function invRenderProductRows() {
       (p.active ? '' : '<span class="inv-cat-badge inv-cat-other">Inactive</span>') +
       '</div>' +
       '<div class="inv-stock-card-nums">' +
-      (_pf ? '<div><span class="inv-muted">Sell</span><strong>$' + (p.price || 0).toFixed(2) + '</strong></div>' +
-      '<div><span class="inv-muted">Cost</span><span>$' + (p.cost || 0).toFixed(2) + '</span></div>' +
+      (_pf ? '<div onclick="' + (_pp ? 'event.stopPropagation();invInlinePriceEdit(' + p.id + ',\'price\')' : '') + '" style="' + (_pp ? 'cursor:pointer' : '') + '"><span class="inv-muted">Sell</span><strong>$' + (p.price || 0).toFixed(2) + '</strong></div>' +
+      '<div onclick="' + (_pp ? 'event.stopPropagation();invInlinePriceEdit(' + p.id + ',\'cost\')' : '') + '" style="' + (_pp ? 'cursor:pointer' : '') + '"><span class="inv-muted">Cost</span><span>$' + (p.cost || 0).toFixed(2) + '</span></div>' +
       '<div><span class="inv-muted">Margin</span><span>' + margin + '</span></div>' : '') +
       '<div><span class="inv-muted">Unit</span><span>' + escH(p.unit_type || 'each') + '</span></div>' +
       '</div>' +
@@ -3458,10 +3474,13 @@ async function invShowEditProduct(productId) {
     body += '</div>';
 
     if (invCanViewFin()) {
+      var _pricingEditable = invCanEditPricing();
+      var _roAttr = _pricingEditable ? '' : ' readonly style="background:#F1F5F9;color:#64748B;cursor:not-allowed"';
+      var _lockIcon = _pricingEditable ? '' : ' <i class="fas fa-lock" style="color:#94A3B8;font-size:10px" title="No pricing edit permission"></i>';
       body += '<div class="inv-form-row">';
-      body += '<div class="inv-form-group"><label>Sell Price ($)</label><input type="number" step="0.01" class="inv-input" id="invEditPrice" value="' + (p.price || 0) + '"></div>';
-      body += '<div class="inv-form-group"><label>Cost ($)</label><input type="number" step="0.01" class="inv-input" id="invEditCost" value="' + (p.cost || 0) + '"></div>';
-      body += '<div class="inv-form-group"><label>Tax Rate</label><input type="number" step="0.01" class="inv-input" id="invEditTaxRate" value="' + (p.tax_rate || 0) + '" placeholder="e.g. 0.07 = 7%"></div>';
+      body += '<div class="inv-form-group"><label>Sell Price ($)' + _lockIcon + '</label><input type="number" step="0.01" class="inv-input" id="invEditPrice" value="' + (p.price || 0) + '"' + _roAttr + '></div>';
+      body += '<div class="inv-form-group"><label>Cost ($)' + _lockIcon + '</label><input type="number" step="0.01" class="inv-input" id="invEditCost" value="' + (p.cost || 0) + '"' + _roAttr + '></div>';
+      body += '<div class="inv-form-group"><label>Tax Rate' + _lockIcon + '</label><input type="number" step="0.01" class="inv-input" id="invEditTaxRate" value="' + (p.tax_rate || 0) + '" placeholder="e.g. 7 = 7%"' + _roAttr + '></div>';
       body += '</div>';
 
       // Margin preview
@@ -3579,6 +3598,100 @@ async function invSaveProduct(productId) {
   } catch(e) { invToast('Save failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 
+// ==================== INLINE PRICING EDITOR ====================
+
+function invInlinePriceEdit(productId, field) {
+  if (!invCanEditPricing()) { invToast('No pricing edit permission', 'error'); return; }
+
+  var labels = { price: 'Sell Price', cost: 'Cost', tax_rate: 'Tax Rate' };
+  var label = labels[field] || field;
+
+  // Read current value from detail display
+  var currentVal = '';
+  var elId = field === 'price' ? 'invDetailPrice' : field === 'cost' ? 'invDetailCost' : 'invDetailTaxRate';
+  var el = document.getElementById(elId);
+  if (el) {
+    currentVal = el.textContent.replace(/[$%]/g, '').trim();
+  }
+
+  var overlay = document.createElement('div');
+  overlay.id = 'invPriceEditOverlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML =
+    '<div style="background:white;border-radius:16px;padding:24px;width:100%;max-width:340px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">' +
+      '<h3 style="margin:0 0 16px;font-size:16px;color:#1E293B"><i class="fas fa-dollar-sign" style="color:#6366F1;margin-right:6px"></i>Edit ' + label + '</h3>' +
+      '<input type="number" step="0.01" id="invInlinePriceInput" class="inv-input" value="' + currentVal + '" style="font-size:18px;text-align:center;padding:12px;font-weight:700" autofocus>' +
+      (field === 'tax_rate' ? '<div style="font-size:11px;color:#94A3B8;text-align:center;margin-top:4px">Enter as percentage (e.g. 7 = 7%)</div>' : '') +
+      '<div style="display:flex;gap:8px;margin-top:16px">' +
+        '<button class="inv-btn inv-btn-outline" style="flex:1;justify-content:center;padding:10px" onclick="document.getElementById(\'invPriceEditOverlay\').remove()">Cancel</button>' +
+        '<button class="inv-btn inv-btn-primary" style="flex:1;justify-content:center;padding:10px" onclick="invSaveInlinePrice(' + productId + ',\'' + field + '\')"><i class="fas fa-check"></i> Save</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  // Focus and select
+  setTimeout(function() {
+    var inp = document.getElementById('invInlinePriceInput');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 100);
+
+  // Enter key to save
+  overlay.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { invSaveInlinePrice(productId, field); }
+    if (e.key === 'Escape') { overlay.remove(); }
+  });
+}
+window.invInlinePriceEdit = invInlinePriceEdit;
+
+async function invSaveInlinePrice(productId, field) {
+  var inp = document.getElementById('invInlinePriceInput');
+  if (!inp) return;
+  var newVal = parseFloat(inp.value) || 0;
+
+  var payload = {};
+  payload[field] = newVal;
+
+  try {
+    var resp = await invAPI.patch('/api/inventory/products/' + productId + '/pricing', payload, { headers: invHeaders() });
+    if (resp.data.success) {
+      invToast(resp.data.changes || 'Pricing updated', 'success');
+
+      // Update the displayed values in the detail modal without closing it
+      var product = resp.data.product;
+      if (product) {
+        var priceEl = document.getElementById('invDetailPrice');
+        var costEl = document.getElementById('invDetailCost');
+        var taxEl = document.getElementById('invDetailTaxRate');
+        var marginEl = document.getElementById('invDetailMargin');
+
+        if (priceEl && product.price !== undefined) priceEl.textContent = '$' + (product.price || 0).toFixed(2);
+        if (costEl && product.cost !== undefined) costEl.textContent = '$' + (product.cost || 0).toFixed(2);
+        if (taxEl && product.tax_rate !== undefined) taxEl.textContent = (product.tax_rate || 0) + '%';
+
+        // Update margin
+        if (marginEl && product.price && product.cost) {
+          var m = (((product.price - product.cost) / product.price) * 100).toFixed(1);
+          marginEl.textContent = m + '%';
+        }
+      }
+
+      // Close the edit overlay
+      var overlay = document.getElementById('invPriceEditOverlay');
+      if (overlay) overlay.remove();
+
+      // If we're on stock or products page (not in a detail modal), re-render to refresh the list
+      var detailPrice = document.getElementById('invDetailPrice');
+      if (!detailPrice) {
+        // Not in detail modal — refresh the page list
+        invRender();
+      }
+    }
+  } catch(e) {
+    invToast('Save failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+window.invSaveInlinePrice = invSaveInlinePrice;
+
 // ==================== VENDOR MANAGEMENT ====================
 
 function invShowAddVendorRow(productId) {
@@ -3658,10 +3771,13 @@ function invShowNewProduct() {
   body += '<div class="inv-form-group"><label>Unit Type</label><select class="inv-select" id="invNewUnit">' + unitOpts + '</select></div>';
   body += '</div>';
   if (invCanViewFin()) {
+    var _npEditable = invCanEditPricing();
+    var _npRo = _npEditable ? '' : ' readonly style="background:#F1F5F9;color:#64748B;cursor:not-allowed"';
+    var _npLock = _npEditable ? '' : ' <i class="fas fa-lock" style="color:#94A3B8;font-size:10px" title="No pricing edit permission"></i>';
     body += '<div class="inv-form-row">';
-    body += '<div class="inv-form-group"><label>Sell Price ($)</label><input type="number" step="0.01" class="inv-input" id="invNewPrice" value="0"></div>';
-    body += '<div class="inv-form-group"><label>Cost ($)</label><input type="number" step="0.01" class="inv-input" id="invNewCost" value="0"></div>';
-    body += '<div class="inv-form-group"><label>Tax Rate</label><input type="number" step="0.01" class="inv-input" id="invNewTaxRate" value="0" placeholder="e.g. 0.07"></div>';
+    body += '<div class="inv-form-group"><label>Sell Price ($)' + _npLock + '</label><input type="number" step="0.01" class="inv-input" id="invNewPrice" value="0"' + _npRo + '></div>';
+    body += '<div class="inv-form-group"><label>Cost ($)' + _npLock + '</label><input type="number" step="0.01" class="inv-input" id="invNewCost" value="0"' + _npRo + '></div>';
+    body += '<div class="inv-form-group"><label>Tax Rate' + _npLock + '</label><input type="number" step="0.01" class="inv-input" id="invNewTaxRate" value="0" placeholder="e.g. 7 = 7%"' + _npRo + '></div>';
     body += '</div>';
   } else {
     body += '<input type="hidden" id="invNewPrice" value="0"><input type="hidden" id="invNewCost" value="0"><input type="hidden" id="invNewTaxRate" value="0">';
