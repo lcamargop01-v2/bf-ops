@@ -2852,6 +2852,14 @@ async function invStockDrilldown(productId, locationId, field, productName) {
       if (totalHoldQty === 0) {
         body += '<p class="inv-muted" style="text-align:center;padding:20px">No active holds for this product at this location.</p>';
       }
+
+      // Add manual hold button
+      if (invCanEdit('stock')) {
+        body += '<div style="border-top:1px solid #E5E7EB;margin-top:16px;padding-top:12px;text-align:center">';
+        body += '<button class="inv-btn inv-btn-sm" style="background:#D97706;color:#fff" onclick="invShowHoldOrReserve(' + productId + ',' + locationId + ',\'' + escH(productName).replace(/'/g, "\\'") + '\',\'hold\')">';
+        body += '<i class="fas fa-lock"></i> Place Manual Hold</button>';
+        body += '</div>';
+      }
     }
 
     if (field === 'reserved') {
@@ -2870,6 +2878,14 @@ async function invStockDrilldown(productId, locationId, field, productName) {
         });
       } else {
         body += '<p class="inv-muted" style="text-align:center;padding:20px">No active reservations for this product at this location.</p>';
+      }
+
+      // Add reservation button
+      if (invCanEdit('stock')) {
+        body += '<div style="border-top:1px solid #E5E7EB;margin-top:16px;padding-top:12px;text-align:center">';
+        body += '<button class="inv-btn inv-btn-sm" style="background:#0891B2;color:#fff" onclick="invShowHoldOrReserve(' + productId + ',' + locationId + ',\'' + escH(productName).replace(/'/g, "\\'") + '\',\'reserve\')">';
+        body += '<i class="fas fa-bookmark"></i> Add Reservation</button>';
+        body += '</div>';
       }
     }
 
@@ -2897,6 +2913,136 @@ async function invStockDrilldown(productId, locationId, field, productName) {
     invShowModal('<i class="fas ' + titleIcon + '" style="color:' + titleColor + '"></i> ' + escH(productName) + ' — ' + titleText, body, '');
   } catch(e) { invToast('Failed to load stock detail: ' + (e.response?.data?.error || e.message), 'error'); }
 }
+
+// ==================== HOLD vs RESERVE EXPLAINER + FORMS ====================
+
+function invShowHoldOrReserve(productId, locationId, productName, intent) {
+  var isHold = intent === 'hold';
+
+  var body = '<div style="margin-bottom:16px;padding:14px;background:#FFF7ED;border:1px solid #FDE68A;border-radius:10px">';
+  body += '<div style="display:flex;align-items:flex-start;gap:10px">';
+  body += '<i class="fas fa-circle-info" style="color:#D97706;font-size:18px;margin-top:2px"></i>';
+  body += '<div style="font-size:13px;line-height:1.5;color:#78350F">';
+  body += '<strong style="font-size:14px">Which do you need?</strong><br><br>';
+
+  body += '<div style="display:flex;gap:12px;flex-wrap:wrap">';
+
+  // Hold card
+  body += '<div style="flex:1;min-width:200px;padding:12px;border-radius:8px;border:2px solid ' + (isHold ? '#D97706' : '#E5E7EB') + ';background:' + (isHold ? '#FFFBEB' : '#fff') + '">';
+  body += '<div style="font-weight:700;color:#92400E;margin-bottom:6px"><i class="fas fa-lock" style="color:#D97706"></i> Hold</div>';
+  body += '<div style="font-size:12px;color:#78350F">Set aside stock <strong>temporarily</strong> — not tied to a specific order. Use for damaged items, pending returns, or internal needs.</div>';
+  body += '<div style="margin-top:8px;font-size:11px;color:#92400E"><i class="fas fa-arrow-right"></i> You release it manually when done</div>';
+  if (!isHold) {
+    body += '<button class="inv-btn inv-btn-xs" style="margin-top:8px;background:#D97706;color:#fff;border:none" onclick="invShowHoldOrReserve(' + productId + ',' + locationId + ',\'' + escH(productName).replace(/'/g, "\\'") + '\',\'hold\')"><i class="fas fa-arrow-right"></i> Switch to Hold</button>';
+  }
+  body += '</div>';
+
+  // Reserve card
+  body += '<div style="flex:1;min-width:200px;padding:12px;border-radius:8px;border:2px solid ' + (!isHold ? '#0891B2' : '#E5E7EB') + ';background:' + (!isHold ? '#ECFEFF' : '#fff') + '">';
+  body += '<div style="font-weight:700;color:#155E75;margin-bottom:6px"><i class="fas fa-bookmark" style="color:#0891B2"></i> Reservation</div>';
+  body += '<div style="font-size:12px;color:#164E63">Save stock <strong>for a specific customer</strong> who hasn\'t placed an order yet. Use when a customer calls to request something.</div>';
+  body += '<div style="margin-top:8px;font-size:11px;color:#155E75"><i class="fas fa-arrow-right"></i> Fulfilled when they order, or cancelled</div>';
+  if (isHold) {
+    body += '<button class="inv-btn inv-btn-xs" style="margin-top:8px;background:#0891B2;color:#fff;border:none" onclick="invShowHoldOrReserve(' + productId + ',' + locationId + ',\'' + escH(productName).replace(/'/g, "\\'") + '\',\'reserve\')"><i class="fas fa-arrow-right"></i> Switch to Reservation</button>';
+  }
+  body += '</div>';
+
+  body += '</div>'; // flex row
+  body += '</div></div></div>'; // info box
+
+  // Product info
+  body += '<div style="padding:10px;background:#F1F5F9;border-radius:8px;margin-bottom:12px;font-size:13px">';
+  body += '<strong>' + escH(productName) + '</strong>';
+  var locName = '';
+  invLocations.forEach(function(l) { if (l.id == locationId) locName = l.name; });
+  body += ' <span class="inv-loc-badge">' + escH(locName) + '</span>';
+  body += '</div>';
+
+  // Form
+  body += '<div class="inv-form-group"><label>Quantity *</label><input type="number" min="1" class="inv-input" id="invHoldResQty" placeholder="How many units?" inputmode="numeric"></div>';
+
+  if (isHold) {
+    body += '<div class="inv-form-group"><label>Reason *</label><select class="inv-select" id="invHoldReason">';
+    body += '<option value="manual">Manual hold</option>';
+    body += '<option value="damaged">Damaged / Defective</option>';
+    body += '<option value="pending_return">Pending Return</option>';
+    body += '<option value="quality_check">Quality Check</option>';
+    body += '<option value="other">Other</option>';
+    body += '</select></div>';
+  } else {
+    // Reservation — customer picker
+    body += '<div class="inv-form-group"><label>Customer</label><input type="text" class="inv-input" id="invResCustomerSearch" placeholder="Search customer..." oninput="invSearchCustomersForRes()"><select class="inv-select" id="invResCustomer" style="margin-top:4px"><option value="">— No specific customer —</option></select></div>';
+  }
+
+  body += '<div class="inv-form-group"><label>Notes</label><textarea class="inv-input" id="invHoldResNotes" rows="2" placeholder="Optional notes..."></textarea></div>';
+
+  var titleIcon = isHold ? 'fa-lock' : 'fa-bookmark';
+  var titleColor = isHold ? '#D97706' : '#0891B2';
+  var titleText = isHold ? 'Place Hold' : 'Add Reservation';
+  var btnColor = isHold ? '#D97706' : '#0891B2';
+
+  var footer = '<button class="inv-btn" style="background:' + btnColor + ';color:#fff" onclick="invSubmitHoldOrReserve(' + productId + ',' + locationId + ',\'' + (isHold ? 'hold' : 'reserve') + '\')"><i class="fas ' + titleIcon + '"></i> ' + titleText + '</button>';
+
+  invShowModal('<i class="fas ' + titleIcon + '" style="color:' + titleColor + '"></i> ' + titleText + ' — ' + escH(productName), body, footer);
+}
+window.invShowHoldOrReserve = invShowHoldOrReserve;
+
+var _invResSearchTimeout = null;
+function invSearchCustomersForRes() {
+  clearTimeout(_invResSearchTimeout);
+  _invResSearchTimeout = setTimeout(async function() {
+    var q = (document.getElementById('invResCustomerSearch') || {}).value || '';
+    if (q.length < 2) return;
+    try {
+      var resp = await invAPI.get('/api/customers?search=' + encodeURIComponent(q) + '&limit=20', { headers: invHeaders() });
+      var customers = resp.data.customers || resp.data || [];
+      var sel = document.getElementById('invResCustomer');
+      if (!sel) return;
+      sel.innerHTML = '<option value="">— No specific customer —</option>';
+      customers.forEach(function(c) {
+        sel.innerHTML += '<option value="' + c.id + '">' + escH(c.business_name || c.name || 'Customer #' + c.id) + '</option>';
+      });
+      if (customers.length === 1) sel.value = customers[0].id;
+    } catch(e) {}
+  }, 300);
+}
+window.invSearchCustomersForRes = invSearchCustomersForRes;
+
+async function invSubmitHoldOrReserve(productId, locationId, type) {
+  var qty = parseInt((document.getElementById('invHoldResQty') || {}).value);
+  var notes = (document.getElementById('invHoldResNotes') || {}).value || '';
+
+  if (!qty || qty <= 0) { invToast('Enter a quantity', 'warning'); return; }
+
+  try {
+    if (type === 'hold') {
+      var reason = (document.getElementById('invHoldReason') || {}).value || 'manual';
+      await invAPI.post('/api/inventory/holds', {
+        product_id: productId,
+        location_id: locationId,
+        qty: qty,
+        reason: reason,
+        notes: notes || null
+      }, { headers: invHeaders() });
+      invToast(qty + ' unit(s) placed on hold', 'success');
+    } else {
+      var customerId = parseInt((document.getElementById('invResCustomer') || {}).value) || null;
+      await invAPI.post('/api/inventory/reservations', {
+        product_id: productId,
+        location_id: locationId,
+        qty: qty,
+        customer_id: customerId,
+        notes: notes || null
+      }, { headers: invHeaders() });
+      invToast(qty + ' unit(s) reserved', 'success');
+    }
+    invCloseModal();
+    invRender();
+  } catch(e) {
+    invToast('Failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+window.invSubmitHoldOrReserve = invSubmitHoldOrReserve;
 
 // Show incoming POs for a product
 async function invShowIncoming(productId, locationId, productName) {
@@ -3022,16 +3168,22 @@ async function invShowProductDetail(productId) {
     if (stock.length === 0) {
       body += '<p class="inv-muted">No stock records for this product.</p>';
     } else {
-      body += '<table class="inv-table inv-table-compact"><thead><tr><th>Location</th><th>On Hand</th><th>Hold</th><th>Reserved</th><th>Available</th><th>Incoming</th></tr></thead><tbody>';
+      var _canEditStock = invCanEdit('stock');
+      body += '<table class="inv-table inv-table-compact"><thead><tr><th>Location</th><th>On Hand</th><th>Hold</th><th>Reserved</th><th>Available</th><th>Incoming</th>' + (_canEditStock ? '<th></th>' : '') + '</tr></thead><tbody>';
       stock.forEach(function(s) {
         var avail = (s.qty_on_hand || 0) - (s.qty_on_hold || 0) - (s.qty_reserved || 0);
         var locIncoming = incomingData.filter(function(i) { return i.location_id === s.location_id; }).reduce(function(sum, i) { return sum + (i.qty_remaining || i.qty_ordered - i.qty_received || 0); }, 0);
+        var _pnEsc = escH(pName).replace(/'/g, "\\'");
         body += '<tr><td><span class="inv-loc-badge">' + escH(s.location_code) + '</span> ' + escH(s.location_name) + '</td>' +
-          '<td><span class="inv-num-click" onclick="invStockDrilldown(' + productId + ',' + s.location_id + ',\'all\',\'' + escH(pName).replace(/'/g, "\\'") + '\')"><strong>' + s.qty_on_hand + '</strong></span></td>' +
-          '<td>' + (s.qty_on_hold ? '<span class="inv-hold-badge inv-num-click" onclick="invStockDrilldown(' + productId + ',' + s.location_id + ',\'on_hold\',\'' + escH(pName).replace(/'/g, "\\'") + '\')">' + s.qty_on_hold + '</span>' : '0') + '</td>' +
-          '<td>' + (s.qty_reserved ? '<span class="inv-res-badge inv-num-click" onclick="invStockDrilldown(' + productId + ',' + s.location_id + ',\'reserved\',\'' + escH(pName).replace(/'/g, "\\'") + '\')">' + s.qty_reserved + '</span>' : '0') + '</td>' +
+          '<td><span class="inv-num-click" onclick="invStockDrilldown(' + productId + ',' + s.location_id + ',\'all\',\'' + _pnEsc + '\')"><strong>' + s.qty_on_hand + '</strong></span></td>' +
+          '<td>' + (s.qty_on_hold ? '<span class="inv-hold-badge inv-num-click" onclick="invStockDrilldown(' + productId + ',' + s.location_id + ',\'on_hold\',\'' + _pnEsc + '\')">' + s.qty_on_hold + '</span>' : '0') + '</td>' +
+          '<td>' + (s.qty_reserved ? '<span class="inv-res-badge inv-num-click" onclick="invStockDrilldown(' + productId + ',' + s.location_id + ',\'reserved\',\'' + _pnEsc + '\')">' + s.qty_reserved + '</span>' : '0') + '</td>' +
           '<td class="' + (avail <= 0 ? 'inv-danger' : '') + '"><strong>' + avail + '</strong></td>' +
-          '<td>' + (locIncoming > 0 ? '<span class="inv-incoming-badge inv-num-click" onclick="invShowIncoming(' + productId + ',' + s.location_id + ',\'' + escH(pName).replace(/'/g, "\\'") + '\')">' + locIncoming + '</span>' : '<span class="inv-muted">—</span>') + '</td>' +
+          '<td>' + (locIncoming > 0 ? '<span class="inv-incoming-badge inv-num-click" onclick="invShowIncoming(' + productId + ',' + s.location_id + ',\'' + _pnEsc + '\')">' + locIncoming + '</span>' : '<span class="inv-muted">—</span>') + '</td>' +
+          (_canEditStock ? '<td style="white-space:nowrap">' +
+            '<button class="inv-btn inv-btn-xs" style="background:#D97706;color:#fff;padding:2px 5px;font-size:10px" onclick="invShowHoldOrReserve(' + productId + ',' + s.location_id + ',\'' + _pnEsc + '\',\'hold\')" title="Place Hold"><i class="fas fa-lock"></i></button> ' +
+            '<button class="inv-btn inv-btn-xs" style="background:#0891B2;color:#fff;padding:2px 5px;font-size:10px" onclick="invShowHoldOrReserve(' + productId + ',' + s.location_id + ',\'' + _pnEsc + '\',\'reserve\')" title="Reserve"><i class="fas fa-bookmark"></i></button>' +
+            '</td>' : '') +
           '</tr>';
       });
       body += '</tbody></table>';
