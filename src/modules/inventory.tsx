@@ -2841,12 +2841,14 @@ app.post('/api/inventory/recalculate-holds', async (c) => {
     // === Calculate expected qty_on_hold per product per location ===
 
     // 1. Manual/logistics orders (held at ALDI warehouse, location 2)
+    //    Exclude archived orders — archiving means "done with this order"
     const manualHolds = await db.prepare(`
       SELECT oi.product_id, 2 as location_id, SUM(oi.quantity) as hold_qty
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.id
       LEFT JOIN pos_sales ps ON ps.order_id = o.id
       WHERE o.status IN ('new', 'confirmed', 'scheduled')
+        AND (o.archived = 0 OR o.archived IS NULL)
         AND ps.id IS NULL
       GROUP BY oi.product_id
     `).all()
@@ -2861,6 +2863,7 @@ app.post('/api/inventory/recalculate-holds', async (c) => {
     `).all()
 
     // 3. POS delivery orders (completed sale, order still pending)
+    //    Exclude archived orders
     const deliveryHolds = await db.prepare(`
       SELECT psi.product_id, psi.location_id, SUM(psi.quantity) as hold_qty
       FROM pos_sale_items psi
@@ -2868,7 +2871,7 @@ app.post('/api/inventory/recalculate-holds', async (c) => {
       LEFT JOIN orders o ON ps.order_id = o.id
       WHERE ps.status = 'completed'
         AND ps.fulfillment_type IN ('delivery', 'dc_pickup')
-        AND (o.id IS NULL OR o.status IN ('new', 'confirmed', 'scheduled'))
+        AND (o.id IS NULL OR (o.status IN ('new', 'confirmed', 'scheduled') AND (o.archived = 0 OR o.archived IS NULL)))
       GROUP BY psi.product_id, psi.location_id
     `).all()
 
