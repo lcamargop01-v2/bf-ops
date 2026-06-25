@@ -1437,31 +1437,39 @@ app.post('/api/pos/customer-merge', async (c) => {
   const merge = await db.prepare('SELECT * FROM customers WHERE id = ?').bind(mergeId).first()
   if (!keep || !merge) return c.json({ error: 'One or both customers not found' }, 404)
 
-  // Move all related records from merge → keep
-  await db.prepare('UPDATE addresses SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
-  await db.prepare('UPDATE orders SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
-  await db.prepare('UPDATE pos_sales SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
-  await db.prepare('UPDATE pos_refunds SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
-  await db.prepare('UPDATE pos_price_rules SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
-  await db.prepare('UPDATE customer_account_transactions SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
-  await db.prepare('UPDATE pos_payment_tokens SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
-  await db.prepare('UPDATE pos_stock_reservations SET requested_by = ? WHERE requested_by = ?').bind(keepId, mergeId).run()
+  // Move all related records from merge → keep (each wrapped to handle missing tables)
+  const safeMerge = async (sql: string, ...binds: any[]) => {
+    try { await db.prepare(sql).bind(...binds).run() } catch (e) { /* table may not exist */ }
+  }
+  await safeMerge('UPDATE addresses SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
+  await safeMerge('UPDATE orders SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
+  await safeMerge('UPDATE pos_sales SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
+  await safeMerge('UPDATE pos_refunds SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
+  await safeMerge('UPDATE pos_price_rules SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
+  await safeMerge('UPDATE customer_account_transactions SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
+  await safeMerge('UPDATE pos_payment_tokens SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
+  await safeMerge('UPDATE pos_stock_reservations SET requested_by = ? WHERE requested_by = ?', keepId, mergeId)
+  await safeMerge('UPDATE recurring_schedules SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
+  await safeMerge('UPDATE standing_orders SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
+  await safeMerge('UPDATE returns SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
 
   // Merge account balances
-  const mergeAcct = await db.prepare('SELECT * FROM customer_accounts WHERE customer_id = ?').bind(mergeId).first<any>()
-  if (mergeAcct) {
-    const keepAcct = await db.prepare('SELECT * FROM customer_accounts WHERE customer_id = ?').bind(keepId).first<any>()
-    if (keepAcct) {
-      await db.prepare('UPDATE customer_accounts SET balance = balance + ?, credit_limit = MAX(credit_limit, ?), updated_at = CURRENT_TIMESTAMP WHERE customer_id = ?')
-        .bind(mergeAcct.balance || 0, mergeAcct.credit_limit || 0, keepId).run()
-      await db.prepare('DELETE FROM customer_accounts WHERE customer_id = ?').bind(mergeId).run()
-    } else {
-      await db.prepare('UPDATE customer_accounts SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+  try {
+    const mergeAcct = await db.prepare('SELECT * FROM customer_accounts WHERE customer_id = ?').bind(mergeId).first<any>()
+    if (mergeAcct) {
+      const keepAcct = await db.prepare('SELECT * FROM customer_accounts WHERE customer_id = ?').bind(keepId).first<any>()
+      if (keepAcct) {
+        await db.prepare('UPDATE customer_accounts SET balance = balance + ?, credit_limit = MAX(credit_limit, ?), updated_at = CURRENT_TIMESTAMP WHERE customer_id = ?')
+          .bind(mergeAcct.balance || 0, mergeAcct.credit_limit || 0, keepId).run()
+        await db.prepare('DELETE FROM customer_accounts WHERE customer_id = ?').bind(mergeId).run()
+      } else {
+        await db.prepare('UPDATE customer_accounts SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+      }
     }
-  }
+  } catch (e) { /* customer_accounts may not exist */ }
 
   // CRM orgs
-  await db.prepare('UPDATE crm_organizations SET customer_id = ? WHERE customer_id = ?').bind(keepId, mergeId).run()
+  await safeMerge('UPDATE crm_organizations SET customer_id = ? WHERE customer_id = ?', keepId, mergeId)
 
   // Merge tags (combine unique tags)
   const keepTags = ((keep as any).tags || '').split(',').map((t: string) => t.trim()).filter((t: string) => t)

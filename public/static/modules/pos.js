@@ -1855,6 +1855,7 @@ function openPayment() {
       '<div class="pos-pay-method' + (isDCMode() ? ' active' : '') + '" data-method="credit_card"><i class="fas fa-credit-card"></i><span>Credit Card</span></div>' +
       '<div class="pos-pay-method" data-method="debit_card"><i class="far fa-credit-card"></i><span>Debit Card</span></div>' +
       (isDCMode() ? '' : '<div class="pos-pay-method" data-method="check"><i class="fas fa-money-check"></i><span>Check</span></div>') +
+      '<div class="pos-pay-method" data-method="zelle"><i class="fas fa-bolt"></i><span>Zelle</span></div>' +
       '<div class="pos-pay-method" data-method="account"' + acctCls + '><i class="fas fa-building"></i><span>On Account</span></div>' +
       (isDCMode() ? '' : '<div class="pos-pay-method" data-method="split"><i class="fas fa-divide"></i><span>Split</span></div>') +
     '</div>' +
@@ -1941,6 +1942,15 @@ function renderPayDetails() {
   } else if (method === 'check') {
     detailEl.innerHTML = '<div class="pos-pay-amount"><label>Check Number</label>' +
       '<input type="text" id="posCheckNumber" placeholder="Check #" style="font-size:16px"></div>';
+
+  } else if (method === 'zelle') {
+    detailEl.innerHTML = '<div style="text-align:center;padding:16px">' +
+      '<i class="fas fa-bolt" style="font-size:28px;color:#6D28D9;margin-bottom:8px;display:block"></i>' +
+      '<div style="font-size:15px;font-weight:600;color:#6D28D9">Zelle Payment</div>' +
+      '<div style="font-size:13px;color:var(--pos-gray-500);margin-top:6px">Confirm Zelle payment of <strong>$' + totals.total.toFixed(2) + '</strong> has been sent/received.</div>' +
+      '<div class="pos-pay-amount" style="margin-top:12px"><label>Reference / Sender Name (optional)</label>' +
+        '<input type="text" id="posZelleRef" placeholder="e.g. John Doe" style="font-size:14px"></div>' +
+    '</div>';
 
   } else if (method === 'account') {
     var bal = _s.customerAcct ? _s.customerAcct.balance : 0;
@@ -2036,6 +2046,9 @@ function processPayment() {
     if (ccFeeForPayment > 0) { body.cc_convenience_fee = ccFeeForPayment; }
   } else if (_s.payMethod === 'check') {
     body.payments = [{ method: 'check', amount: totals.total, check_number: gv('posCheckNumber') || null }];
+    body.amount_paid = totals.total;
+  } else if (_s.payMethod === 'zelle') {
+    body.payments = [{ method: 'zelle', amount: totals.total, check_number: gv('posZelleRef') || null }];
     body.amount_paid = totals.total;
   } else if (_s.payMethod === 'account') {
     body.payments = [{ method: 'account', amount: totals.total }];
@@ -2250,15 +2263,45 @@ function showRefundModal(saleId) {
 
 // ==================== CLOSE SESSION ====================
 function closeSession() {
-  if (!confirm('Close this register session?')) return;
-  var closingCash = prompt('Enter closing cash count ($):', '0') || '0';
-  API.put('/pos/sessions/' + _s.session.id + '/close', { closing_cash: parseFloat(closingCash) || 0, notes: '' }).then(function() {
-    _s.session = null;
-    localStorage.removeItem('bf_pos_session');
-    _s.cart = []; _s.warnings = [];
-    renderOpenSession();
-    toast('Register closed');
-  }).catch(function(err) { toast('Failed to close: ' + errMsg(err), 'error'); });
+  var sessionId = _s.session && _s.session.id;
+  if (!sessionId) { toast('No active session to close', 'error'); return; }
+
+  var html = '<div style="text-align:center;margin-bottom:16px">' +
+    '<div style="font-size:14px;color:var(--pos-gray-500)">Close Register Session</div>' +
+    '<div style="font-size:12px;color:var(--pos-gray-400);margin-top:4px">Enter the closing cash count to reconcile.</div>' +
+  '</div>' +
+  '<div class="pos-pay-amount"><label>Closing Cash Count ($)</label>' +
+    '<input type="number" id="posClosingCash" value="0" step="0.01" min="0" style="font-size:24px;text-align:center">' +
+  '</div>' +
+  '<div class="pos-pay-amount" style="margin-top:8px"><label>Notes (optional)</label>' +
+    '<input type="text" id="posClosingNotes" placeholder="Any notes about this session..." style="font-size:14px">' +
+  '</div>';
+
+  showModal('Close Register', html,
+    '<button class="pos-btn" style="background:var(--pos-gray-200);color:var(--pos-gray-700);flex:1" id="posCloseCancel">Cancel</button>' +
+    '<button class="pos-btn" style="background:#DC2626;color:white;flex:2" id="posCloseConfirm"><i class="fas fa-power-off"></i> Close Session</button>'
+  );
+
+  on('posCloseCancel', 'click', closeModal);
+  on('posCloseConfirm', 'click', function() {
+    var cashVal = parseFloat(document.getElementById('posClosingCash').value) || 0;
+    var notesVal = (document.getElementById('posClosingNotes').value || '').trim();
+    var btn = document.getElementById('posCloseConfirm');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Closing...'; }
+    API.put('/pos/sessions/' + sessionId + '/close', { closing_cash: cashVal, notes: notesVal }).then(function() {
+      closeModal();
+      _s.session = null;
+      localStorage.removeItem('bf_pos_session');
+      _s.cart = []; _s.warnings = [];
+      renderOpenSession();
+      toast('Register closed');
+    }).catch(function(err) {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-power-off"></i> Close Session'; }
+      toast('Failed to close: ' + errMsg(err), 'error');
+    });
+  });
+
+  setTimeout(function() { var ci = document.getElementById('posClosingCash'); if (ci) ci.focus(); }, 100);
 }
 
 // ==================== DASHBOARD ====================
@@ -3142,7 +3185,12 @@ function renderCustomerSheet(c, addrs, history, rules, acct, extra) {
 
   // Add address button
   if (c.id) {
-    on('posCustAddAddr', 'click', function() { openAddressForm(c.id, null); });
+    on('posCustAddAddr', 'click', function() {
+      // Ensure Addresses tab is active before opening form
+      var addrTab = document.querySelector('.pos-cust-tab-btn[data-tab="addresses"]');
+      if (addrTab && !addrTab.classList.contains('active')) addrTab.click();
+      openAddressForm(c.id, null);
+    });
   } else {
     on('posCustAddAddr', 'click', function() { toast('Save the customer first, then add addresses', 'error'); });
   }
@@ -3367,6 +3415,9 @@ function openAddressForm(custId, addr) {
     var existing = document.getElementById('posCustAddrForm');
     if (existing) existing.remove();
     list.insertAdjacentHTML('afterbegin', formHtml);
+    // Scroll the form into view
+    var formEl = document.getElementById('posCustAddrForm');
+    if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   on('posAddrCancelBtn', 'click', function() {

@@ -41,6 +41,9 @@ API.interceptors.request.use(function(config) {
   var urlFeature = null;
   var url = config.url || '';
   if (url.indexOf('/customers') !== -1 || url.indexOf('/addresses') !== -1) urlFeature = 'customers';
+  // Allow drivers to assign driver/truck to routes
+  var isDriver = window.currentUser && window.currentUser.role === 'driver';
+  if (isDriver && url.match(/\/routes\/\d+$/) && method === 'put') return config;
   if (!logCanEdit() && !(urlFeature && logCanEdit(urlFeature))) {
     showToast('View only — changes are not allowed', 'warning');
     return Promise.reject({ __viewOnly: true, message: 'View-only mode: write operations blocked' });
@@ -12343,7 +12346,9 @@ async function showAssignDriverToRoute(routeId, currentDriverId) {
 }
 
 async function submitAssignDriver(routeId) {
-  if (logViewOnlyGuard('routes')) return;
+  // Allow drivers to assign/change driver (even without full route edit permission)
+  var isDriver = window.currentUser && window.currentUser.role === 'driver';
+  if (!isDriver && logViewOnlyGuard('routes')) return;
   const driverId = parseInt(document.getElementById('routeAssignDriver')?.value) || null;
   try {
     await API.put(`/routes/${routeId}`, { driver_id: driverId });
@@ -15706,6 +15711,7 @@ async function whPrintPackingList(routeId) {
     stops.forEach(s => { if (s.items) s.items.forEach(i => { totalItems += i.quantity; }); });
 
     const printWin = window.open('', '_blank', 'width=800,height=900');
+    if (!printWin) { showToast('Popup blocked — please allow popups for this site and try again', 'error'); return; }
     printWin.document.write(`<!DOCTYPE html><html><head><title>Packing List - ${r.route_number||'Route'}</title>
     <style>
       * { margin:0; padding:0; box-sizing:border-box; }
@@ -15760,6 +15766,7 @@ async function whPrintPackingList(routeId) {
     setTimeout(() => printWin.print(), 400);
   } catch(e) { showToast('Error: ' + (e.response?.data?.error || e.message), 'error'); }
 }
+window.whPrintPackingList = whPrintPackingList;
 
 // ---- RETURNS ----
 function whRenderReturns(ct, d) {

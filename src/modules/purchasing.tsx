@@ -198,6 +198,36 @@ app.put('/api/purchasing/orders/:id', async (c) => {
   return c.json({ success: true })
 })
 
+// Delete PO (and all related items, receivings, images, bills, freight)
+app.delete('/api/purchasing/orders/:id', async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param('id'))
+  const po = await db.prepare('SELECT id, po_number, status FROM purchase_orders WHERE id = ?').bind(id).first() as any
+  if (!po) return c.json({ error: 'Purchase order not found' }, 404)
+  // Don't allow deleting POs that have been received (items already in stock)
+  if (['received'].includes(po.status)) {
+    const totalReceived = await db.prepare('SELECT COALESCE(SUM(qty_received),0) as total FROM po_items WHERE po_id = ?').bind(id).first() as any
+    if (totalReceived?.total > 0) {
+      return c.json({ error: 'Cannot delete PO with received items — inventory has already been adjusted. Cancel it instead.' }, 400)
+    }
+  }
+  // Delete in dependency order
+  try {
+    await db.prepare('DELETE FROM po_freight_allocations WHERE freight_id IN (SELECT id FROM po_freight_charges WHERE po_id = ?)').bind(id).run()
+    await db.prepare('DELETE FROM po_freight_charges WHERE po_id = ?').bind(id).run()
+    await db.prepare('DELETE FROM po_bill_items WHERE bill_id IN (SELECT id FROM po_bills WHERE po_id = ?)').bind(id).run()
+    await db.prepare('DELETE FROM po_bills WHERE po_id = ?').bind(id).run()
+    await db.prepare('DELETE FROM po_images WHERE po_id = ?').bind(id).run()
+    await db.prepare('DELETE FROM po_receiving_items WHERE receiving_id IN (SELECT id FROM po_receiving WHERE po_id = ?)').bind(id).run()
+    await db.prepare('DELETE FROM po_receiving WHERE po_id = ?').bind(id).run()
+    await db.prepare('DELETE FROM po_items WHERE po_id = ?').bind(id).run()
+    await db.prepare('DELETE FROM purchase_orders WHERE id = ?').bind(id).run()
+  } catch (e: any) {
+    return c.json({ error: 'Failed to delete PO', detail: e?.message || String(e) }, 500)
+  }
+  return c.json({ success: true, deleted_po: po.po_number })
+})
+
 // Update PO status
 app.post('/api/purchasing/orders/:id/status', async (c) => {
   const db = c.env.DB

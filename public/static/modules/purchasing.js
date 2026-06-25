@@ -739,6 +739,7 @@ function poRenderOrderDetail(data) {
   html += '<button class="po-btn po-btn-outline po-btn-sm" onclick="poShowCreateBill(' + po.id + ')"><i class="fas fa-file-invoice-dollar"></i> Create Bill</button>';
   html += '<button class="po-btn po-btn-outline po-btn-sm" onclick="poShowCreateFreight(' + po.id + ')"><i class="fas fa-truck-loading"></i> Add Freight</button>';
   html += '<button class="po-btn po-btn-outline po-btn-sm" onclick="poShowUploadImage(' + po.id + ')"><i class="fas fa-camera"></i> Photo</button>';
+  html += '<button class="po-btn po-btn-outline po-btn-sm" style="color:#DC2626;border-color:#DC2626" onclick="poDeletePO(' + po.id + ',\'' + poEsc(po.po_number) + '\')"><i class="fas fa-trash"></i> Delete</button>';
   html += '</div></div>';
 
   // Info grid
@@ -1467,6 +1468,18 @@ async function poDeleteBill(billId, billNumber) {
   } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 window.poDeleteBill = poDeleteBill;
+
+// Delete entire Purchase Order
+async function poDeletePO(poId, poNumber) {
+  if (!confirm('Delete purchase order ' + poNumber + '?\n\nThis will permanently remove the PO and all associated items, receivings, bills, freight charges, and images.\n\nThis cannot be undone.')) return;
+  if (!confirm('Are you absolutely sure? Type OK to confirm.')) return;
+  try {
+    await poAPI.delete('/api/purchasing/orders/' + poId, { headers: poHeaders() });
+    poToast('Purchase order ' + poNumber + ' deleted');
+    poNav('orders');
+  } catch(e) { poToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
+}
+window.poDeletePO = poDeletePO;
 
 // Edit bill — opens editable modal similar to create bill
 async function poEditBill(billId) {
