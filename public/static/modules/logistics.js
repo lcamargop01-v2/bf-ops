@@ -17873,6 +17873,9 @@ var _todayData = null;
 var _todayRefreshTimer = null;
 
 async function renderToday() {
+  currentPage = 'today'; // Track for auto-refresh guard
+  if (_todayRefreshTimer) { clearInterval(_todayRefreshTimer); _todayRefreshTimer = null; }
+  soDashCleanup(); // Stop SO Dashboard timer if switching from there
   var el = document.getElementById('mainContent') || document.getElementById('pageContent');
   if (!el) return;
   el.innerHTML = '<div style="padding:60px;text-align:center"><div style="font-size:48px;margin-bottom:16px">☕</div><div style="font-size:18px;color:#6B7280;font-weight:600">Loading your morning briefing...</div></div>';
@@ -17881,9 +17884,9 @@ async function renderToday() {
     var resp = await API.get('/today');
     _todayData = resp.data;
     todayRender();
-    // Auto-refresh every 30 seconds
-    if (_todayRefreshTimer) clearInterval(_todayRefreshTimer);
+    // Auto-refresh every 30 seconds (self-stops when page changes)
     _todayRefreshTimer = setInterval(async function() {
+      if (currentPage !== 'today') { clearInterval(_todayRefreshTimer); _todayRefreshTimer = null; return; }
       try {
         var r = await API.get('/today');
         _todayData = r.data;

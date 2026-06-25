@@ -470,9 +470,12 @@ function _posSwitchDCView(viewId) {
     return;
   }
 
-  // POS-native view — hide logistics pageContent, restore pos-view display
+  // POS-native view — hide logistics pageContent, stop logistics timers, restore pos-view display
   var pc2 = document.getElementById('pageContent');
   if (pc2) { pc2.style.display = 'none'; pc2.innerHTML = ''; }
+  // Stop any logistics auto-refresh timers (SO Dashboard, Today, etc.)
+  if (typeof window.soDashCleanup === 'function') window.soDashCleanup();
+  if (window._todayRefreshTimer) { clearInterval(window._todayRefreshTimer); window._todayRefreshTimer = null; }
   document.querySelectorAll('.pos-view').forEach(function(v) { v.style.display = ''; });
   switchView(viewId);
 }
