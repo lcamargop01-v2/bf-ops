@@ -646,6 +646,8 @@
 .inv-batch-indicator:hover { background: #E0E7FF; }
 .inv-batch-indicator.inv-batch-none { color: #94A3B8; background: #F1F5F9; }
 .inv-batch-indicator.inv-batch-none:hover { background: #E2E8F0; color: #64748B; }
+.inv-batch-indicator.inv-batch-warning { color: #D97706; background: #FEF3C7; }
+.inv-batch-indicator.inv-batch-warning:hover { background: #FDE68A; color: #92400E; }
 
 /* Quick Count status badges (NEW / OUT OF STOCK) */
 .inv-count-badge {

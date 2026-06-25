@@ -634,14 +634,18 @@ function invRenderQuickCount() {
     // Batch info for this product
     var bs = invBatchSummaryMap[s.product_id];
     var batchBadge = '';
+    // Categories that typically use batches (hay, shavings, grain)
+    var _batchCat = { hay: 1, shavings: 1, grain: 1 };
+    var _needsBatches = !!_batchCat[s.category];
     if (bs && bs.batch_count > 0) {
       var unbatched = (s.qty_on_hand || 0) - (bs.batched_qty || 0);
       batchBadge = '<span class="inv-batch-indicator" onclick="event.stopPropagation();invCountViewBatches(' + s.product_id + ')" title="' + escH(bs.batch_detail) + '">' +
         '<i class="fas fa-layer-group"></i> ' + bs.batch_count + ' batch' + (bs.batch_count > 1 ? 'es' : '') + ' (' + bs.batched_qty + ')' +
         (unbatched > 0 ? ' · <span style="color:#D97706">' + unbatched + ' unbatched</span>' : '') + '</span>';
-    } else if (s.qty_on_hand > 0) {
-      batchBadge = '<span class="inv-batch-indicator inv-batch-none" onclick="event.stopPropagation();invCountViewBatches(' + s.product_id + ')" title="No batches — click to add">' +
-        '<i class="fas fa-layer-group"></i> No batches</span>';
+    } else if (s.qty_on_hand > 0 && _needsBatches) {
+      // Only show "No batches" warning for hay/shavings/grain — these SHOULD have batches
+      batchBadge = '<span class="inv-batch-indicator inv-batch-none inv-batch-warning" onclick="event.stopPropagation();invCountViewBatches(' + s.product_id + ')" title="No batches — click to add">' +
+        '<i class="fas fa-exclamation-triangle"></i> No batches — tap to add</span>';
     }
 
     // Visual indicator for new products (no stock row) or out-of-stock
@@ -1267,6 +1271,43 @@ async function invDeleteBatch(batchId, productId) {
 }
 window.invDeleteBatch = invDeleteBatch;
 
+// Delete batch from the Batches list page — prompts with choice to adjust stock or not
+async function invDeleteBatchFromList(batchId, batchNumber, qty) {
+  // Show modal with two options
+  var body = '<div style="text-align:center;padding:8px 0">' +
+    '<i class="fas fa-exclamation-triangle" style="font-size:32px;color:#D97706;margin-bottom:12px;display:block"></i>' +
+    '<p style="font-size:15px;font-weight:600;margin:0 0 8px">Delete batch ' + escH(batchNumber) + '?</p>' +
+    '<p style="font-size:13px;color:#64748B;margin:0 0 16px">This batch has <strong>' + qty + '</strong> unit' + (qty !== 1 ? 's' : '') + '.</p>' +
+    '<div style="display:flex;flex-direction:column;gap:10px">' +
+    '<button id="invDelBatchTrackOnly" class="inv-btn inv-btn-primary" style="width:100%;padding:14px;font-size:14px">' +
+    '<i class="fas fa-eraser"></i> Remove Batch Record Only<br><span style="font-size:11px;font-weight:400;opacity:0.85">Stock stays the same — just removes the batch tracking</span></button>' +
+    '<button id="invDelBatchAndStock" class="inv-btn inv-btn-danger" style="width:100%;padding:14px;font-size:14px;background:#DC2626;border-color:#DC2626">' +
+    '<i class="fas fa-trash"></i> Delete Batch + Reduce Stock<br><span style="font-size:11px;font-weight:400;opacity:0.85">Removes batch AND subtracts ' + qty + ' from on-hand stock</span></button>' +
+    '<button id="invDelBatchCancel" class="inv-btn inv-btn-outline" style="width:100%;padding:10px;font-size:13px">' +
+    '<i class="fas fa-times"></i> Cancel</button>' +
+    '</div></div>';
+  invShowModal('<i class="fas fa-layer-group"></i> Delete Batch', body, '');
+
+  // Bind events
+  var doDelete = async function(adjustStock) {
+    invCloseModal();
+    try {
+      var url = '/api/inventory/batches/' + batchId;
+      if (adjustStock) url += '?adjust_stock=1';
+      await invAPI.delete(url, { headers: invHeaders() });
+      invToast('Batch ' + batchNumber + ' deleted' + (adjustStock ? ' (stock adjusted)' : ''));
+      invRender(); // Refresh the batches page
+    } catch(e) { invToast('Delete failed: ' + (e.response?.data?.error || e.message), 'error'); }
+  };
+  var el1 = document.getElementById('invDelBatchTrackOnly');
+  if (el1) el1.addEventListener('click', function() { doDelete(false); });
+  var el2 = document.getElementById('invDelBatchAndStock');
+  if (el2) el2.addEventListener('click', function() { doDelete(true); });
+  var el3 = document.getElementById('invDelBatchCancel');
+  if (el3) el3.addEventListener('click', function() { invCloseModal(); });
+}
+window.invDeleteBatchFromList = invDeleteBatchFromList;
+
 function invCountRequestDelete(productId, productName) {
   var reasons = [
     { val: 'duplicate', label: 'Duplicate product' },
@@ -1593,7 +1634,8 @@ async function invRenderBatches() {
         '<td>' +
         '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invShowCaptureBatchImage(' + b.id + ')" title="Add photo"><i class="fas fa-camera"></i></button> ' +
         '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invShowBatchImages(' + b.id + ')" title="View photos"><i class="fas fa-images"></i></button> ' +
-        '<button class="inv-btn inv-btn-xs" onclick="invShowSplitBatch(' + b.id + ',' + b.qty + ',\'' + escH(b.batch_number) + '\',\'' + escH(b.product_name) + '\')"><i class="fas fa-scissors"></i> Split</button>' +
+        '<button class="inv-btn inv-btn-xs" onclick="invShowSplitBatch(' + b.id + ',' + b.qty + ',\'' + escH(b.batch_number) + '\',\'' + escH(b.product_name) + '\')"><i class="fas fa-scissors"></i> Split</button> ' +
+        '<button class="inv-btn inv-btn-xs inv-btn-danger-outline" onclick="invDeleteBatchFromList(' + b.id + ',\'' + escH(b.batch_number).replace(/'/g, "\\'") + '\',' + b.qty + ')" title="Delete batch"><i class="fas fa-trash"></i></button>' +
         '</td></tr>';
     });
     html += '</tbody></table></div>';
@@ -1618,6 +1660,7 @@ async function invRenderBatches() {
         '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invShowCaptureBatchImage(' + b.id + ')"><i class="fas fa-camera"></i> Photo</button>' +
         '<button class="inv-btn inv-btn-xs inv-btn-outline" onclick="invShowBatchImages(' + b.id + ')"><i class="fas fa-images"></i> View</button>' +
         '<button class="inv-btn inv-btn-xs" onclick="invShowSplitBatch(' + b.id + ',' + b.qty + ',\'' + escH(b.batch_number) + '\',\'' + escH(b.product_name) + '\')"><i class="fas fa-scissors"></i> Split</button>' +
+        '<button class="inv-btn inv-btn-xs inv-btn-danger-outline" onclick="invDeleteBatchFromList(' + b.id + ',\'' + escH(b.batch_number).replace(/'/g, "\\'") + '\',' + b.qty + ')"><i class="fas fa-trash"></i> Delete</button>' +
         '</div></div>';
     });
     html += '</div>';
