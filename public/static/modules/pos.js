@@ -2048,8 +2048,12 @@ function processPayment() {
   API.post('/pos/sales', body).then(function(r) {
     closeModal();
     showReceipt(r.data);
+    // Full reset — clear cart, customer, delivery state to prevent mis-charging next order
     _s.cart = []; _s.warnings = []; _s.deliveryReq = false;
-    renderCart(); renderCartFooter(); renderWarnings(); loadHeldCount();
+    _s.customer = null; _s.customerAcct = null; _s.customerAddresses = [];
+    _s.deliveryAddrId = null; _s.deliveryDate = null;
+    _s.appliedCCFee = 0; _s.splitPayments = [];
+    renderCustomerArea(); renderCart(); renderCartFooter(); renderWarnings(); loadHeldCount();
   }).catch(function(err) {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Complete Sale'; }
     var msg = errMsg(err);
