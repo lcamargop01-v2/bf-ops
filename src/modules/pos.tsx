@@ -50,7 +50,7 @@ app.get('/api/pos/products', async (c) => {
   const limit = parseInt(c.req.query('limit') || '50')
 
   let query = `
-    SELECT p.id, p.name, p.sku, p.barcode, p.category, p.price, p.cost, p.tax_rate,
+    SELECT p.id, p.name, p.sku, p.barcode, p.category, p.price, p.cost, p.tax_rate, p.is_taxable,
            COALESCE(s.qty_available, 0) as qty_available,
            COALESCE(s.qty_on_hand, 0) as qty_on_hand,
            COALESCE(s.qty_on_hold, 0) as qty_on_hold,
@@ -84,7 +84,7 @@ app.get('/api/pos/barcode/:code', async (c) => {
   const locationId = c.req.query('location_id') || '1'
 
   const product = await db.prepare(`
-    SELECT p.id, p.name, p.sku, p.barcode, p.category, p.price, p.cost, p.tax_rate,
+    SELECT p.id, p.name, p.sku, p.barcode, p.category, p.price, p.cost, p.tax_rate, p.is_taxable,
            COALESCE(s.qty_available, 0) as qty_available,
            COALESCE(s.qty_on_hand, 0) as qty_on_hand
     FROM products p
@@ -271,6 +271,7 @@ app.get('/api/pos/customer-history/:customerId', async (c) => {
       p.price,
       p.cost,
       p.tax_rate,
+      p.is_taxable,
       p.active,
       COALESCE(pos.times_ordered, 0) + COALESCE(ord.times_ordered, 0) as times_ordered,
       COALESCE(pos.total_qty, 0) + COALESCE(ord.total_qty, 0) as total_qty,
@@ -318,7 +319,7 @@ app.get('/api/pos/price-check', async (c) => {
 
   if (!productId) return c.json({ error: 'product_id required' }, 400)
 
-  const product = await db.prepare('SELECT id, name, price, cost, tax_rate FROM products WHERE id = ?').bind(productId).first<any>()
+  const product = await db.prepare('SELECT id, name, price, cost, tax_rate, is_taxable FROM products WHERE id = ?').bind(productId).first<any>()
   if (!product) return c.json({ error: 'Product not found' }, 404)
 
   let effectivePrice = product.price
@@ -373,7 +374,8 @@ app.get('/api/pos/price-check', async (c) => {
     price_source: priceSource,
     discount_pct: discountPct,
     cost: product.cost,
-    tax_rate: product.tax_rate || 0
+    tax_rate: product.is_taxable ? 7 : 0,
+    is_taxable: product.is_taxable ? 1 : 0
   })
 })
 
@@ -441,7 +443,7 @@ app.post('/api/pos/sales', async (c) => {
   const warnings: string[] = []
 
   for (const item of items) {
-    const product = await db.prepare('SELECT id, name, sku, category, price, cost, tax_rate FROM products WHERE id = ?').bind(item.product_id).first<any>()
+    const product = await db.prepare('SELECT id, name, sku, category, price, cost, tax_rate, is_taxable FROM products WHERE id = ?').bind(item.product_id).first<any>()
     if (!product) { warnings.push(`Product ID ${item.product_id} not found, skipped`); continue }
 
     const qty = parseFloat(item.quantity || 1)
@@ -450,8 +452,9 @@ app.post('/api/pos/sales', async (c) => {
     const discountAmt = unitPrice * qty * (discountPct / 100)
     const lineSubtotal = unitPrice * qty - discountAmt
 
-    // Tax: check if customer is tax exempt
-    let taxRate = product.tax_rate || 0
+    // Tax: standard 7% if product is taxable and customer is not exempt
+    const STANDARD_TAX_RATE = 7
+    let taxRate = product.is_taxable ? STANDARD_TAX_RATE : 0
     if (body.customer_id) {
       const cust = await db.prepare('SELECT tax_exempt FROM customers WHERE id = ?').bind(body.customer_id).first<any>()
       if (cust?.tax_exempt) taxRate = 0

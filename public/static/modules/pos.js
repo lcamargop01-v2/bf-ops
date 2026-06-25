@@ -372,7 +372,8 @@ function _renderDistributionLayout(el, locName) {
             '<span style="background:rgba(249,115,22,0.15);color:#FB923C;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">DISTRIBUTION</span>' +
           '</div>' +
         '</div>' +
-        '<div class="pos-dc-content" id="pageContent">' +
+        '<div class="pos-dc-content">' +
+          '<div id="pageContent" style="display:none"></div>' +
           '<div id="posViewDashboard" class="pos-view pos-dashboard"></div>' +
           '<div id="posViewRegister" class="pos-view pos-register"></div>' +
           '<div id="posViewHistory" class="pos-view pos-history"></div>' +
@@ -469,7 +470,9 @@ function _posSwitchDCView(viewId) {
     return;
   }
 
-  // POS-native view — restore pos-view display, render into correct container
+  // POS-native view — hide logistics pageContent, restore pos-view display
+  var pc2 = document.getElementById('pageContent');
+  if (pc2) { pc2.style.display = 'none'; pc2.innerHTML = ''; }
   document.querySelectorAll('.pos-view').forEach(function(v) { v.style.display = ''; });
   switchView(viewId);
 }
@@ -626,7 +629,7 @@ function posLookupBarcode(code) {
     var p = r.data;
     if (p && p.id) {
       // Cache product and add to cart
-      _s.productCache[p.id] = { name: p.name, sku: p.sku, category: p.category, price: p.price, cost: p.cost, tax_rate: p.tax_rate, stock: p.qty_available };
+      _s.productCache[p.id] = { name: p.name, sku: p.sku, category: p.category, price: p.price, cost: p.cost, tax_rate: p.is_taxable ? 7 : 0, is_taxable: p.is_taxable, stock: p.qty_available };
       addToCart(p.id, _s.productCache[p.id]);
       posToast('<i class="fas fa-check-circle"></i> ' + esc(p.name) + ' added', 'success', 2000);
       // Try beep sound
@@ -834,7 +837,7 @@ function renderProductGrid(products) {
   var html = '';
   products.forEach(function(p) {
     // Cache product data for click handler (avoids inline JSON)
-    _s.productCache[p.id] = { name: p.name, sku: p.sku, category: p.category, price: p.price, cost: p.cost, tax_rate: p.tax_rate, stock: p.qty_available };
+    _s.productCache[p.id] = { name: p.name, sku: p.sku, category: p.category, price: p.price, cost: p.cost, tax_rate: p.is_taxable ? 7 : 0, is_taxable: p.is_taxable, stock: p.qty_available };
 
     var stockClass = 'ok';
     var stockLabel = p.qty_available;
@@ -871,7 +874,8 @@ function addToCart(productId, info) {
       unit_price: info.price || 0,
       effective_price: info.price || 0,
       price_source: 'list',
-      tax_rate: info.tax_rate || 0,
+      tax_rate: info.is_taxable ? 7 : (info.tax_rate || 0),
+      is_taxable: info.is_taxable || 0,
       cost: info.cost || 0,
       discount_pct: 0,
       stock: info.stock || 0
@@ -1701,7 +1705,7 @@ function showReorderHistory(customerId) {
           if (item) {
             _s.productCache[pidAdd] = {
               name: item.name, sku: item.sku, category: item.category,
-              price: item.price, cost: item.cost, tax_rate: item.tax_rate, stock: item.stock
+              price: item.price, cost: item.cost, tax_rate: item.is_taxable ? 7 : (item.tax_rate || 0), is_taxable: item.is_taxable, stock: item.stock
             };
             // Add to cart with desired qty
             for (var q = 0; q < qty; q++) addToCart(pidAdd, _s.productCache[pidAdd]);
@@ -1826,7 +1830,7 @@ function resumeHeld(saleId) {
         product_id: si.product_id, name: si.product_name, sku: si.sku, category: si.category,
         qty: si.quantity, unit_price: si.unit_price,
         effective_price: si.unit_price - (si.discount_amount || 0) / (si.quantity || 1),
-        price_source: 'list', tax_rate: si.tax_rate || 0, cost: si.unit_cost || 0,
+        price_source: 'list', tax_rate: si.tax_rate || 0, is_taxable: si.tax_rate > 0 ? 1 : 0, cost: si.unit_cost || 0,
         discount_pct: si.discount_pct || 0, stock: 999
       };
     });

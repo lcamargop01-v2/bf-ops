@@ -17287,7 +17287,14 @@ window.soSendReply = soSendReply;
 var _soDashData = null;
 var _soDashAutoRefresh = null;
 
+function soDashCleanup() {
+  if (_soDashAutoRefresh) { clearInterval(_soDashAutoRefresh); _soDashAutoRefresh = null; }
+}
+window.soDashCleanup = soDashCleanup;
+
 async function renderSODashboard() {
+  currentPage = 'so_dashboard'; // Track page for refresh/action callbacks
+  soDashCleanup(); // Clear any previous auto-refresh
   var el = document.getElementById('pageContent') || document.getElementById('mainContent');
   if (!el) return;
   el.innerHTML = '<div style="padding:40px;text-align:center"><i class="fas fa-spinner fa-spin fa-2x" style="color:#2563EB"></i><p style="margin-top:12px;color:#6B7280">Loading dashboard...</p></div>';
@@ -17297,9 +17304,9 @@ async function renderSODashboard() {
     _soDashData = resp.data;
     soDashRender();
 
-    // Auto-refresh every 30 seconds
-    if (_soDashAutoRefresh) clearInterval(_soDashAutoRefresh);
+    // Auto-refresh every 30 seconds (only while on this page)
     _soDashAutoRefresh = setInterval(async function() {
+      if (currentPage !== 'so_dashboard') { soDashCleanup(); return; }
       try {
         var r = await API.get('/standing-orders/dashboard');
         _soDashData = r.data;
@@ -17605,6 +17612,8 @@ var _seasonalCustomers = [];
 var _seasonFilter = 'all';
 
 async function renderSeasonality() {
+  currentPage = 'seasonality'; // Track page for refresh/action callbacks
+  soDashCleanup(); // Stop SO Dashboard auto-refresh when switching to seasonality
   var el = document.getElementById('pageContent') || document.getElementById('mainContent');
   if (!el) return;
   el.innerHTML = '<div style="padding:40px;text-align:center"><i class="fas fa-spinner fa-spin fa-2x" style="color:#D97706"></i></div>';
