@@ -364,6 +364,7 @@ function invRenderDashboard() {
     html += '<button class="inv-action-btn inv-action-loss" onclick="invShowReportLoss()"><i class="fas fa-triangle-exclamation"></i> Report Loss</button>';
     html += '<button class="inv-action-btn inv-action-adjust" onclick="invShowQuickAdjust()"><i class="fas fa-sliders"></i> Adjust Stock</button>';
     html += '<button class="inv-action-btn inv-action-request" onclick="invShowRequestOrder()"><i class="fas fa-hand"></i> Request Order</button>';
+    html += '<button class="inv-action-btn" style="background:#FEF3C7;color:#92400E;border-color:#FDE68A" onclick="invCleanupStaleHolds()"><i class="fas fa-broom"></i> Cleanup Stale Holds</button>';
     html += '</div>';
     html += '</div>';
   }
@@ -5339,3 +5340,67 @@ function invExportReport() {
   invToast('Report exported');
 }
 window.invExportReport = invExportReport;
+
+// ==================== STALE HOLD CLEANUP ====================
+async function invCleanupStaleHolds() {
+  // First dry run to show what will change
+  try {
+    invToast('Scanning for stale holds...', 'info');
+    var dryResp = await invAPI.post('/api/inventory/cleanup-stale-holds', { dry_run: true }, { headers: invHeaders() });
+    var d = dryResp.data;
+
+    if (d.stale_orders_found === 0 && d.hold_corrections === 0) {
+      invToast('No stale holds found — everything is clean!', 'success');
+      return;
+    }
+
+    var body = '<div style="padding:4px 0">';
+    if (d.stale_orders_found > 0) {
+      body += '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:10px;padding:14px;margin-bottom:12px">' +
+        '<div style="font-weight:700;color:#DC2626;margin-bottom:6px"><i class="fas fa-exclamation-triangle"></i> ' + d.stale_orders_found + ' Stale Orders Found</div>' +
+        '<p style="font-size:13px;color:#7F1D1D;margin:0">Orders older than 30 days in "new"/"confirmed" status, or scheduled for dates >14 days in the past. These will be cancelled.</p>';
+      if (d.stale_order_ids && d.stale_order_ids.length > 0) {
+        body += '<div style="max-height:150px;overflow-y:auto;margin-top:8px;font-size:12px;color:#6B7280">';
+        d.stale_order_ids.forEach(function(o) {
+          body += '<div>' + escH(o.order_number || 'Order #' + o.id) + ' — ' + o.status + '</div>';
+        });
+        if (d.stale_orders_found > 20) body += '<div style="font-style:italic">...and ' + (d.stale_orders_found - 20) + ' more</div>';
+        body += '</div>';
+      }
+      body += '</div>';
+    }
+
+    if (d.hold_corrections > 0) {
+      body += '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px;padding:14px;margin-bottom:12px">' +
+        '<div style="font-weight:700;color:#2563EB;margin-bottom:4px"><i class="fas fa-calculator"></i> ' + d.hold_corrections + ' Hold Corrections</div>' +
+        '<p style="font-size:13px;color:#1E40AF;margin:0">Inventory hold quantities will be recalculated to match current active orders.</p></div>';
+    }
+    body += '</div>';
+
+    var footer = '<button class="inv-btn inv-btn-outline" onclick="invCloseModal()">Cancel</button>' +
+      '<button class="inv-btn inv-btn-danger" onclick="invDoCleanupStaleHolds()"><i class="fas fa-broom"></i> Clean Up Now</button>';
+
+    invShowModal('<i class="fas fa-broom" style="color:#D97706"></i> Cleanup Stale Holds', body, footer);
+  } catch(e) {
+    invToast('Failed to scan: ' + (e.response?.data?.error || e.message), 'error');
+  }
+}
+window.invCleanupStaleHolds = invCleanupStaleHolds;
+
+async function invDoCleanupStaleHolds() {
+  try {
+    var btn = document.querySelector('.inv-modal-footer .inv-btn-danger');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Cleaning up...'; }
+
+    var resp = await invAPI.post('/api/inventory/cleanup-stale-holds', { dry_run: false }, { headers: invHeaders() });
+    var d = resp.data;
+    invCloseModal();
+    invToast('Cleaned up: ' + (d.stale_orders_cancelled || 0) + ' stale orders cancelled, ' + (d.hold_corrections || 0) + ' holds corrected', 'success');
+    invRender(); // Refresh dashboard
+  } catch(e) {
+    invToast('Cleanup failed: ' + (e.response?.data?.error || e.message), 'error');
+    var btn = document.querySelector('.inv-modal-footer .inv-btn-danger');
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-broom"></i> Clean Up Now'; }
+  }
+}
+window.invDoCleanupStaleHolds = invDoCleanupStaleHolds;

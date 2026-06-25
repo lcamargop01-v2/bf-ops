@@ -2765,6 +2765,66 @@ app.post('/api/inventory/smart-restock/create-transfer', async (c) => {
 })
 
 // ==================== RECALCULATE HOLDS & RESERVATIONS ====================
+// ==================== STALE ORDER CLEANUP + HOLD RECALC ====================
+
+// Cancel stale orders and recalculate holds in one operation.
+// Stale = 'new'/'confirmed' older than 30 days, or 'scheduled' with date >14 days in the past.
+app.post('/api/inventory/cleanup-stale-holds', async (c) => {
+  const db = c.env.DB
+  const user = getUserFromHeader(c)
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  if (user.role !== 'admin') return c.json({ error: 'Admin only' }, 403)
+
+  const body = await c.req.json().catch(() => ({})) as any
+  const dryRun = body.dry_run !== false
+
+  try {
+    // Find stale orders
+    const staleNew = await db.prepare(
+      `SELECT id, order_number, status, created_at FROM orders WHERE status IN ('new','confirmed') AND created_at < datetime('now', '-30 days')`
+    ).all()
+    const staleSched = await db.prepare(
+      `SELECT id, order_number, status, scheduled_date FROM orders WHERE status = 'scheduled' AND scheduled_date < datetime('now', '-14 days')`
+    ).all()
+
+    const staleOrders = [...(staleNew.results || []), ...(staleSched.results || [])] as any[]
+
+    if (!dryRun && staleOrders.length > 0) {
+      const ids = staleOrders.map((o: any) => o.id)
+      // Batch cancel in groups of 50
+      for (let i = 0; i < ids.length; i += 50) {
+        const batch = ids.slice(i, i + 50)
+        const placeholders = batch.map(() => '?').join(',')
+        await db.prepare(
+          `UPDATE orders SET status = 'cancelled', updated_at = datetime('now') WHERE id IN (${placeholders})`
+        ).bind(...batch).run()
+      }
+    }
+
+    // Now recalculate holds (same logic as recalculate-holds endpoint)
+    const result = await fetch(new URL('/api/inventory/recalculate-holds', c.req.url).href, {
+      method: 'POST',
+      headers: { 'Authorization': c.req.header('Authorization') || '', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: dryRun })
+    })
+    const holdResult = await result.json() as any
+
+    return c.json({
+      success: true,
+      dry_run: dryRun,
+      stale_orders_found: staleOrders.length,
+      stale_orders_cancelled: dryRun ? 0 : staleOrders.length,
+      stale_order_ids: staleOrders.slice(0, 20).map((o: any) => ({ id: o.id, order_number: o.order_number, status: o.status })),
+      hold_corrections: holdResult.total_changes || holdResult.changes_needed || 0,
+      message: dryRun
+        ? `Dry run: ${staleOrders.length} stale orders found, ${holdResult.changes_needed || 0} hold corrections needed.`
+        : `Cancelled ${staleOrders.length} stale orders, applied ${holdResult.total_changes || 0} hold corrections.`
+    })
+  } catch (e: any) {
+    return c.json({ error: 'Cleanup failed: ' + e.message }, 500)
+  }
+})
+
 // Admin endpoint that recalculates qty_on_hold and qty_reserved from actual order data.
 // This fixes drift that occurs when orders are modified/cancelled without proper hold adjustments.
 
