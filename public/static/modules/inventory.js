@@ -263,6 +263,11 @@ async function invRender() {
     var html = await invRenderCategoriesPage();
     root = document.getElementById('inventory-app'); if (!root) return;
     root.innerHTML = invRenderNav() + html;
+  } else if (invPage === 'reports') {
+    root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Generating reports...</div>';
+    var html = await invRenderReportsPage();
+    root = document.getElementById('inventory-app'); if (!root) return;
+    root.innerHTML = invRenderNav() + html;
   } else if (invPage === 'snapshots') {
     root.innerHTML = invRenderNav() + '<div class="inv-loading"><i class="fas fa-spinner fa-spin"></i> Loading snapshots...</div>';
     var html = await invRenderSnapshotsPage();
@@ -289,6 +294,7 @@ function invRenderNav() {
     { id: 'losses', icon: 'fa-triangle-exclamation', label: 'Losses' },
 
     { id: 'audit', icon: 'fa-clock-rotate-left', label: 'Audit Log' },
+    { id: 'reports', icon: 'fa-file-chart-line', label: 'Reports' },
     { id: 'snapshots', icon: 'fa-camera', label: 'Snapshots' },
     { id: 'categories', icon: 'fa-wand-magic-sparkles', label: 'Categories' }
   ];
@@ -4907,3 +4913,429 @@ async function invRemoveAssignment(id) {
   } catch(e) { invToast('Failed: ' + (e.response?.data?.error || e.message), 'error'); }
 }
 window.invRemoveAssignment = invRemoveAssignment;
+
+// ==================== REPORTS PAGE ====================
+
+var _invReportData = null;
+var _invReportView = 'overview'; // overview, store, comparison
+var _invReportStoreId = null; // which store is selected for detail view
+
+async function invRenderReportsPage() {
+  try {
+    var resp = await invAPI.get('/api/inventory/reports', { headers: invHeaders() });
+    _invReportData = resp.data;
+  } catch(e) {
+    console.error('[Inventory] reports load error:', e);
+    return '<div style="padding:40px;text-align:center;color:#DC2626"><i class="fas fa-exclamation-triangle fa-2x" style="margin-bottom:12px;display:block"></i>Failed to load reports: ' + escH(e.message || 'Unknown error') + '</div>';
+  }
+
+  return invBuildReportsHtml();
+}
+
+function invBuildReportsHtml() {
+  var d = _invReportData;
+  if (!d || !d.locations) return '<div style="padding:40px;text-align:center;color:#6B7280">No data available</div>';
+  var _showFin = invCanViewFin();
+
+  var html = '<div class="inv-reports">';
+
+  // Header with view toggle + export
+  html += '<div class="inv-reports-header">' +
+    '<div class="inv-reports-tabs">' +
+      '<button class="inv-rpt-tab' + (_invReportView === 'overview' ? ' active' : '') + '" onclick="invReportSwitch(\'overview\')"><i class="fas fa-th-large"></i> Overview</button>' +
+      '<button class="inv-rpt-tab' + (_invReportView === 'comparison' ? ' active' : '') + '" onclick="invReportSwitch(\'comparison\')"><i class="fas fa-columns"></i> Side-by-Side</button>';
+  d.locations.forEach(function(loc) {
+    html += '<button class="inv-rpt-tab' + (_invReportView === 'store' && _invReportStoreId == loc.location_id ? ' active' : '') + '" onclick="invReportSwitchStore(' + loc.location_id + ')">' +
+      '<i class="fas fa-' + (loc.location_type === 'distribution' ? 'warehouse' : 'store') + '"></i> ' + escH(loc.location_code) + '</button>';
+  });
+  html += '</div>' +
+    '<button class="inv-btn inv-btn-outline" onclick="invExportReport()" style="font-size:12px;padding:6px 12px"><i class="fas fa-download"></i> Export CSV</button>' +
+  '</div>';
+
+  if (_invReportView === 'overview') {
+    html += invReportOverview(d, _showFin);
+  } else if (_invReportView === 'comparison') {
+    html += invReportComparison(d, _showFin);
+  } else if (_invReportView === 'store') {
+    var storeLoc = d.locations.find(function(l) { return l.location_id == _invReportStoreId; });
+    if (storeLoc) html += invReportStoreDetail(storeLoc, _showFin);
+    else html += '<div style="padding:40px;text-align:center;color:#6B7280">Store not found</div>';
+  }
+
+  // Timestamp
+  html += '<div style="text-align:center;padding:12px;font-size:11px;color:#94A3B8"><i class="fas fa-clock"></i> Generated: ' + new Date(d.generated_at).toLocaleString() + '</div>';
+  html += '</div>';
+  return html;
+}
+
+function invReportOverview(d, showFin) {
+  var html = '';
+
+  // Store cards — one per location
+  html += '<div class="inv-rpt-store-cards">';
+  d.locations.forEach(function(loc) {
+    var typeIcon = loc.location_type === 'distribution' ? 'fa-warehouse' : 'fa-store';
+    var typeColor = loc.location_type === 'distribution' ? '#F59E0B' : '#10B981';
+    var typeBadge = loc.location_type === 'distribution' ? 'WAREHOUSE' : 'RETAIL';
+
+    html += '<div class="inv-rpt-store-card" onclick="invReportSwitchStore(' + loc.location_id + ')">' +
+      '<div class="inv-rpt-store-header">' +
+        '<div class="inv-rpt-store-icon" style="background:' + typeColor + '20;color:' + typeColor + '"><i class="fas ' + typeIcon + '"></i></div>' +
+        '<div><div class="inv-rpt-store-name">' + escH(loc.location_name) + '</div>' +
+        '<span class="inv-rpt-store-badge" style="background:' + typeColor + '20;color:' + typeColor + '">' + typeBadge + '</span></div>' +
+      '</div>';
+
+    // Key metrics
+    html += '<div class="inv-rpt-metrics">' +
+      '<div class="inv-rpt-metric"><span class="inv-rpt-metric-val">' + (loc.total_products || 0) + '</span><span class="inv-rpt-metric-lbl">Products</span></div>' +
+      '<div class="inv-rpt-metric"><span class="inv-rpt-metric-val">' + (loc.total_units || 0).toLocaleString() + '</span><span class="inv-rpt-metric-lbl">Units</span></div>';
+    if (showFin) {
+      html += '<div class="inv-rpt-metric"><span class="inv-rpt-metric-val" style="color:#059669">$' + (loc.total_value_retail || 0).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}) + '</span><span class="inv-rpt-metric-lbl">Retail Value</span></div>' +
+        '<div class="inv-rpt-metric"><span class="inv-rpt-metric-val" style="color:#7C3AED">$' + (loc.total_value_cost || 0).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}) + '</span><span class="inv-rpt-metric-lbl">Cost Value</span></div>';
+    }
+    html += '</div>';
+
+    // Alert badges
+    html += '<div class="inv-rpt-alerts">';
+    if (loc.out_of_stock_count > 0) html += '<span class="inv-rpt-alert red"><i class="fas fa-xmark-circle"></i> ' + loc.out_of_stock_count + ' Out of Stock</span>';
+    if (loc.low_stock_count > 0) html += '<span class="inv-rpt-alert orange"><i class="fas fa-triangle-exclamation"></i> ' + loc.low_stock_count + ' Low Stock</span>';
+    if (loc.total_on_hold > 0) html += '<span class="inv-rpt-alert blue"><i class="fas fa-lock"></i> ' + loc.total_on_hold + ' On Hold</span>';
+    if (loc.incoming_qty > 0) html += '<span class="inv-rpt-alert green"><i class="fas fa-truck"></i> ' + (loc.incoming_qty || 0) + ' Incoming</span>';
+    if (loc.losses_30d_qty > 0) html += '<span class="inv-rpt-alert red"><i class="fas fa-chart-line-down"></i> ' + loc.losses_30d_qty + ' Lost (30d)</span>';
+    html += '</div>';
+
+    // Category mini-chart
+    var cats = Object.keys(loc.categories).sort(function(a, b) { return (loc.categories[b].units || 0) - (loc.categories[a].units || 0); });
+    if (cats.length > 0) {
+      html += '<div class="inv-rpt-cat-mini">';
+      var maxUnits = loc.categories[cats[0]].units || 1;
+      cats.slice(0, 5).forEach(function(cat) {
+        var pct = Math.max(2, Math.round((loc.categories[cat].units / maxUnits) * 100));
+        html += '<div class="inv-rpt-cat-row">' +
+          '<span class="inv-rpt-cat-name">' + escH(cat) + '</span>' +
+          '<div class="inv-rpt-cat-bar-wrap"><div class="inv-rpt-cat-bar" style="width:' + pct + '%"></div></div>' +
+          '<span class="inv-rpt-cat-val">' + (loc.categories[cat].units || 0).toLocaleString() + '</span>' +
+        '</div>';
+      });
+      if (cats.length > 5) html += '<div style="font-size:11px;color:#94A3B8;text-align:center;margin-top:4px">+' + (cats.length - 5) + ' more</div>';
+      html += '</div>';
+    }
+
+    html += '<div class="inv-rpt-store-footer"><span style="font-size:12px;color:#2563EB;font-weight:600">View Full Report →</span></div>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // Cross-location transfers
+  var transfers = d.transfers || [];
+  if (transfers.length > 0) {
+    html += '<div class="inv-rpt-section"><h3 class="inv-rpt-section-title"><i class="fas fa-truck-ramp-box" style="color:#4F46E5"></i> Active Transfers</h3>';
+    html += '<div class="inv-rpt-transfers">';
+    transfers.forEach(function(t) {
+      var fromLoc = d.locations.find(function(l) { return l.location_id == t.from_location_id; });
+      var toLoc = d.locations.find(function(l) { return l.location_id == t.to_location_id; });
+      html += '<div class="inv-rpt-transfer-row">' +
+        '<span class="inv-rpt-transfer-loc">' + escH((fromLoc ? fromLoc.location_code : '#' + t.from_location_id)) + '</span>' +
+        '<i class="fas fa-arrow-right" style="color:#94A3B8"></i>' +
+        '<span class="inv-rpt-transfer-loc">' + escH((toLoc ? toLoc.location_code : '#' + t.to_location_id)) + '</span>' +
+        '<span class="inv-rpt-transfer-cnt">' + t.cnt + ' transfer' + (t.cnt > 1 ? 's' : '') + '</span>' +
+      '</div>';
+    });
+    html += '</div></div>';
+  }
+
+  return html;
+}
+
+function invReportComparison(d, showFin) {
+  var locs = d.locations;
+  if (locs.length < 2) return '<div style="padding:40px;text-align:center;color:#6B7280"><i class="fas fa-info-circle"></i> Need at least 2 locations for comparison</div>';
+
+  var html = '<div class="inv-rpt-comparison">';
+
+  // Summary comparison table
+  html += '<div class="inv-rpt-section"><h3 class="inv-rpt-section-title"><i class="fas fa-scale-balanced" style="color:#2563EB"></i> Store Comparison</h3>';
+  html += '<div style="overflow-x:auto"><table class="inv-rpt-table">';
+  html += '<thead><tr><th>Metric</th>';
+  locs.forEach(function(l) {
+    html += '<th style="text-align:right">' + escH(l.location_code) + '<br><span style="font-weight:400;font-size:10px;color:#94A3B8">' + escH(l.location_name) + '</span></th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  var metrics = [
+    { label: 'Products', key: 'total_products', fmt: 'num' },
+    { label: 'Total Units', key: 'total_units', fmt: 'num' },
+    { label: 'On Hold', key: 'total_on_hold', fmt: 'num' },
+    { label: 'Reserved', key: 'total_reserved', fmt: 'num' },
+    { label: 'Low Stock Items', key: 'low_stock_count', fmt: 'num', warn: true },
+    { label: 'Out of Stock', key: 'out_of_stock_count', fmt: 'num', warn: true },
+    { label: 'Never Counted', key: 'never_counted', fmt: 'num', warn: true },
+    { label: 'Total Weight (lbs)', key: 'total_weight', fmt: 'num' }
+  ];
+  if (showFin) {
+    metrics.push(
+      { label: 'Retail Value', key: 'total_value_retail', fmt: 'money' },
+      { label: 'Cost Value', key: 'total_value_cost', fmt: 'money' },
+      { label: 'Margin %', key: 'margin', fmt: 'pct' },
+      { label: 'Incoming PO Value', key: 'incoming_value', fmt: 'money' }
+    );
+  }
+  metrics.push(
+    { label: 'Incoming POs', key: 'incoming_pos', fmt: 'num' },
+    { label: 'Incoming Units', key: 'incoming_qty', fmt: 'num' },
+    { label: 'Losses (30d)', key: 'losses_30d_qty', fmt: 'num', warn: true }
+  );
+
+  metrics.forEach(function(m) {
+    html += '<tr><td style="font-weight:600">' + m.label + '</td>';
+    locs.forEach(function(l) {
+      var val = l[m.key] || 0;
+      var display = '';
+      if (m.fmt === 'money') display = '$' + val.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+      else if (m.fmt === 'pct') display = val.toFixed(1) + '%';
+      else display = val.toLocaleString();
+      var warnStyle = m.warn && val > 0 ? 'color:#DC2626;font-weight:700' : '';
+      html += '<td style="text-align:right;' + warnStyle + '">' + display + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  // Category comparison
+  var allCats = {};
+  locs.forEach(function(l) {
+    Object.keys(l.categories).forEach(function(c) { allCats[c] = true; });
+  });
+  var catList = Object.keys(allCats).sort();
+
+  if (catList.length > 0) {
+    html += '<div class="inv-rpt-section"><h3 class="inv-rpt-section-title"><i class="fas fa-chart-bar" style="color:#7C3AED"></i> Category Breakdown by Store</h3>';
+    html += '<div style="overflow-x:auto"><table class="inv-rpt-table">';
+    html += '<thead><tr><th>Category</th>';
+    locs.forEach(function(l) { html += '<th style="text-align:right">' + escH(l.location_code) + ' Units</th>'; });
+    if (showFin) locs.forEach(function(l) { html += '<th style="text-align:right">' + escH(l.location_code) + ' Value</th>'; });
+    html += '</tr></thead><tbody>';
+
+    catList.forEach(function(cat) {
+      html += '<tr><td style="font-weight:600">' + escH(cat) + '</td>';
+      locs.forEach(function(l) {
+        var c = l.categories[cat];
+        html += '<td style="text-align:right">' + (c ? c.units.toLocaleString() : '<span style="color:#CBD5E1">—</span>') + '</td>';
+      });
+      if (showFin) {
+        locs.forEach(function(l) {
+          var c = l.categories[cat];
+          html += '<td style="text-align:right">' + (c ? '$' + c.value_retail.toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}) : '<span style="color:#CBD5E1">—</span>') + '</td>';
+        });
+      }
+      html += '</tr>';
+    });
+
+    // Totals row
+    html += '<tr style="border-top:2px solid #1E293B;font-weight:700;background:#F8FAFC"><td>TOTAL</td>';
+    locs.forEach(function(l) { html += '<td style="text-align:right">' + (l.total_units || 0).toLocaleString() + '</td>'; });
+    if (showFin) locs.forEach(function(l) { html += '<td style="text-align:right">$' + (l.total_value_retail || 0).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}) + '</td>'; });
+    html += '</tr>';
+
+    html += '</tbody></table></div></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function invReportStoreDetail(loc, showFin) {
+  var typeIcon = loc.location_type === 'distribution' ? 'fa-warehouse' : 'fa-store';
+  var typeColor = loc.location_type === 'distribution' ? '#F59E0B' : '#10B981';
+
+  var html = '<div class="inv-rpt-detail">';
+
+  // Store header
+  html += '<div class="inv-rpt-detail-header">' +
+    '<div class="inv-rpt-store-icon" style="background:' + typeColor + '15;color:' + typeColor + ';width:48px;height:48px;font-size:22px"><i class="fas ' + typeIcon + '"></i></div>' +
+    '<div><h2 style="margin:0;font-size:20px;color:#1E293B">' + escH(loc.location_name) + '</h2>' +
+    '<span style="font-size:12px;color:#64748B">' + escH(loc.location_code) + ' &middot; ' + (loc.location_type === 'distribution' ? 'Distribution Center' : 'Retail Store') + '</span></div>' +
+  '</div>';
+
+  // KPI cards
+  html += '<div class="inv-rpt-kpi-grid">';
+  var kpis = [
+    { icon: 'fa-boxes-stacked', label: 'Products', value: loc.total_products, color: '#2563EB' },
+    { icon: 'fa-cubes', label: 'Total Units', value: (loc.total_units || 0).toLocaleString(), color: '#059669' },
+    { icon: 'fa-lock', label: 'On Hold', value: (loc.total_on_hold || 0).toLocaleString(), color: '#D97706' },
+    { icon: 'fa-bookmark', label: 'Reserved', value: (loc.total_reserved || 0).toLocaleString(), color: '#0891B2' },
+    { icon: 'fa-weight-hanging', label: 'Total Weight', value: (loc.total_weight || 0).toLocaleString() + ' lbs', color: '#64748B' },
+    { icon: 'fa-xmark-circle', label: 'Out of Stock', value: loc.out_of_stock_count || 0, color: loc.out_of_stock_count > 0 ? '#DC2626' : '#6B7280' },
+    { icon: 'fa-triangle-exclamation', label: 'Low Stock', value: loc.low_stock_count || 0, color: loc.low_stock_count > 0 ? '#F59E0B' : '#6B7280' },
+    { icon: 'fa-question-circle', label: 'Never Counted', value: loc.never_counted || 0, color: loc.never_counted > 0 ? '#DC2626' : '#6B7280' }
+  ];
+  if (showFin) {
+    kpis.splice(2, 0,
+      { icon: 'fa-dollar-sign', label: 'Retail Value', value: '$' + (loc.total_value_retail || 0).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}), color: '#059669' },
+      { icon: 'fa-coins', label: 'Cost Value', value: '$' + (loc.total_value_cost || 0).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}), color: '#7C3AED' },
+      { icon: 'fa-percent', label: 'Margin', value: (loc.margin || 0).toFixed(1) + '%', color: '#2563EB' }
+    );
+  }
+  kpis.forEach(function(k) {
+    html += '<div class="inv-rpt-kpi">' +
+      '<div class="inv-rpt-kpi-icon" style="background:' + k.color + '15;color:' + k.color + '"><i class="fas ' + k.icon + '"></i></div>' +
+      '<div class="inv-rpt-kpi-val">' + k.value + '</div>' +
+      '<div class="inv-rpt-kpi-lbl">' + k.label + '</div></div>';
+  });
+  html += '</div>';
+
+  // Category breakdown table
+  var cats = Object.keys(loc.categories).sort(function(a, b) { return (loc.categories[b].units || 0) - (loc.categories[a].units || 0); });
+  if (cats.length > 0) {
+    html += '<div class="inv-rpt-section"><h3 class="inv-rpt-section-title"><i class="fas fa-chart-pie" style="color:#7C3AED"></i> Category Breakdown</h3>';
+    html += '<div style="overflow-x:auto"><table class="inv-rpt-table">';
+    html += '<thead><tr><th>Category</th><th style="text-align:right">Products</th><th style="text-align:right">Units</th>' +
+      (showFin ? '<th style="text-align:right">Retail Value</th><th style="text-align:right">Cost Value</th>' : '') +
+      '<th style="text-align:right">Weight (lbs)</th><th style="text-align:right">% of Total</th></tr></thead><tbody>';
+
+    cats.forEach(function(cat) {
+      var c = loc.categories[cat];
+      var pct = loc.total_units > 0 ? (c.units / loc.total_units * 100).toFixed(1) : '0.0';
+      html += '<tr>' +
+        '<td style="font-weight:600">' + escH(cat) + '</td>' +
+        '<td style="text-align:right">' + c.products + '</td>' +
+        '<td style="text-align:right">' + c.units.toLocaleString() + '</td>' +
+        (showFin ? '<td style="text-align:right">$' + c.value_retail.toLocaleString(undefined, {minimumFractionDigits:2}) + '</td><td style="text-align:right">$' + c.value_cost.toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' : '') +
+        '<td style="text-align:right">' + Math.round(c.weight).toLocaleString() + '</td>' +
+        '<td style="text-align:right">' + pct + '%</td>' +
+      '</tr>';
+    });
+
+    // Totals
+    html += '<tr style="border-top:2px solid #1E293B;font-weight:700;background:#F8FAFC">' +
+      '<td>TOTAL</td><td style="text-align:right">' + loc.total_products + '</td><td style="text-align:right">' + (loc.total_units || 0).toLocaleString() + '</td>' +
+      (showFin ? '<td style="text-align:right">$' + (loc.total_value_retail || 0).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td><td style="text-align:right">$' + (loc.total_value_cost || 0).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>' : '') +
+      '<td style="text-align:right">' + Math.round(loc.total_weight || 0).toLocaleString() + '</td><td style="text-align:right">100%</td></tr>';
+    html += '</tbody></table></div></div>';
+  }
+
+  // Product detail table (top items by value or units)
+  var prods = loc.products || [];
+  if (prods.length > 0) {
+    // Sort by units descending
+    var sortedProds = prods.slice().sort(function(a, b) { return (b.qty_on_hand || 0) - (a.qty_on_hand || 0); });
+
+    html += '<div class="inv-rpt-section"><h3 class="inv-rpt-section-title"><i class="fas fa-list" style="color:#2563EB"></i> All Products (' + prods.length + ')</h3>';
+
+    // Search filter
+    html += '<div style="margin-bottom:12px"><input type="text" id="invRptProdSearch" class="inv-input" placeholder="Search products..." oninput="invReportFilterProducts()" style="max-width:320px"></div>';
+
+    html += '<div style="overflow-x:auto"><table class="inv-rpt-table" id="invRptProdTable">';
+    html += '<thead><tr><th>Product</th><th>SKU</th><th>Category</th><th style="text-align:right">On Hand</th><th style="text-align:right">Available</th><th style="text-align:right">Hold</th>' +
+      (showFin ? '<th style="text-align:right">Price</th><th style="text-align:right">Value</th>' : '') +
+      '<th style="text-align:right">Last Counted</th></tr></thead><tbody>';
+
+    sortedProds.forEach(function(p) {
+      var rowClass = p.qty_on_hand <= 0 ? ' style="color:#DC2626;background:#FEF2F2"' : p.qty_available <= 5 ? ' style="background:#FFFBEB"' : '';
+      html += '<tr' + rowClass + ' data-pname="' + escH((p.name || '').toLowerCase()) + '">' +
+        '<td style="font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escH(p.name || '') + '</td>' +
+        '<td style="color:#64748B;font-size:12px">' + escH(p.sku || '—') + '</td>' +
+        '<td>' + escH(p.category || '—') + '</td>' +
+        '<td style="text-align:right;font-weight:700">' + (p.qty_on_hand || 0).toLocaleString() + '</td>' +
+        '<td style="text-align:right">' + (p.qty_available || 0).toLocaleString() + '</td>' +
+        '<td style="text-align:right">' + (p.qty_on_hold || 0) + '</td>' +
+        (showFin ? '<td style="text-align:right">$' + (p.price || 0).toFixed(2) + '</td><td style="text-align:right">$' + ((p.qty_on_hand || 0) * (p.price || 0)).toFixed(2) + '</td>' : '') +
+        '<td style="text-align:right;font-size:12px;color:#64748B">' + (p.last_counted_at ? invFormatDate(p.last_counted_at) : '<span style="color:#DC2626">Never</span>') + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function invReportSwitch(view) {
+  _invReportView = view;
+  _invReportStoreId = null;
+  var root = document.getElementById('inventory-app');
+  if (root && _invReportData) {
+    root.innerHTML = invRenderNav() + invBuildReportsHtml();
+  }
+}
+window.invReportSwitch = invReportSwitch;
+
+function invReportSwitchStore(storeId) {
+  _invReportView = 'store';
+  _invReportStoreId = storeId;
+  var root = document.getElementById('inventory-app');
+  if (root && _invReportData) {
+    root.innerHTML = invRenderNav() + invBuildReportsHtml();
+  }
+}
+window.invReportSwitchStore = invReportSwitchStore;
+
+function invReportFilterProducts() {
+  var search = (document.getElementById('invRptProdSearch') || {}).value || '';
+  search = search.toLowerCase();
+  var rows = document.querySelectorAll('#invRptProdTable tbody tr');
+  rows.forEach(function(r) {
+    var name = r.dataset.pname || '';
+    r.style.display = !search || name.indexOf(search) !== -1 ? '' : 'none';
+  });
+}
+window.invReportFilterProducts = invReportFilterProducts;
+
+function invExportReport() {
+  if (!_invReportData) { invToast('No data to export', 'warning'); return; }
+  var d = _invReportData;
+  var _showFin = invCanViewFin();
+  var rows = [];
+
+  // If viewing a specific store, export that store's products
+  if (_invReportView === 'store' && _invReportStoreId) {
+    var loc = d.locations.find(function(l) { return l.location_id == _invReportStoreId; });
+    if (!loc) return;
+    var header = ['Product', 'SKU', 'Category', 'On Hand', 'Available', 'On Hold', 'Reserved'];
+    if (_showFin) header.push('Price', 'Cost', 'Retail Value', 'Cost Value');
+    header.push('Last Counted');
+    rows.push(header);
+
+    (loc.products || []).forEach(function(p) {
+      var row = [p.name, p.sku || '', p.category || '', p.qty_on_hand || 0, p.qty_available || 0, p.qty_on_hold || 0, p.qty_reserved || 0];
+      if (_showFin) row.push(p.price || 0, p.cost || 0, ((p.qty_on_hand || 0) * (p.price || 0)).toFixed(2), ((p.qty_on_hand || 0) * (p.cost || 0)).toFixed(2));
+      row.push(p.last_counted_at || 'Never');
+      rows.push(row);
+    });
+  } else {
+    // Export category summary per store
+    var header = ['Store', 'Category', 'Products', 'Units'];
+    if (_showFin) header.push('Retail Value', 'Cost Value');
+    header.push('Weight (lbs)');
+    rows.push(header);
+
+    d.locations.forEach(function(loc) {
+      Object.keys(loc.categories).sort().forEach(function(cat) {
+        var c = loc.categories[cat];
+        var row = [loc.location_name, cat, c.products, c.units];
+        if (_showFin) row.push(c.value_retail.toFixed(2), c.value_cost.toFixed(2));
+        row.push(Math.round(c.weight));
+        rows.push(row);
+      });
+    });
+  }
+
+  // Build CSV
+  var csv = rows.map(function(r) {
+    return r.map(function(cell) {
+      var s = String(cell);
+      if (s.indexOf(',') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    }).join(',');
+  }).join('\n');
+
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'inventory-report-' + (_invReportView === 'store' && _invReportStoreId ? 'store-' + _invReportStoreId + '-' : '') + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  invToast('Report exported');
+}
+window.invExportReport = invExportReport;

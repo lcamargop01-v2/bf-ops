@@ -2940,5 +2940,143 @@ app.post('/api/inventory/recalculate-holds', async (c) => {
   }
 })
 
+// ==================== INVENTORY REPORTS ====================
+
+app.get('/api/inventory/reports', async (c) => {
+  const db = c.env.DB
+  const locationId = c.req.query('location_id') // optional — filters to single store
+
+  // Get all locations
+  const locResult = await db.prepare('SELECT id, name, code, type FROM locations ORDER BY id').all()
+  const locations = locResult.results || []
+
+  // Get all active stock with product info, grouped by location
+  let stockQuery = `SELECT s.location_id, s.product_id, s.qty_on_hand, s.qty_on_hold, s.qty_reserved,
+    s.qty_on_hand - s.qty_on_hold - s.qty_reserved as qty_available,
+    s.reorder_point, s.last_counted_at,
+    p.name as product_name, p.sku, p.category, p.price, p.cost, p.unit_type, p.weight_per_unit,
+    l.name as location_name, l.code as location_code
+    FROM inventory_stock s
+    JOIN products p ON s.product_id = p.id
+    JOIN locations l ON s.location_id = l.id
+    WHERE p.active = 1`
+  const binds: any[] = []
+  if (locationId) { stockQuery += ' AND s.location_id = ?'; binds.push(parseInt(locationId)) }
+  stockQuery += ' ORDER BY l.id, p.category, p.name'
+
+  const stock = await db.prepare(stockQuery).bind(...binds).all()
+  const rows = (stock.results || []) as any[]
+
+  // Build per-location summaries
+  const byLocation: Record<number, any> = {}
+  for (const loc of locations as any[]) {
+    byLocation[loc.id] = {
+      location_id: loc.id,
+      location_name: loc.name,
+      location_code: loc.code,
+      location_type: loc.type,
+      total_products: 0,
+      total_units: 0,
+      total_value_retail: 0,
+      total_value_cost: 0,
+      total_on_hold: 0,
+      total_reserved: 0,
+      total_weight: 0,
+      low_stock_count: 0,
+      out_of_stock_count: 0,
+      never_counted: 0,
+      categories: {} as Record<string, { products: number, units: number, value_retail: number, value_cost: number, weight: number }>,
+      products: [] as any[]
+    }
+  }
+
+  for (const r of rows) {
+    const loc = byLocation[r.location_id]
+    if (!loc) continue
+    loc.total_products++
+    loc.total_units += r.qty_on_hand || 0
+    loc.total_value_retail += (r.qty_on_hand || 0) * (r.price || 0)
+    loc.total_value_cost += (r.qty_on_hand || 0) * (r.cost || 0)
+    loc.total_on_hold += r.qty_on_hold || 0
+    loc.total_reserved += r.qty_reserved || 0
+    loc.total_weight += (r.qty_on_hand || 0) * (r.weight_per_unit || 0)
+    if (r.reorder_point > 0 && r.qty_on_hand <= r.reorder_point) loc.low_stock_count++
+    if (r.qty_on_hand <= 0) loc.out_of_stock_count++
+    if (!r.last_counted_at) loc.never_counted++
+
+    const cat = r.category || 'Uncategorized'
+    if (!loc.categories[cat]) loc.categories[cat] = { products: 0, units: 0, value_retail: 0, value_cost: 0, weight: 0 }
+    loc.categories[cat].products++
+    loc.categories[cat].units += r.qty_on_hand || 0
+    loc.categories[cat].value_retail += (r.qty_on_hand || 0) * (r.price || 0)
+    loc.categories[cat].value_cost += (r.qty_on_hand || 0) * (r.cost || 0)
+    loc.categories[cat].weight += (r.qty_on_hand || 0) * (r.weight_per_unit || 0)
+
+    loc.products.push({
+      product_id: r.product_id,
+      name: r.product_name,
+      sku: r.sku,
+      category: r.category,
+      qty_on_hand: r.qty_on_hand,
+      qty_available: r.qty_available,
+      qty_on_hold: r.qty_on_hold,
+      qty_reserved: r.qty_reserved,
+      price: r.price,
+      cost: r.cost,
+      weight: (r.qty_on_hand || 0) * (r.weight_per_unit || 0),
+      unit_type: r.unit_type,
+      last_counted_at: r.last_counted_at
+    })
+  }
+
+  // Incoming POs per location
+  const incomingQuery = `SELECT po.location_id, COUNT(DISTINCT po.id) as po_count,
+    SUM(pi.qty_ordered - pi.qty_received) as qty_incoming,
+    SUM((pi.qty_ordered - pi.qty_received) * COALESCE(pi.unit_cost, 0)) as value_incoming
+    FROM po_items pi JOIN purchase_orders po ON pi.po_id = po.id
+    WHERE po.status IN ('ordered','in_transit','delayed','partial')
+      AND pi.qty_received < pi.qty_ordered AND pi.product_id IS NOT NULL
+    GROUP BY po.location_id`
+  const incoming = await db.prepare(incomingQuery).all()
+  for (const r of (incoming.results || []) as any[]) {
+    if (byLocation[r.location_id]) {
+      byLocation[r.location_id].incoming_pos = r.po_count
+      byLocation[r.location_id].incoming_qty = r.qty_incoming
+      byLocation[r.location_id].incoming_value = r.value_incoming
+    }
+  }
+
+  // Recent losses per location (30d)
+  const lossQuery = `SELECT lo.location_id, COUNT(*) as loss_count, SUM(lo.qty) as qty_lost
+    FROM inventory_losses lo WHERE lo.created_at >= datetime('now', '-30 days') GROUP BY lo.location_id`
+  const losses = await db.prepare(lossQuery).all()
+  for (const r of (losses.results || []) as any[]) {
+    if (byLocation[r.location_id]) {
+      byLocation[r.location_id].losses_30d_count = r.loss_count
+      byLocation[r.location_id].losses_30d_qty = r.qty_lost
+    }
+  }
+
+  // Active transfers between locations
+  const transferQuery = `SELECT from_location_id, to_location_id, COUNT(*) as cnt
+    FROM inventory_transfers WHERE status IN ('pending','in_transit') GROUP BY from_location_id, to_location_id`
+  const transfers = await db.prepare(transferQuery).all()
+
+  // Round financial values
+  const locationReports = Object.values(byLocation).filter((l: any) => !locationId || l.location_id == locationId).map((l: any) => ({
+    ...l,
+    total_value_retail: Math.round(l.total_value_retail * 100) / 100,
+    total_value_cost: Math.round(l.total_value_cost * 100) / 100,
+    total_weight: Math.round(l.total_weight * 100) / 100,
+    margin: l.total_value_retail > 0 ? Math.round((l.total_value_retail - l.total_value_cost) / l.total_value_retail * 10000) / 100 : 0
+  }))
+
+  return c.json({
+    locations: locationReports,
+    transfers: transfers.results || [],
+    generated_at: new Date().toISOString()
+  })
+})
+
 export default app
 export { app as inventoryApp, takeSnapshot }
